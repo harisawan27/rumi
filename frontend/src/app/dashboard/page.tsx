@@ -62,6 +62,7 @@ export default function DashboardPage() {
       try {
         await verifyAuth();
         const identity = await getIdentity();
+        if (!identity) { router.push("/onboarding"); return; }
         setName(identity.name as string);
 
         const sid = await startSession();
@@ -274,13 +275,24 @@ export default function DashboardPage() {
             </h1>
             <p className="text-gray-500 text-sm mt-1">Your Wise Engineer companion is watching.</p>
           </div>
-          {sessionId && (
-            <PauseButton
-              sessionId={sessionId}
-              observationState={observationState}
-              onStateChange={setObservationState}
-            />
-          )}
+          <div className="flex items-center gap-2">
+            <a
+              href="/profile"
+              className="p-2 rounded-full bg-gray-800 hover:bg-gray-700 transition text-gray-300 hover:text-white"
+              title="Edit your profile"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>
+              </svg>
+            </a>
+            {sessionId && (
+              <PauseButton
+                sessionId={sessionId}
+                observationState={observationState}
+                onStateChange={setObservationState}
+              />
+            )}
+          </div>
         </div>
 
         {/* Robot face */}

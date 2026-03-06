@@ -138,28 +138,28 @@ async def generate_intervention(event_type: str, uid: str, session_id: str) -> s
 
     if event_type == "frustrated":
         prompt = (
-            "Haris seems frustrated right now — his posture suggests tension or fatigue. "
-            "Use get_user_context to check his projects, then use get_rumi_wisdom if helpful. "
-            "Generate a warm, brief intervention (2–3 sentences max)."
+            "The user seems frustrated right now — their posture suggests tension or fatigue. "
+            "Use get_user_context to learn their name and projects, then use get_rumi_wisdom if helpful. "
+            "Generate a warm, brief intervention addressed by name (2–3 sentences max)."
         )
     elif event_type == "coding_block":
         prompt = (
-            "Haris appears stuck — his screen hasn't changed in a while. "
-            "Use get_user_context to check his active projects. "
-            "Ask one specific, caring check-in question about DoneKaro or RehnumaAI (1–2 sentences max)."
+            "The user appears stuck — their screen hasn't changed in a while. "
+            "Use get_user_context to learn their name and active projects. "
+            "Ask one specific, caring check-in question about their current project (1–2 sentences max)."
         )
     elif event_type == "long_session":
         prompt = (
-            "Haris has been working continuously for over 90 minutes without a break. "
-            "Use get_user_context to personalise the message. "
-            "Gently suggest he take a short break — mention chai, a stretch, or stepping outside. "
-            "Reference his name and keep it warm, caring, brief (1–2 sentences max)."
+            "The user has been working continuously for over 90 minutes without a break. "
+            "Use get_user_context to learn their name and wellness preference. "
+            "Gently suggest a break — chai, a stretch, or stepping outside. "
+            "Address them by name, warm and brief (1–2 sentences max)."
         )
     else:  # deep_focus
         prompt = (
-            "Haris has been in a calm, focused flow state for over 30 minutes — this is rare and valuable. "
-            "Use get_user_context to reference his current project by name. "
-            "Celebrate his focus briefly and warmly — MashaAllah energy, pride in his craft. "
+            "The user has been in a calm, focused flow state for over 30 minutes — rare and valuable. "
+            "Use get_user_context to learn their name and current project. "
+            "Celebrate their focus briefly and warmly — pride in craft, MashaAllah energy. "
             "1–2 sentences max. Do not interrupt the flow too much."
         )
 

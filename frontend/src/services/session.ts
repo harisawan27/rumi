@@ -41,13 +41,26 @@ export async function verifyAuth(): Promise<{ uid: string; name: string }> {
   return res.json();
 }
 
-export async function getIdentity(): Promise<Record<string, unknown>> {
+export async function getIdentity(): Promise<Record<string, unknown> | null> {
   const res = await fetch(`${BACKEND_URL}/identity`, { headers: await authHeaders() });
+  if (res.status === 404) return null;
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.detail ?? "Failed to load identity");
   }
   return res.json();
+}
+
+export async function saveIdentity(data: Record<string, unknown>): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/identity`, {
+    method: "PUT",
+    headers: await authHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail ?? "Failed to save identity");
+  }
 }
 
 export async function getSessionSummaries(limit = 3): Promise<unknown[]> {

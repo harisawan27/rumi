@@ -95,6 +95,16 @@ def get_identity(uid: str = Depends(get_current_uid)):
         raise HTTPException(status_code=503, detail="FIRESTORE_UNAVAILABLE")
 
 
+@app.put("/identity", status_code=200)
+def put_identity(body: dict, uid: str = Depends(get_current_uid)):
+    from src.identity.identity_loader import save_identity
+    try:
+        save_identity(uid, body)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
+    return {"status": "saved"}
+
+
 # ---------------------------------------------------------------------------
 # Session Summaries (T022)
 # ---------------------------------------------------------------------------

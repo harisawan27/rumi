@@ -4,6 +4,7 @@ import { useState } from "react";
 import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { auth } from "@/services/firebase";
+import { verifyAuth, getIdentity } from "@/services/session";
 
 export default function SignInPage() {
   const router = useRouter();
@@ -17,9 +18,10 @@ export default function SignInPage() {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
       const idToken = await result.user.getIdToken();
-      // Store token in memory (sessionStorage avoids localStorage persistence)
       sessionStorage.setItem("id_token", idToken);
-      router.push("/dashboard");
+      await verifyAuth();
+      const identity = await getIdentity();
+      router.push(identity ? "/dashboard" : "/onboarding");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign-in failed");
       setLoading(false);

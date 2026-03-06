@@ -20,8 +20,10 @@ def verify_id_token(token: str) -> dict:
     except Exception as exc:
         raise AuthError(f"INVALID_TOKEN: {exc}") from exc
 
-    authorised_uid = os.environ["AUTHORISED_USER_UID"]
-    if decoded["uid"] != authorised_uid:
+    # Single-user restriction — optional. If AUTHORISED_USER_UID is set in .env,
+    # only that UID can sign in. Remove or leave unset for open multi-user mode.
+    authorised_uid = os.environ.get("AUTHORISED_USER_UID", "")
+    if authorised_uid and decoded["uid"] != authorised_uid:
         raise AuthError("UNAUTHORISED_USER")
 
     return decoded

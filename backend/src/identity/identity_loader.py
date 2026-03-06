@@ -1,8 +1,17 @@
+from datetime import datetime, timezone
 from src.memory.firestore_client import get_db
 
 
 class IdentityNotFoundError(Exception):
     pass
+
+
+def save_identity(uid: str, data: dict) -> None:
+    """Create or overwrite a user's Core Identity Profile in Firestore."""
+    db = get_db()
+    data["user_id"] = uid
+    data["last_updated"] = datetime.now(timezone.utc)
+    db.collection("users").document(uid).set(data, merge=True)
 
 
 def load_core_identity(uid: str) -> dict:
