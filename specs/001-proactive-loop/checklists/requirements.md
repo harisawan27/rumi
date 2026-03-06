@@ -41,14 +41,14 @@
 ## Deferred to plan.md (by design)
 
 The following were requested by user but are architectural decisions, not spec content:
-- [ ] **Folder structure** (Python/Next.js project layout) → defer to plan.md
-- [ ] **Firebase schema** (Firestore collections, indexing, security rules) → Key Entities in spec define
-      the data model; exact schema deferred to plan.md
-- [ ] **System Prompt template** (Sufi-Engineer personality format) → defer to plan.md; spec captures
-      behavioral requirements (FR-004, FR-011, SC-005) that the template must satisfy
+- [x] **Folder structure** (Python/Next.js project layout) → defined in plan.md Project Structure section
+- [x] **Firebase schema** (Firestore collections, indexing, security rules) → defined in data-model.md;
+      sub-collection hierarchy documented in plan.md Key Architectural Decision #3
+- [x] **System Prompt template** (Sufi-Engineer personality format) → full template defined in research.md;
+      assembly logic specified in plan.md Key Architectural Decision #4
 
 ## Notes
 
-All spec quality items pass. Three architectural requests deferred to plan.md by design
-(folder structure, Firestore schema, System Prompt template) — these are HOW decisions,
-not WHAT decisions. Ready for `/sp.plan`.
+All items pass. The three architectural items (folder structure, Firestore schema, System Prompt
+template) have been resolved in plan.md, data-model.md, and research.md respectively.
+Ready for `/sp.implement`.

@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(git:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(pip install:*)",
+      "Bash(python:*)"
     ]
   }
 }
