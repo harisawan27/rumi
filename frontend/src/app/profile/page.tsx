@@ -72,7 +72,7 @@ function EditableText({
           <p className="text-sm text-white">{value || <span className="text-gray-600 italic">Not set</span>}</p>
           <button
             onClick={() => { setDraft(value); setEditing(true); }}
-            className="text-xs text-gray-600 hover:text-cyan-400 opacity-0 group-hover:opacity-100 transition whitespace-nowrap"
+            className="text-xs text-gray-500 hover:text-cyan-400 sm:opacity-0 sm:group-hover:opacity-100 transition whitespace-nowrap flex-shrink-0"
           >
             Edit
           </button>

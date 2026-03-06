@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 interface Props {
   interactionId: string;
-  trigger: "A" | "B";
+  trigger: "A" | "B" | "C" | "E";
   text: string;
   onRespond: (interactionId: string, response: "accepted" | "dismissed") => void;
 }
@@ -31,10 +31,14 @@ export default function InterventionCard({ interactionId, trigger, text, onRespo
     setVisible(false);
   }
 
-  const label = trigger === "A" ? "Mirr'at senses frustration" : "Mirr'at checks in";
+  const label =
+    trigger === "A" ? "Mirr'at senses frustration" :
+    trigger === "B" ? "Mirr'at checks in" :
+    trigger === "C" ? "Time for a break" :
+    "Mirr'at celebrates your focus";
 
   return (
-    <div className="rounded-xl border border-gray-700 bg-gray-900 p-5 space-y-4 shadow-lg max-w-lg">
+    <div className="rounded-xl border border-gray-700 bg-gray-900 p-4 sm:p-5 space-y-4 shadow-lg w-full max-w-lg">
       <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
       <p className="text-white text-sm leading-relaxed">{text}</p>
       <div className="flex gap-3">

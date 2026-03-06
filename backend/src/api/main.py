@@ -307,8 +307,10 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
             elif msg.get("type") == "audio":
                 import base64
                 pcm_bytes = base64.b64decode(msg["data"])
+                await mgr.ensure_gemini_connected()
                 if mgr.gemini and mgr.gemini.is_connected:
                     await mgr.gemini.send_audio(pcm_bytes)
+                    mgr._reset_gemini_idle_timer()
     except WebSocketDisconnect:
         pass
     finally:

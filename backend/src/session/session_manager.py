@@ -23,7 +23,9 @@ class SessionManager:
         self._websocket = None  # frontend WS connection, set externally
         self._watchman_task: Optional[asyncio.Task] = None
         self._idle_timer_task: Optional[asyncio.Task] = None
+        self._gemini_idle_task: Optional[asyncio.Task] = None
         self._system_prompt: Optional[str] = None
+        self._gemini_connecting: bool = False  # guard against concurrent connects
 
     # -----------------------------------------------------------------------
     # Session lifecycle
@@ -57,35 +59,75 @@ class SessionManager:
         logger.info("SessionManager: session started — %s", self._session_id)
         return self._session_id
 
-    async def connect_gemini(self) -> None:
-        """Connect Gemini Live API — called when WebSocket is established."""
+    async def ensure_gemini_connected(self) -> None:
+        """Lazily open a Gemini Live session only when needed.
+
+        Called by: push-to-talk audio, trigger fires, greeting.
+        After each exchange completes, a 2-min idle timer closes the session
+        automatically — so it never hits the Live API duration limit.
+        """
         if self._gemini and self._gemini.is_connected:
+            self._reset_gemini_idle_timer()
             return
-        api_key = os.environ["GEMINI_API_KEY"]
-        self._gemini = GeminiLiveClient(api_key=api_key)
-        # Wire audio callback so Gemini voice goes straight to frontend
-        self._gemini.set_audio_callback(self._forward_audio)
-        await self._gemini.connect(self._system_prompt)
+        if self._gemini_connecting:
+            # Another coroutine is already connecting — wait briefly
+            for _ in range(20):
+                await asyncio.sleep(0.1)
+                if self._gemini and self._gemini.is_connected:
+                    return
+            return
+        self._gemini_connecting = True
+        try:
+            api_key = os.environ["GEMINI_API_KEY"]
+            self._gemini = GeminiLiveClient(api_key=api_key)
+            self._gemini.set_audio_callback(self._forward_audio)
+            await self._gemini.connect(self._system_prompt)
+            logger.info("SessionManager: Gemini Live session opened (on-demand)")
+        finally:
+            self._gemini_connecting = False
+        self._reset_gemini_idle_timer()
+
+    def _reset_gemini_idle_timer(self) -> None:
+        """Restart the 2-minute idle disconnect countdown."""
+        if self._gemini_idle_task:
+            self._gemini_idle_task.cancel()
+        self._gemini_idle_task = asyncio.create_task(self._gemini_idle_disconnect())
+
+    async def _gemini_idle_disconnect(self) -> None:
+        """Disconnect Gemini Live after 2 minutes of silence."""
+        await asyncio.sleep(120)
+        if self._gemini and self._gemini.is_connected:
+            await self._gemini.disconnect()
+            logger.info("SessionManager: Gemini Live disconnected (idle timeout)")
+
+    async def connect_gemini(self) -> None:
+        """Called when frontend WebSocket is established.
+        Starts watchman and sends the opening greeting — Gemini is opened
+        on-demand for the greeting then closes after 2 min idle.
+        """
         self.start_watchman()
-        # Send opening greeting — makes Mirr'at speak first
         asyncio.create_task(self._send_greeting())
-        logger.info("SessionManager: Gemini Live connected")
+        logger.info("SessionManager: WebSocket ready — greeting queued")
 
     async def _send_greeting(self) -> None:
-        """Send an opening prompt so Mirr'at greets Haris immediately."""
+        """Open Gemini Live, greet the user, then let idle timer close the session."""
         await asyncio.sleep(1.5)  # small delay to let WS stabilise
         try:
+            await self.ensure_gemini_connected()
             await self._gemini.query(
-                "You have just started a new observation session with Haris. "
-                "Greet him warmly and briefly (1–2 sentences max). "
-                "Mention his name and one of his active projects naturally. "
+                "You have just started a new observation session with the user. "
+                "Greet them warmly and briefly (1–2 sentences max). "
+                "Use their name and mention one of their active projects naturally. "
                 "Be the Sufi-Engineer you are — precise, warm, human."
             )
+            # Idle timer already running — session closes after 2 min if no activity
         except Exception as exc:
             logger.warning("SessionManager: greeting failed: %s", exc)
 
     async def _forward_audio(self, pcm_bytes: bytes) -> None:
-        """Forward Gemini audio response to the frontend WebSocket."""
+        """Forward Gemini audio response to the frontend WebSocket.
+        Also resets the idle timer — Gemini is still active while sending audio.
+        """
         if self._websocket is None:
             return
         import base64
@@ -95,6 +137,7 @@ class SessionManager:
             await self._websocket.send_text(
                 json.dumps({"type": "audio_response", "data": b64})
             )
+            self._reset_gemini_idle_timer()  # keep alive while response is streaming
         except Exception as exc:
             logger.warning("SessionManager: audio forward failed: %s", exc)
 
@@ -123,6 +166,9 @@ class SessionManager:
         if self._idle_timer_task:
             self._idle_timer_task.cancel()
             self._idle_timer_task = None
+        if self._gemini_idle_task:
+            self._gemini_idle_task.cancel()
+            self._gemini_idle_task = None
         if self._gemini:
             await self._gemini.disconnect()
 
@@ -313,11 +359,10 @@ class SessionManager:
         logger.info("SessionManager: Trigger E fired — interaction %s", interaction_id)
 
     async def _speak(self, text: str) -> None:
-        """Send text to Gemini Live so Mirr'at speaks it aloud."""
-        if not self._gemini or not self._gemini.is_connected:
-            return
+        """Ensure Gemini Live is open, then speak the text aloud."""
         try:
-            await self._gemini.query(f"Say this warmly to Haris: {text}")
+            await self.ensure_gemini_connected()
+            await self._gemini.query(f"Say this warmly to the user: {text}")
         except Exception as exc:
             logger.warning("SessionManager: speak failed: %s", exc)
 

@@ -264,16 +264,16 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-8">
-      <div className="max-w-2xl mx-auto flex flex-col items-center gap-8">
+    <main className="min-h-screen bg-gray-950 text-white p-4 sm:p-8">
+      <div className="max-w-2xl mx-auto flex flex-col items-center gap-6 sm:gap-8">
 
         {/* Header */}
         <div className="w-full flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">
+            <h1 className="text-xl sm:text-2xl font-semibold truncate">
               {name ? `Marhaba, ${name}` : "Loading…"}
             </h1>
-            <p className="text-gray-500 text-sm mt-1">Your Wise Engineer companion is watching.</p>
+            <p className="text-gray-500 text-xs sm:text-sm mt-1">Your Wise Engineer companion is watching.</p>
           </div>
           <div className="flex items-center gap-2">
             <a
