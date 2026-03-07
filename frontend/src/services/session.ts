@@ -78,7 +78,7 @@ export async function getSessionSummaries(limit = 3): Promise<unknown[]> {
 
 export interface InterventionMessage {
   type: "intervention";
-  trigger: "A" | "B";
+  trigger: "A" | "B" | "C" | "E";
   text: string;
   interaction_id: string;
   options: string[];
@@ -92,6 +92,7 @@ export type WsMessage =
   | { type: "request_frame" }
   | { type: "audio_response"; data: string }
   | { type: "transcript"; text: string }
+  | { type: "memory_updated"; fields: string[]; message: string }
   | { type: "error"; code: string; message?: string };
 
 export async function connectObserveSocket(

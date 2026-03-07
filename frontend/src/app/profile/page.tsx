@@ -199,7 +199,7 @@ export default function ProfilePage() {
           <div>
             <h1 className="text-2xl font-bold">Your Memory</h1>
             <p className="text-gray-500 text-sm mt-1">
-              Everything Mirr&apos;at knows about you. Hover any field to edit.
+              Everything Rumi knows about you. Hover any field to edit.
             </p>
           </div>
           <a
@@ -285,7 +285,7 @@ export default function ProfilePage() {
             <div className="flex flex-col gap-4">
               <EditableText label="Work style" value={String(identity.work_style ?? "")} onSave={(v) => patch({ work_style: v })} multiline />
               <TagsEditor label="Focus breakers" tags={focusBreakers} onSave={(v) => patch({ focus_breakers: v })} />
-              <EditableText label="How Mirr'at should talk to you" value={String(identity.communication_preference ?? "")} onSave={(v) => patch({ communication_preference: v })} multiline />
+              <EditableText label="How Rumi should talk to you" value={String(identity.communication_preference ?? "")} onSave={(v) => patch({ communication_preference: v })} multiline />
               <EditableText label="Preferred break" value={String(identity.wellness_trigger ?? "")} onSave={(v) => patch({ wellness_trigger: v })} multiline />
             </div>
           </Section>
@@ -294,7 +294,7 @@ export default function ProfilePage() {
           <Section title="Culture & Faith">
             <div className="flex flex-col gap-4">
               <EditableText label="Faith / religion" value={String(identity.faith ?? "")} onSave={(v) => patch({ faith: v })} />
-              <EditableText label="Prayer / schedule Mirr'at should respect" value={String(identity.salah_awareness ?? "")} onSave={(v) => patch({ salah_awareness: v })} multiline />
+              <EditableText label="Prayer / schedule Rumi should respect" value={String(identity.salah_awareness ?? "")} onSave={(v) => patch({ salah_awareness: v })} multiline />
               <EditableText label="Language learning / cultural goal" value={String(identity.turkish_goal ?? "")} onSave={(v) => patch({ turkish_goal: v })} multiline />
               <EditableText label="Leisure & hobbies" value={String(identity.leisure ?? "")} onSave={(v) => patch({ leisure: v })} multiline />
             </div>
@@ -303,7 +303,7 @@ export default function ProfilePage() {
         </div>
 
         <p className="text-center text-gray-600 text-xs mt-8">
-          Changes save instantly to Mirr&apos;at&apos;s memory. Active sessions pick them up next restart.
+          Changes save instantly to Rumi&apos;s memory. Active sessions pick them up next restart.
         </p>
       </div>
     </main>

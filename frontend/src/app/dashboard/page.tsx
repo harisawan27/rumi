@@ -13,7 +13,7 @@ import {
   type WsMessage,
 } from "@/services/session";
 import { ObservationState } from "@/components/ObservationIndicator";
-import MirratFace from "@/components/MirratFace";
+import RumiFace from "@/components/RumiFace";
 import InterventionCard from "@/components/InterventionCard";
 import PauseButton from "@/components/PauseButton";
 
@@ -43,8 +43,9 @@ export default function DashboardPage() {
   const intervention = interventionQueue[0] ?? null;
   const [speaking, setSpeaking] = useState(false);
   const [isTalking, setIsTalking] = useState(false);
-  const [mirratEmotion, setMirratEmotion] = useState<"neutral" | "concerned" | "happy" | "thinking">("neutral");
+  const [rumiEmotion, setRumiEmotion] = useState<"neutral" | "concerned" | "happy" | "thinking">("neutral");
   const [error, setError] = useState<string | null>(null);
+  const [memoryToast, setMemoryToast] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);      // mic capture (16kHz)
@@ -77,8 +78,8 @@ export default function DashboardPage() {
           if (videoRef.current) videoRef.current.srcObject = videoStream;
           setObservationState("active");
           // Show happy greeting face for 4 seconds
-          setMirratEmotion("happy");
-          setTimeout(() => setMirratEmotion("neutral"), 4000);
+          setRumiEmotion("happy");
+          setTimeout(() => setRumiEmotion("neutral"), 4000);
         } catch {
           setObservationState("degraded");
         }
@@ -209,7 +210,7 @@ export default function DashboardPage() {
     const next = !isTalkingRef.current;
     isTalkingRef.current = next;
     setIsTalking(next);
-    setMirratEmotion(next ? "thinking" : "neutral");
+    setRumiEmotion(next ? "thinking" : "neutral");
   }
 
   // Play a PCM chunk from Gemini — chunks are scheduled sequentially, no gaps/overlap
@@ -259,15 +260,19 @@ export default function DashboardPage() {
     if (msg.type === "intervention") {
       const m = msg as InterventionMessage;
       setInterventionQueue(q => [...q, { interactionId: m.interaction_id, trigger: m.trigger, text: m.text }]);
-      // Show matching emotion on Mirr'at's face
-      const emotionMap: Record<string, typeof mirratEmotion> = {
+      // Show matching emotion on Rumi's face
+      const emotionMap: Record<string, typeof rumiEmotion> = {
         A: "concerned", B: "thinking", C: "concerned", E: "happy",
       };
-      setMirratEmotion(emotionMap[m.trigger] ?? "neutral");
-      setTimeout(() => setMirratEmotion("neutral"), 8000);
+      setRumiEmotion(emotionMap[m.trigger] ?? "neutral");
+      setTimeout(() => setRumiEmotion("neutral"), 8000);
     } else if (msg.type === "audio_response") {
       console.log("audio_response WS message received");
       playAudio((msg as { type: string; data: string }).data);
+    } else if (msg.type === "memory_updated") {
+      const m = msg as { type: string; message: string };
+      setMemoryToast(m.message);
+      setTimeout(() => setMemoryToast(null), 6000);
     } else if (msg.type === "paused") {
       setObservationState("paused");
     } else if (msg.type === "error") {
@@ -299,7 +304,7 @@ export default function DashboardPage() {
             <h1 className="text-xl sm:text-2xl font-semibold truncate">
               {name ? `Marhaba, ${name}` : "Loading…"}
             </h1>
-            <p className="text-gray-500 text-xs sm:text-sm mt-1">Your Wise Engineer companion is watching.</p>
+            <p className="text-gray-500 text-xs sm:text-sm mt-1">Rumi is watching. Witnessing. Understanding.</p>
           </div>
           <div className="flex items-center gap-2">
             <a
@@ -322,7 +327,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Robot face */}
-        <MirratFace state={observationState} speaking={speaking} emotion={mirratEmotion} />
+        <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
 
         {/* Hidden video for webcam frames */}
         <video ref={videoRef} autoPlay muted playsInline className="hidden" />
@@ -358,6 +363,13 @@ export default function DashboardPage() {
           />
         )}
       </div>
+
+      {/* Memory update toast */}
+      {memoryToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 border border-cyan-700 text-cyan-300 text-sm px-4 py-3 rounded-xl shadow-xl max-w-sm text-center animate-fade-in">
+          🧠 {memoryToast}
+        </div>
+      )}
     </main>
   );
 }

@@ -41,7 +41,7 @@ IDENTITY = {
     # ── Projects ──────────────────────────────────────────────────────────────
     "projects": [
         {
-            "name": "Mirr'at",
+            "name": "Project Rumi",
             "status": "GOLD SPRINT — 9-day deadline",
             "context": (
                 "Proactive AI desktop companion for the Google Gemini Live Agent Challenge. "
@@ -96,7 +96,7 @@ IDENTITY = {
     "faith": "Practicing Muslim",
     "salah_awareness": (
         "Asr and Maghrib are natural low-energy zones in Karachi. "
-        "Mirr'at should respect these times — suggest breaks around them, never push through."
+        "Rumi should respect these times — suggest breaks around them, never push through."
     ),
 
     # ── Cultural anchors ──────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ def seed(uid: str) -> None:
         ref.set(IDENTITY)
         print(f"Created new identity document for UID: {uid}")
 
-    print("Done. Mirr'at now knows Haris.")
+    print("Done. Rumi now knows Haris.")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ load_dotenv()
 
 from src.auth.firebase_auth import verify_id_token, AuthError  # noqa: E402
 
-app = FastAPI(title="Mirr'at Backend", version="0.1.0")
+app = FastAPI(title="Project Rumi — Rumi Core", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +45,7 @@ def get_current_uid(authorization: str = Header(...)) -> str:
 
 @app.on_event("startup")
 async def _startup():
+    logger.info("[RUMI CORE] Initializing Identity Protocol...")
     uid = os.getenv("AUTHORISED_USER_UID", "")
     if uid:
         logger.warning(
@@ -52,7 +53,7 @@ async def _startup():
             "Remove it from .env to enable multi-user mode.", uid
         )
     else:
-        logger.info("Multi-user mode active (AUTHORISED_USER_UID not set)")
+        logger.info("[RUMI CORE] Multi-user mode active — identity layer ready.")
 
 
 @app.get("/health")

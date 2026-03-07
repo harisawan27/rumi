@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 AUTO_SUMMARIZER_MODEL = "gemini-2.0-flash"
 
 AUTO_SUMMARIZER_PROMPT_TEMPLATE = """\
-You are a concise session summarizer for Mirr'at. Given the following interaction log
+You are a concise session summarizer for Rumi. Given the following interaction log
 from a session with {name}, write EXACTLY 2 sentences summarizing:
 1. The key emotional or cognitive states detected.
 2. The most notable intervention offered and the user's response.
@@ -139,8 +139,8 @@ class AutoSummarizer:
         uid: str,
         session_id: str,
         ended_at: datetime,
-    ) -> str:
-        """Full pipeline: summarize + save. Returns summary_id."""
+    ) -> tuple[str, str]:
+        """Full pipeline: summarize + save. Returns (summary_id, summary_text)."""
         # Retrieve session start time to compute duration
         try:
             db = get_db()
@@ -157,4 +157,5 @@ class AutoSummarizer:
             duration_minutes = 0.0
 
         summary_text = await self.summarize(uid, session_id)
-        return await self.save_summary(uid, session_id, summary_text, duration_minutes)
+        summary_id = await self.save_summary(uid, session_id, summary_text, duration_minutes)
+        return summary_id, summary_text

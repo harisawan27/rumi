@@ -3,12 +3,12 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 
 export type ObservationState = "active" | "paused" | "degraded";
-export type MirratEmotion = "neutral" | "concerned" | "happy" | "thinking";
+export type RumiEmotion = "neutral" | "concerned" | "happy" | "thinking";
 
 interface Props {
   state: ObservationState;
   speaking: boolean;
-  emotion?: MirratEmotion;
+  emotion?: RumiEmotion;
 }
 
 // Eye geometry constants
@@ -28,7 +28,7 @@ function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
-export default function MirratFace({ state, speaking, emotion = "neutral" }: Props) {
+export default function RumiFace({ state, speaking, emotion = "neutral" }: Props) {
   const [blink, setBlink]           = useState(false);
   const [pupil, setPupil]           = useState({ x: 0, y: 0 });
   const [targetPupil, setTarget]    = useState({ x: 0, y: 0 });

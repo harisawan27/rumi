@@ -90,7 +90,7 @@ description: "Task list for Identity-Aware Proactive Loop"
 
 **Goal**: Watchman detects Trigger A (frustration posture > 2 minutes) and proactively offers a Rumi quote or Chai break.
 
-**Independent Test**: Hold a frustration posture for 2+ minutes in front of the camera. Verify Mirr'at initiates an intervention within 2 min 45 sec containing a Rumi quote OR Chai break suggestion.
+**Independent Test**: Hold a frustration posture for 2+ minutes in front of the camera. Verify Rumi initiates an intervention within 2 min 45 sec containing a Rumi quote OR Chai break suggestion.
 
 ### Implementation for User Story 3
 
@@ -110,7 +110,7 @@ description: "Task list for Identity-Aware Proactive Loop"
 
 **Goal**: Watchman detects Trigger B (static screen > 10 minutes) and generates a project-specific check-in question by name.
 
-**Independent Test**: Keep a static screen for 10+ minutes. Verify Mirr'at generates a question naming one of Haris's active projects (DoneKaro or RehnumaAI).
+**Independent Test**: Keep a static screen for 10+ minutes. Verify Rumi generates a question naming one of Haris's active projects (DoneKaro or RehnumaAI).
 
 ### Implementation for User Story 4
 
@@ -124,7 +124,7 @@ description: "Task list for Identity-Aware Proactive Loop"
 
 ## Phase 7: User Story 5 — Context-Injected Identity in Every Response (Priority: P2)
 
-**Goal**: Every Mirr'at intervention references at least one Core Identity element; Rumi quotes are accurate and attributed.
+**Goal**: Every Rumi intervention references at least one Core Identity element; Rumi quotes are accurate and attributed.
 
 **Independent Test**: Trigger any intervention (A or B). Verify the response includes Haris's name, a project name, or a verified Rumi quote with citation.
 
@@ -142,7 +142,7 @@ description: "Task list for Identity-Aware Proactive Loop"
 
 **Goal**: Auto-Summarizer generates and saves a 2-sentence plain-text Session Summary to Firestore within 30 seconds of every session end.
 
-**Independent Test**: Complete a session with at least one intervention. Close Mirr'at. Verify a `session_summaries` document appears in Firestore within 30 seconds, containing 2 plain-text sentences.
+**Independent Test**: Complete a session with at least one intervention. Close Rumi. Verify a `session_summaries` document appears in Firestore within 30 seconds, containing 2 plain-text sentences.
 
 ### Implementation for User Story 6
 
@@ -160,7 +160,7 @@ description: "Task list for Identity-Aware Proactive Loop"
 
 **Purpose**: Automated GCP deployment; Karachi-based 'Wise Engineer' personality tuning; privacy audit.
 
-- [x] T044 Create `cloudbuild.yaml` — 4-step Cloud Build pipeline: (1) `pytest backend/tests/` (2) `docker build -t gcr.io/$PROJECT_ID/mirrat-backend .` (3) `docker push gcr.io/$PROJECT_ID/mirrat-backend` (4) `gcloud run deploy mirrat-backend --image ... --session-affinity --timeout=3600 --min-instances=1 --max-instances=1`
+- [x] T044 Create `cloudbuild.yaml` — 4-step Cloud Build pipeline: (1) `pytest backend/tests/` (2) `docker build -t gcr.io/$PROJECT_ID/rumi-backend .` (3) `docker push gcr.io/$PROJECT_ID/rumi-backend` (4) `gcloud run deploy rumi-backend --image ... --session-affinity --timeout=3600 --min-instances=1 --max-instances=1`
 - [x] T045 [P] Add Firebase Hosting config (`firebase.json`, `.firebaserc`) — configure Next.js static export for `frontend/`; add Hosting deploy as step 5 in `cloudbuild.yaml`
 - [x] T046 Refine System Prompt in `backend/src/gemini/prompt_builder.py` for Karachi-based 'Wise Engineer' persona — add explicit Chai break phrasing examples, approved Urdu warmth terms (yaar, bhai), tone calibration instructions (precise + brief when focused; warm + unhurried when frustrated); include 4 verified Rumi quotes for engineering moments from `research.md`
 - [x] T047 [P] Privacy audit: add assertion in `backend/src/gemini/live_client.py` that frame bytes are sent directly to the WebSocket and never written to any file path or Firestore; add `PRIVACY_CHECK` log line on each frame send confirming ephemeral processing

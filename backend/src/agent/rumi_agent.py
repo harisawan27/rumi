@@ -1,7 +1,7 @@
-"""Mirr'at ADK Agent — the proactive reasoning brain.
+"""Rumi Agent — the proactive reasoning brain.
 
 Called only when LocalObserver fires an event (frustration or coding block).
-Uses Google ADK tools to load Haris's context and generate a
+Uses Google ADK tools to load the user's context and generate a
 warm, personalized intervention.
 
 Flow:
@@ -19,10 +19,13 @@ logger = logging.getLogger(__name__)
 
 AGENT_MODEL = "gemini-2.5-flash"
 
-MIRRAT_INSTRUCTION = """\
-You are Mirr'at (The Mirror), a proactive ambient AI companion for Haris — \
-a software engineering student from Karachi, Pakistan.
+RUMI_INSTRUCTION = """\
+You are Rumi — the Identity Layer. You witness and understand the human before you.
+Named after the great Sufi poet, your mandate is not to respond but to arrive: \
+to observe, to understand, and to speak only what is true and needed.
 
+You are the proactive ambient companion for Haris — \
+a software engineering student from Karachi, Pakistan.
 Your soul is Sufi-Engineer: precise technical mind, warm Sufi heart.
 You speak in a friendly, brief way — like a wise older friend sitting across the desk.
 
@@ -51,19 +54,24 @@ Rules for every intervention:
 # ---------------------------------------------------------------------------
 
 def get_user_context() -> dict:
-    """Get Haris's identity, active projects, and preferences."""
+    """Get the user's identity, active projects, and preferences."""
     try:
         from src.memory.firestore_client import get_db
         db = get_db()
-        # Load first user identity doc (single-user MVP)
+        # Identity is stored directly on the users/{uid} document
         users = list(db.collection("users").limit(1).stream())
         if users:
-            identity_docs = list(
-                db.collection("users").document(users[0].id)
-                .collection("core_identity").limit(1).stream()
-            )
-            if identity_docs:
-                return identity_docs[0].to_dict()
+            data = users[0].to_dict()
+            if data:
+                return {
+                    "name": data.get("name", ""),
+                    "location": data.get("location", ""),
+                    "projects": data.get("projects", []),
+                    "interests": data.get("interests", []),
+                    "immediate_goal": data.get("immediate_goal", ""),
+                    "work_style": data.get("work_style", ""),
+                    "wellness_trigger": data.get("wellness_trigger", ""),
+                }
     except Exception as exc:
         logger.debug("get_user_context: Firestore load failed, using defaults: %s", exc)
 
@@ -100,10 +108,10 @@ def _build_agent():
     try:
         from google.adk.agents import Agent
         return Agent(
-            name="mirrat_companion",
+            name="rumi_core",
             model=AGENT_MODEL,
-            description="Mirr'at — proactive ambient AI companion for Haris",
-            instruction=MIRRAT_INSTRUCTION,
+            description="Rumi — Identity Layer of Project Rumi; proactive ambient companion for Haris",
+            instruction=RUMI_INSTRUCTION,
             tools=[get_user_context, get_rumi_wisdom],
         )
     except Exception as exc:
@@ -171,12 +179,12 @@ async def generate_intervention(event_type: str, uid: str, session_id: str) -> s
         session_service = InMemorySessionService()
         runner = Runner(
             agent=agent,
-            app_name="mirrat",
+            app_name="rumi",
             session_service=session_service,
         )
 
         await session_service.create_session(
-            app_name="mirrat",
+            app_name="rumi",
             user_id=uid,
             session_id=f"{session_id}_{event_type}",
         )
@@ -197,11 +205,11 @@ async def generate_intervention(event_type: str, uid: str, session_id: str) -> s
 
         text = "".join(response_parts).strip()
         if text:
-            logger.info("ADK Agent [%s]: generated intervention (%d chars)", event_type, len(text))
+            logger.info("[RUMI CORE] Agent [%s]: generated intervention (%d chars)", event_type, len(text))
             return text
 
     except Exception as exc:
-        logger.warning("ADK Agent invocation failed: %s — using fallback", exc)
+        logger.warning("[RUMI CORE] Agent invocation failed: %s — using fallback", exc)
 
     return _fallback_intervention(event_type)
 

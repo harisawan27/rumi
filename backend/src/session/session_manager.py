@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """Manages the lifecycle of a single Mirr'at observation session."""
+    """Manages the lifecycle of a single Rumi observation session."""
 
     def __init__(self):
         self._uid: Optional[str] = None
@@ -56,7 +56,7 @@ class SessionManager:
         ref.update({"session_id": self._session_id})
         self._status = "active"
 
-        logger.info("SessionManager: session started — %s", self._session_id)
+        logger.info("[RUMI CORE] Session started — identity protocol active — %s", self._session_id)
         return self._session_id
 
     async def ensure_gemini_connected(self) -> None:
@@ -244,16 +244,37 @@ class SessionManager:
         self._idle_timer_task = asyncio.create_task(_timer())
 
     async def _run_auto_summarizer(self, ended_at: datetime) -> None:
+        import json
         from src.session.auto_summarizer import AutoSummarizer
+        from src.session.memory_extractor import MemoryExtractor
+
+        uid = self._uid
+        session_id = self._session_id
+        summary_text = ""
+
         try:
             summarizer = AutoSummarizer()
-            await summarizer.summarize_and_save(
-                uid=self._uid,
-                session_id=self._session_id,
+            _, summary_text = await summarizer.summarize_and_save(
+                uid=uid,
+                session_id=session_id,
                 ended_at=ended_at,
             )
         except Exception as exc:
             logger.error("SessionManager: auto-summarizer failed: %s", exc)
+
+        try:
+            extractor = MemoryExtractor()
+            patch = await extractor.extract_and_patch(uid, session_id, summary_text)
+            if patch and self._websocket:
+                fields = list(patch.keys())
+                await self._websocket.send_text(json.dumps({
+                    "type": "memory_updated",
+                    "fields": fields,
+                    "message": f"Rumi updated your memory: {', '.join(fields)}",
+                }))
+                logger.info("SessionManager: memory update notified — %s", fields)
+        except Exception as exc:
+            logger.error("SessionManager: memory extractor failed: %s", exc)
 
     # -----------------------------------------------------------------------
     # Watchman loop (T029 — wires Trigger A; T034 — Trigger B added in Phase 6)
@@ -294,7 +315,7 @@ class SessionManager:
 
     async def _fire_trigger_a(self) -> None:
         """Generate Trigger A intervention via ADK Agent and dispatch to frontend."""
-        from src.agent.mirrat_agent import generate_intervention
+        from src.agent.rumi_agent import generate_intervention
         from src.memory.interaction_log import log_interaction
 
         intervention_text = await generate_intervention("frustrated", self._uid, self._session_id)
@@ -313,7 +334,7 @@ class SessionManager:
 
     async def _fire_trigger_b(self) -> None:
         """Generate Trigger B intervention via ADK Agent and dispatch to frontend."""
-        from src.agent.mirrat_agent import generate_intervention
+        from src.agent.rumi_agent import generate_intervention
         from src.memory.interaction_log import log_interaction
 
         intervention_text = await generate_intervention("coding_block", self._uid, self._session_id)
@@ -331,7 +352,7 @@ class SessionManager:
 
     async def _fire_trigger_c(self) -> None:
         """Trigger C — long session, suggest a break."""
-        from src.agent.mirrat_agent import generate_intervention
+        from src.agent.rumi_agent import generate_intervention
         from src.memory.interaction_log import log_interaction
 
         intervention_text = await generate_intervention("long_session", self._uid, self._session_id)
@@ -348,7 +369,7 @@ class SessionManager:
 
     async def _fire_trigger_e(self) -> None:
         """Trigger E — deep focus streak, celebrate it."""
-        from src.agent.mirrat_agent import generate_intervention
+        from src.agent.rumi_agent import generate_intervention
         from src.memory.interaction_log import log_interaction
 
         intervention_text = await generate_intervention("deep_focus", self._uid, self._session_id)

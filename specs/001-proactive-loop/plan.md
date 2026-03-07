@@ -4,7 +4,7 @@
 
 ## Summary
 
-Build Mirr'at's core agentic loop: a Python backend agent that continuously observes Haris's
+Build Rumi's core agentic loop: a Python backend agent that continuously observes Haris's
 workspace via webcam (Gemini Multimodal Live API), detects emotional and cognitive state
 triggers, and proactively initiates contextualised voice/text interventions — grounded in
 Haris's Firebase-stored identity and prior session history. A Next.js frontend provides the
@@ -186,7 +186,7 @@ Next.js app (Cloud Run or Firebase Hosting).
 - Integrate: All Gemini interventions now use the assembled prompt; verify personalisation
 - Test: First interaction in a new session references prior session content
 
-**Gate**: Mirr'at greets Haris by name, mentions DoneKaro/RehnumaAI, can produce a Rumi quote. Session Summary saved at close. ✅ US2, US5, US6 acceptance scenarios testable.
+**Gate**: Rumi greets Haris by name, mentions DoneKaro/RehnumaAI, can produce a Rumi quote. Session Summary saved at close. ✅ US2, US5, US6 acceptance scenarios testable.
 
 ---
 
@@ -230,7 +230,7 @@ Wise Engineer personality verified by reviewing 3 triggered interventions. Priva
   - Data flow: frame (ephemeral) vs. text summary (persisted)
   - Tool: draw.io, Excalidraw, or Mermaid embedded in README
 - **4-minute demo video** recording — script outline:
-  - 0:00–0:30 — Introduce Mirr'at: "not a chatbot, a companion"
+  - 0:00–0:30 — Introduce Rumi: "not a chatbot — the Identity Layer"
   - 0:30–1:30 — Sign in as Haris; system loads identity; observation activates
   - 1:30–2:30 — Demonstrate Trigger A (frustration posture → Rumi quote + Chai break)
   - 2:30–3:30 — Demonstrate Trigger B (coding block → project-aware check-in for DoneKaro)

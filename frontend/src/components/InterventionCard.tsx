@@ -32,10 +32,10 @@ export default function InterventionCard({ interactionId, trigger, text, onRespo
   }
 
   const label =
-    trigger === "A" ? "Mirr'at senses frustration" :
-    trigger === "B" ? "Mirr'at checks in" :
+    trigger === "A" ? "Rumi senses frustration" :
+    trigger === "B" ? "Rumi checks in" :
     trigger === "C" ? "Time for a break" :
-    "Mirr'at celebrates your focus";
+    "Rumi celebrates your focus";
 
   return (
     <div className="rounded-xl border border-gray-700 bg-gray-900 p-4 sm:p-5 space-y-4 shadow-lg w-full max-w-lg">

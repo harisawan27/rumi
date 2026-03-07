@@ -165,7 +165,7 @@ export default function OnboardingPage() {
   const steps = [
     // Step 0 — Personal
     <div key="personal" className="flex flex-col gap-4">
-      <Input label="First name (what Mirr'at calls you)" fkey="name" placeholder="e.g. Haris" />
+      <Input label="First name (what Rumi calls you)" fkey="name" placeholder="e.g. Haris" />
       <Input label="Full name" fkey="full_name" placeholder="e.g. Muhammad Haris Awan" />
       <Input label="Age" fkey="age" type="number" placeholder="e.g. 18" />
       <Input label="City / Country" fkey="location" placeholder="e.g. Karachi, Pakistan" />
@@ -238,9 +238,9 @@ export default function OnboardingPage() {
         <span className="text-sm text-gray-400">What breaks your focus? (press Enter to add)</span>
         <TagInput field="focus_breakers" placeholder="e.g. Doom-scrolling, noise" />
       </div>
-      <Textarea label="How should Mirr'at talk to you?" fkey="communication_preference" placeholder="e.g. Gentle but firm — inspire, don't nag" />
+      <Textarea label="How should Rumi talk to you?" fkey="communication_preference" placeholder="e.g. Gentle but firm — inspire, don't nag" />
       <Input label="Faith / religion (optional)" fkey="faith" placeholder="e.g. Practicing Muslim" />
-      <Textarea label="Any prayer / schedule Mirr'at should respect?" fkey="salah_awareness" placeholder="e.g. Asr and Maghrib are low-energy — suggest breaks around them" rows={2} />
+      <Textarea label="Any prayer / schedule Rumi should respect?" fkey="salah_awareness" placeholder="e.g. Asr and Maghrib are low-energy — suggest breaks around them" rows={2} />
       <Textarea label="Language learning or cultural goal?" fkey="turkish_goal" placeholder="e.g. 343-day Duolingo Turkish streak, preparing for Istanbul scholarship" rows={2} />
       <Textarea label="Preferred break (chai / walk / prayer / other)?" fkey="wellness_trigger" placeholder="e.g. Doodh patti and 5 minutes away from screen" rows={2} />
     </div>,
@@ -270,7 +270,7 @@ export default function OnboardingPage() {
 
         {/* Header */}
         <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold tracking-tight">Meet Mirr&apos;at</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Meet Rumi</h1>
           <p className="text-gray-400 text-sm mt-2">
             Let&apos;s learn who you are so every interaction feels personal.
           </p>
@@ -325,7 +325,7 @@ export default function OnboardingPage() {
               disabled={saving || !form.name.trim()}
               className="flex-1 py-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white font-medium transition text-sm"
             >
-              {saving ? "Saving…" : "Launch Mirr'at"}
+              {saving ? "Saving…" : "Launch Rumi"}
             </button>
           )}
         </div>

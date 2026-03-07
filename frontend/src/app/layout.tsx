@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 export const metadata: Metadata = {
-  title: "Mirr'at — The Mirror",
-  description: "Proactive ambient AI companion for Haris",
+  title: "Project Rumi — The Identity Layer",
+  description: "The first empathetic, persistent memory layer for physical AI.",
 };
 
 export default function RootLayout({
@@ -13,7 +14,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <ErrorBoundary>{children}</ErrorBoundary>
+      </body>
     </html>
   );
 }

@@ -2,7 +2,7 @@
 
 **Feature**: `001-proactive-loop`
 **Date**: 2026-03-06
-**Base URL**: `http://localhost:8000` (dev) · `https://mirrat-backend-[hash]-uc.a.run.app` (prod)
+**Base URL**: `http://localhost:8000` (dev) · `https://rumi-backend-[hash]-uc.a.run.app` (prod)
 **Auth**: All endpoints require `Authorization: Bearer <firebase_id_token>` except `/health`
 
 ---

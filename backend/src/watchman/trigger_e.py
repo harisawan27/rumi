@@ -14,7 +14,7 @@ class DeepFocusTracker:
     """Fires Trigger E when Haris sustains focused, calm work for 30+ minutes.
 
     Counts consecutive cycles where state == 'neutral' (not frustrated, not idle).
-    This is the *positive* trigger — Mirr'at celebrates productive flow states.
+    This is the *positive* trigger — Rumi celebrates productive flow states.
     """
 
     def __init__(self):

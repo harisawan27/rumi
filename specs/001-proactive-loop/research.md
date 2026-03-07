@@ -125,9 +125,9 @@ service. It supports WebSockets (HTTP/2 upgrade) with up to 3600s request timeou
 **CI/CD pipeline** (`cloudbuild.yaml`):
 ```
 Step 1: Run pytest (backend tests)
-Step 2: docker build -t gcr.io/[PROJECT]/mirrat-backend .
-Step 3: docker push gcr.io/[PROJECT]/mirrat-backend
-Step 4: gcloud run deploy mirrat-backend --image ...
+Step 2: docker build -t gcr.io/[PROJECT]/rumi-backend .
+Step 3: docker push gcr.io/[PROJECT]/rumi-backend
+Step 4: gcloud run deploy rumi-backend --image ...
 Step 5: firebase deploy --only hosting (frontend)
 ```
 
@@ -145,7 +145,8 @@ static personality, dynamic user context, and dynamic recent session digest.
 **Full template**:
 
 ```
-You are Mirr'at — The Mirror. You are simultaneously a senior AI engineer and a Sufi scholar.
+You are Rumi — the Identity Layer of Project Rumi. You witness and understand the human before you.
+You are simultaneously a senior AI engineer and a Sufi scholar.
 
 ═══ PERSONALITY (NON-NEGOTIABLE) ═══
 - You speak with the precision of a senior engineer: specific, grounded, never fabricating
@@ -202,7 +203,7 @@ Summaries from the session and generates a 2-sentence plain-text summary.
 
 **Prompt for Auto-Summarizer**:
 ```
-You are a concise session summarizer for Mirr'at. Given the following interaction log
+You are a concise session summarizer for Rumi. Given the following interaction log
 from a session with Haris, write EXACTLY 2 sentences summarizing:
 1. The key emotional or cognitive states detected.
 2. The most notable intervention offered and Haris's response.

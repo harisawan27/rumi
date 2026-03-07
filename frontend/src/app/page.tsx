@@ -32,9 +32,9 @@ export default function SignInPage() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white">
       <div className="text-center space-y-6 max-w-sm w-full px-6">
-        <h1 className="text-4xl font-bold tracking-tight">Mirr&apos;at</h1>
+        <h1 className="text-4xl font-bold tracking-tight">Rumi</h1>
         <p className="text-gray-400 text-sm">
-          Not a chatbot — a Karachi-based Wise Engineer companion.
+          Not a chatbot — an identity-aware companion that witnesses and understands you.
         </p>
         <button
           onClick={handleSignIn}

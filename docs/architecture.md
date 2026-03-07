@@ -1,4 +1,4 @@
-# Mirr'at — System Architecture
+# Project Rumi — System Architecture
 
 ```mermaid
 graph TB
