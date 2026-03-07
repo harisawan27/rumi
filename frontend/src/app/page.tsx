@@ -30,23 +30,107 @@ export default function SignInPage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white">
-      <div className="text-center space-y-6 max-w-sm w-full px-6">
-        <h1 className="text-4xl font-bold tracking-tight">Rumi</h1>
-        <p className="text-gray-400 text-sm">
-          Not a chatbot — an identity-aware companion that witnesses and understands you.
+    <main className="dot-grid noise-overlay min-h-screen flex flex-col items-center justify-center px-4">
+      {/* Ambient glow orbs */}
+      <div
+        className="pointer-events-none fixed"
+        style={{
+          top: "20%", left: "50%", transform: "translateX(-50%)",
+          width: 480, height: 480,
+          background: "radial-gradient(circle, rgba(201,168,76,0.06) 0%, transparent 70%)",
+        }}
+      />
+      <div
+        className="pointer-events-none fixed"
+        style={{
+          bottom: "10%", right: "15%",
+          width: 320, height: 320,
+          background: "radial-gradient(circle, rgba(34,211,238,0.04) 0%, transparent 70%)",
+        }}
+      />
+
+      <div className="relative z-10 w-full max-w-sm animate-fade-up">
+
+        {/* Top mark */}
+        <div className="flex justify-center mb-10">
+          <div className="flex flex-col items-center gap-3">
+            {/* Minimal geometric emblem */}
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="24" cy="24" r="23" stroke="rgba(201,168,76,0.3)" strokeWidth="1" />
+              <circle cx="24" cy="24" r="15" stroke="rgba(201,168,76,0.15)" strokeWidth="0.5" />
+              <circle cx="24" cy="24" r="3.5" fill="#c9a84c" opacity="0.9" />
+              <line x1="24" y1="4" x2="24" y2="14" stroke="#c9a84c" strokeWidth="1" strokeOpacity="0.5" strokeLinecap="round" />
+              <line x1="24" y1="34" x2="24" y2="44" stroke="#c9a84c" strokeWidth="1" strokeOpacity="0.5" strokeLinecap="round" />
+              <line x1="4" y1="24" x2="14" y2="24" stroke="#c9a84c" strokeWidth="1" strokeOpacity="0.5" strokeLinecap="round" />
+              <line x1="34" y1="24" x2="44" y2="24" stroke="#c9a84c" strokeWidth="1" strokeOpacity="0.5" strokeLinecap="round" />
+            </svg>
+            <span className="uppercase-label tracking-[0.35em]">Project Rumi</span>
+          </div>
+        </div>
+
+        {/* Main card */}
+        <div className="glass rounded-2xl p-8 text-center">
+          {/* Title */}
+          <h1
+            className="font-display text-gold mb-1"
+            style={{ fontSize: "3.5rem", fontWeight: 300, lineHeight: 1.1, letterSpacing: "0.04em" }}
+          >
+            Rumi
+          </h1>
+          <p className="uppercase-label mb-6">The Identity Layer</p>
+
+          {/* Divider with Arabic ornament */}
+          <div className="flex items-center gap-3 mb-6">
+            <div className="flex-1 h-px bg-gradient-to-r from-transparent to-[var(--border)]" />
+            <span style={{ color: "var(--gold-dim)", fontSize: "1rem" }}>&#10022;</span>
+            <div className="flex-1 h-px bg-gradient-to-l from-transparent to-[var(--border)]" />
+          </div>
+
+          <p className="text-sm mb-8 leading-relaxed" style={{ color: "var(--text-2)" }}>
+            Not a chatbot. An identity-aware companion that<br />
+            witnesses, understands, and speaks only when it matters.
+          </p>
+
+          {/* Sign-in button */}
+          <button
+            onClick={handleSignIn}
+            disabled={loading}
+            className="btn-primary w-full"
+            style={{ justifyContent: "center" }}
+          >
+            {loading ? (
+              <>
+                <span
+                  className="inline-block w-4 h-4 rounded-full border-2 border-current border-t-transparent"
+                  style={{ animation: "spin 0.7s linear infinite" }}
+                />
+                Setting up…
+              </>
+            ) : (
+              <>
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 01-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="currentColor" fillOpacity="0.8" />
+                  <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="currentColor" fillOpacity="0.6" />
+                  <path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="currentColor" fillOpacity="0.6" />
+                  <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="currentColor" fillOpacity="0.8" />
+                </svg>
+                Continue with Google
+              </>
+            )}
+          </button>
+
+          {error && (
+            <p className="mt-4 text-sm" style={{ color: "var(--error)" }}>{error}</p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <p className="text-center mt-6 text-xs" style={{ color: "var(--muted)" }}>
+          Your identity is your own. Rumi only remembers what you share.
         </p>
-        <button
-          onClick={handleSignIn}
-          disabled={loading}
-          className="w-full py-3 px-6 bg-white text-gray-900 rounded-lg font-medium hover:bg-gray-100 disabled:opacity-50 transition"
-        >
-          {loading ? "Setting up…" : "Sign in with Google"}
-        </button>
-        {error && (
-          <p className="text-red-400 text-sm">{error}</p>
-        )}
       </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </main>
   );
 }

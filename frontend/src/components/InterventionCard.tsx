@@ -11,6 +11,13 @@ interface Props {
 
 const AUTO_DISMISS_MS = 2 * 60 * 1000; // 2 minutes
 
+const TRIGGER_META: Record<string, { label: string; icon: string; accent: string }> = {
+  A: { label: "Rumi senses frustration",   icon: "◈", accent: "var(--error)" },
+  B: { label: "Rumi checks in",            icon: "◇", accent: "var(--teal)" },
+  C: { label: "Time for a break",          icon: "◉", accent: "var(--gold)" },
+  E: { label: "Rumi celebrates your focus",icon: "◆", accent: "var(--success)" },
+};
+
 export default function InterventionCard({ interactionId, trigger, text, onRespond }: Props) {
   const [visible, setVisible] = useState(true);
 
@@ -31,26 +38,42 @@ export default function InterventionCard({ interactionId, trigger, text, onRespo
     setVisible(false);
   }
 
-  const label =
-    trigger === "A" ? "Rumi senses frustration" :
-    trigger === "B" ? "Rumi checks in" :
-    trigger === "C" ? "Time for a break" :
-    "Rumi celebrates your focus";
+  const meta = TRIGGER_META[trigger] ?? TRIGGER_META.B;
 
   return (
-    <div className="rounded-xl border border-gray-700 bg-gray-900 p-4 sm:p-5 space-y-4 shadow-lg w-full max-w-lg">
-      <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
-      <p className="text-white text-sm leading-relaxed">{text}</p>
+    <div
+      className="glass-gold rounded-2xl p-5 w-full max-w-lg animate-intervention"
+      style={{ boxShadow: "0 8px 40px rgba(201,168,76,0.12)" }}
+    >
+      {/* Label row */}
+      <div className="flex items-center gap-2 mb-3">
+        <span style={{ color: meta.accent, fontSize: "0.9rem" }}>{meta.icon}</span>
+        <span className="uppercase-label" style={{ color: meta.accent, letterSpacing: "0.18em" }}>
+          {meta.label}
+        </span>
+      </div>
+
+      {/* Text */}
+      <p
+        className="leading-relaxed mb-5"
+        style={{ color: "var(--text)", fontSize: "0.9375rem", lineHeight: 1.65 }}
+      >
+        {text}
+      </p>
+
+      {/* Actions */}
       <div className="flex gap-3">
         <button
           onClick={() => handle("accepted")}
-          className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm rounded-lg transition"
+          className="btn-primary"
+          style={{ flex: 1, fontSize: "0.8125rem", padding: "0.6rem 1rem" }}
         >
           Accept
         </button>
         <button
           onClick={() => handle("dismissed")}
-          className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition"
+          className="btn-ghost"
+          style={{ flex: 1, fontSize: "0.8125rem", padding: "0.6rem 1rem" }}
         >
           Dismiss
         </button>

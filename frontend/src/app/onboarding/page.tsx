@@ -81,26 +81,34 @@ export default function OnboardingPage() {
     const [val, setVal] = useState("");
     return (
       <div>
-        <div className="flex gap-2 flex-wrap mb-2">
+        <div className="flex gap-2 flex-wrap mb-2 min-h-[28px]">
           {form[field].map((t) => (
-            <span key={t} className="flex items-center gap-1 bg-cyan-900/40 text-cyan-300 text-xs px-2 py-1 rounded-full">
+            <span key={t} className="rumi-tag">
               {t}
-              <button onClick={() => removeTag(field, t)} className="hover:text-white">&times;</button>
+              <button
+                onClick={() => removeTag(field, t)}
+                style={{ color: "var(--gold-dim)", marginLeft: 2, lineHeight: 1 }}
+              >
+                &times;
+              </button>
             </span>
           ))}
         </div>
         <div className="flex gap-2">
           <input
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500"
+            className="rumi-input flex-1"
             placeholder={placeholder}
             value={val}
             onChange={(e) => setVal(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(field, val); setVal(""); } }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); addTag(field, val); setVal(""); }
+            }}
           />
           <button
             type="button"
             onClick={() => { addTag(field, val); setVal(""); }}
-            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg"
+            className="btn-ghost"
+            style={{ padding: "0.5rem 0.875rem", fontSize: "0.8125rem" }}
           >
             Add
           </button>
@@ -130,11 +138,11 @@ export default function OnboardingPage() {
     label: string; fkey: keyof FormData; placeholder?: string; type?: string;
   }) {
     return (
-      <label className="flex flex-col gap-1">
-        <span className="text-sm text-gray-400">{label}</span>
+      <label className="flex flex-col gap-1.5">
+        <span className="uppercase-label">{label}</span>
         <input
           type={type}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500"
+          className="rumi-input"
           placeholder={placeholder}
           value={form[fkey] as string}
           onChange={field(fkey)}
@@ -147,11 +155,11 @@ export default function OnboardingPage() {
     label: string; fkey: keyof FormData; placeholder?: string; rows?: number;
   }) {
     return (
-      <label className="flex flex-col gap-1">
-        <span className="text-sm text-gray-400">{label}</span>
+      <label className="flex flex-col gap-1.5">
+        <span className="uppercase-label">{label}</span>
         <textarea
           rows={rows}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-none"
+          className="rumi-input"
           placeholder={placeholder}
           value={form[fkey] as string}
           onChange={field(fkey)}
@@ -165,45 +173,52 @@ export default function OnboardingPage() {
   const steps = [
     // Step 0 — Personal
     <div key="personal" className="flex flex-col gap-4">
-      <Input label="First name (what Rumi calls you)" fkey="name" placeholder="e.g. Haris" />
+      <Input label="First name — what Rumi calls you" fkey="name" placeholder="e.g. Haris" />
       <Input label="Full name" fkey="full_name" placeholder="e.g. Muhammad Haris Awan" />
       <Input label="Age" fkey="age" type="number" placeholder="e.g. 18" />
       <Input label="City / Country" fkey="location" placeholder="e.g. Karachi, Pakistan" />
-      <div className="flex flex-col gap-1">
-        <span className="text-sm text-gray-400">Your roles (press Enter to add)</span>
+      <div className="flex flex-col gap-1.5">
+        <span className="uppercase-label">Your roles (Enter to add)</span>
         <TagInput field="roles" placeholder="e.g. Full Stack Developer" />
       </div>
     </div>,
 
     // Step 1 — Projects
-    <div key="projects" className="flex flex-col gap-6">
+    <div key="projects" className="flex flex-col gap-5">
       {form.projects.map((p, i) => (
-        <div key={i} className="flex flex-col gap-3 bg-gray-800/50 rounded-xl p-4 border border-gray-700">
+        <div
+          key={i}
+          className="flex flex-col gap-3 rounded-xl p-4"
+          style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}
+        >
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-cyan-400">Project {i + 1}</span>
+            <span className="uppercase-label" style={{ color: "var(--gold)" }}>Project {i + 1}</span>
             {form.projects.length > 1 && (
               <button
                 onClick={() => setForm((f) => ({ ...f, projects: f.projects.filter((_, j) => j !== i) }))}
-                className="text-gray-500 hover:text-red-400 text-xs"
+                className="text-xs transition"
+                style={{ color: "var(--muted)" }}
+                onMouseEnter={e => (e.currentTarget.style.color = "var(--error)")}
+                onMouseLeave={e => (e.currentTarget.style.color = "var(--muted)")}
               >
                 Remove
               </button>
             )}
           </div>
           <input
-            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 text-sm focus:outline-none focus:border-cyan-500"
+            className="rumi-input"
             placeholder="Project name (e.g. DoneKaro)"
             value={p.name}
             onChange={(e) => updateProject(i, "name", e.target.value)}
           />
           <input
-            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 text-sm focus:outline-none focus:border-cyan-500"
+            className="rumi-input"
             placeholder="Current status (e.g. MVP complete)"
             value={p.status}
             onChange={(e) => updateProject(i, "status", e.target.value)}
           />
           <input
-            className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 text-sm focus:outline-none focus:border-cyan-500"
+            className="rumi-input"
             placeholder="What's the pain point right now?"
             value={p.context}
             onChange={(e) => updateProject(i, "context", e.target.value)}
@@ -213,7 +228,8 @@ export default function OnboardingPage() {
       {form.projects.length < 5 && (
         <button
           onClick={() => setForm((f) => ({ ...f, projects: [...f.projects, { ...EMPTY_PROJECT }] }))}
-          className="text-sm text-cyan-400 hover:text-cyan-300 border border-dashed border-gray-700 rounded-xl py-3 hover:border-cyan-700 transition"
+          className="btn-ghost w-full"
+          style={{ borderStyle: "dashed" }}
         >
           + Add another project
         </button>
@@ -222,27 +238,27 @@ export default function OnboardingPage() {
 
     // Step 2 — Drive
     <div key="drive" className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <span className="text-sm text-gray-400">Interests & passions (press Enter to add)</span>
+      <div className="flex flex-col gap-1.5">
+        <span className="uppercase-label">Interests & passions (Enter to add)</span>
         <TagInput field="interests" placeholder="e.g. Rumi, Turkish culture, Chess" />
       </div>
       <Textarea label="Immediate goal (this week / month)" fkey="immediate_goal" placeholder="e.g. Win the Google Gemini Challenge" />
       <Textarea label="Long-term goal" fkey="long_term_goal" placeholder="e.g. Build WEBXES into a US/Pakistan LLC" />
-      <Textarea label="What's your biggest fear?" fkey="driving_fear" placeholder="e.g. Being generic, fading without global impact" />
+      <Textarea label="Biggest fear" fkey="driving_fear" placeholder="e.g. Being generic, fading without global impact" />
     </div>,
 
     // Step 3 — Work style
     <div key="work" className="flex flex-col gap-4">
-      <Textarea label="How do you work best?" fkey="work_style" placeholder="e.g. Late-night deep work sprints, SDD methodology, reflection after sessions" />
-      <div className="flex flex-col gap-1">
-        <span className="text-sm text-gray-400">What breaks your focus? (press Enter to add)</span>
+      <Textarea label="How do you work best?" fkey="work_style" placeholder="e.g. Late-night deep work sprints, SDD methodology" />
+      <div className="flex flex-col gap-1.5">
+        <span className="uppercase-label">What breaks your focus? (Enter to add)</span>
         <TagInput field="focus_breakers" placeholder="e.g. Doom-scrolling, noise" />
       </div>
       <Textarea label="How should Rumi talk to you?" fkey="communication_preference" placeholder="e.g. Gentle but firm — inspire, don't nag" />
       <Input label="Faith / religion (optional)" fkey="faith" placeholder="e.g. Practicing Muslim" />
-      <Textarea label="Any prayer / schedule Rumi should respect?" fkey="salah_awareness" placeholder="e.g. Asr and Maghrib are low-energy — suggest breaks around them" rows={2} />
-      <Textarea label="Language learning or cultural goal?" fkey="turkish_goal" placeholder="e.g. 343-day Duolingo Turkish streak, preparing for Istanbul scholarship" rows={2} />
-      <Textarea label="Preferred break (chai / walk / prayer / other)?" fkey="wellness_trigger" placeholder="e.g. Doodh patti and 5 minutes away from screen" rows={2} />
+      <Textarea label="Prayer schedule Rumi should respect" fkey="salah_awareness" placeholder="e.g. Asr and Maghrib are low-energy — suggest breaks around them" rows={2} />
+      <Textarea label="Language or cultural goal" fkey="turkish_goal" placeholder="e.g. 343-day Duolingo Turkish streak" rows={2} />
+      <Textarea label="Preferred break" fkey="wellness_trigger" placeholder="e.g. Doodh patti and 5 minutes away from screen" rows={2} />
     </div>,
   ];
 
@@ -265,23 +281,46 @@ export default function OnboardingPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-start py-12 px-4">
-      <div className="w-full max-w-lg">
+    <main
+      className="dot-grid noise-overlay min-h-screen flex flex-col items-center justify-start py-12 px-4"
+      style={{ background: "var(--bg)" }}
+    >
+      <div className="w-full max-w-lg animate-fade-up">
 
         {/* Header */}
         <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold tracking-tight">Meet Rumi</h1>
-          <p className="text-gray-400 text-sm mt-2">
+          <h1
+            className="font-display text-gold"
+            style={{ fontSize: "2.5rem", fontWeight: 300, letterSpacing: "0.04em" }}
+          >
+            Meet Rumi
+          </h1>
+          <p className="mt-2 text-sm" style={{ color: "var(--text-2)" }}>
             Let&apos;s learn who you are so every interaction feels personal.
           </p>
         </div>
 
-        {/* Progress */}
+        {/* Progress bar */}
         <div className="flex gap-2 mb-8">
           {STEP_TITLES.map((title, i) => (
-            <div key={i} className="flex-1 flex flex-col gap-1">
-              <div className={`h-1 rounded-full transition-all ${i <= step ? "bg-cyan-500" : "bg-gray-700"}`} />
-              <span className={`text-xs hidden sm:block ${i === step ? "text-cyan-400" : "text-gray-600"}`}>
+            <div key={i} className="flex-1 flex flex-col gap-1.5">
+              <div
+                className="h-0.5 rounded-full transition-all duration-300"
+                style={{
+                  background: i <= step
+                    ? "linear-gradient(90deg, var(--gold), var(--gold-dim))"
+                    : "var(--border)",
+                }}
+              />
+              <span
+                className="text-xs hidden sm:block transition-colors duration-200"
+                style={{
+                  color: i === step ? "var(--gold)" : "var(--muted)",
+                  fontSize: "0.65rem",
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                }}
+              >
                 {title}
               </span>
             </div>
@@ -289,21 +328,28 @@ export default function OnboardingPage() {
         </div>
 
         {/* Step title (mobile) */}
-        <h2 className="text-lg font-semibold mb-6 sm:hidden">{STEP_TITLES[step]}</h2>
+        <h2
+          className="text-lg font-medium mb-5 sm:hidden"
+          style={{ color: "var(--text)" }}
+        >
+          {STEP_TITLES[step]}
+        </h2>
 
-        {/* Step content */}
-        <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800 mb-6">
+        {/* Step content card */}
+        <div className="rumi-card mb-5">
           {steps[step]}
         </div>
 
-        {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
+        {error && (
+          <p className="text-sm mb-4" style={{ color: "var(--error)" }}>{error}</p>
+        )}
 
         {/* Navigation */}
         <div className="flex gap-3">
           {step > 0 && (
             <button
               onClick={() => setStep((s) => s - 1)}
-              className="flex-1 py-3 rounded-xl border border-gray-700 text-gray-300 hover:bg-gray-800 transition text-sm"
+              className="btn-ghost flex-1"
             >
               Back
             </button>
@@ -315,7 +361,7 @@ export default function OnboardingPage() {
                 (step === 0 && !form.name.trim()) ||
                 (step === 1 && form.projects.every(p => !p.name.trim()))
               }
-              className="flex-1 py-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white font-medium transition text-sm"
+              className="btn-primary flex-1"
             >
               Continue
             </button>
@@ -323,17 +369,33 @@ export default function OnboardingPage() {
             <button
               onClick={handleSubmit}
               disabled={saving || !form.name.trim()}
-              className="flex-1 py-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white font-medium transition text-sm"
+              className="btn-primary flex-1"
             >
-              {saving ? "Saving…" : "Launch Rumi"}
+              {saving ? (
+                <>
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 14, height: 14,
+                      borderRadius: "50%",
+                      border: "2px solid currentColor",
+                      borderTopColor: "transparent",
+                      animation: "spin 0.7s linear infinite",
+                    }}
+                  />
+                  Saving…
+                </>
+              ) : "Launch Rumi"}
             </button>
           )}
         </div>
 
-        <p className="text-center text-gray-600 text-xs mt-4">
+        <p className="text-center mt-5 text-xs" style={{ color: "var(--muted)" }}>
           You can edit all of this later in your profile.
         </p>
       </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </main>
   );
 }

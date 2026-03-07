@@ -39,15 +39,46 @@ export default function PauseButton({ sessionId, observationState, onStateChange
     }
   }
 
-  const label = observationState === "paused" ? "Resume" : "Pause";
+  const isPaused = observationState === "paused";
+  const isDisabled = loading || observationState === "degraded";
 
   return (
     <button
       onClick={handleClick}
-      disabled={loading || observationState === "degraded"}
-      className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white text-sm rounded-lg disabled:opacity-50 transition"
+      disabled={isDisabled}
+      className="btn-icon"
+      title={isPaused ? "Resume observation" : "Pause observation"}
+      style={
+        !isDisabled && !isPaused
+          ? { borderColor: "var(--gold-dim)", color: "var(--gold)" }
+          : {}
+      }
     >
-      {loading ? "…" : label}
+      {loading ? (
+        <span
+          style={{
+            display: "inline-block",
+            width: 14,
+            height: 14,
+            borderRadius: "50%",
+            border: "2px solid currentColor",
+            borderTopColor: "transparent",
+            animation: "spin 0.7s linear infinite",
+          }}
+        />
+      ) : isPaused ? (
+        /* Play icon */
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+          <path d="M3 2.5l9 4.5-9 4.5V2.5z" />
+        </svg>
+      ) : (
+        /* Pause icon */
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+          <rect x="3" y="2" width="3" height="10" rx="1" />
+          <rect x="8" y="2" width="3" height="10" rx="1" />
+        </svg>
+      )}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </button>
   );
 }

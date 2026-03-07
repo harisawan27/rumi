@@ -48,12 +48,13 @@ export default function DashboardPage() {
   const [memoryToast, setMemoryToast] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);      // mic capture (16kHz)
-  const playCtxRef = useRef<AudioContext | null>(null);        // Gemini playback (24kHz)
-  const nextPlayTimeRef = useRef<number>(0);                   // scheduled end of last chunk
-  const isTalkingRef = useRef<boolean>(false);                 // push-to-talk gate
-  const sessionIdRef = useRef<string | null>(null);            // for WS reconnect
-  const shouldReconnectRef = useRef<boolean>(true);            // false on intentional close
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const playCtxRef = useRef<AudioContext | null>(null);
+  const nextPlayTimeRef = useRef<number>(0);
+  const isTalkingRef = useRef<boolean>(false);
+  const sessionIdRef = useRef<string | null>(null);
+  const shouldReconnectRef = useRef<boolean>(true);
+  const prevSpeakingRef = useRef<boolean>(false);
 
   useEffect(() => {
     let scriptProcessor: ScriptProcessorNode | null = null;
@@ -77,9 +78,7 @@ export default function DashboardPage() {
           videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
           if (videoRef.current) videoRef.current.srcObject = videoStream;
           setObservationState("active");
-          // Show happy greeting face for 4 seconds
-          setRumiEmotion("happy");
-          setTimeout(() => setRumiEmotion("neutral"), 4000);
+          setRumiEmotion("happy"); // reset to neutral when Rumi actually finishes speaking
         } catch {
           setObservationState("degraded");
         }
@@ -96,11 +95,9 @@ export default function DashboardPage() {
             if (wsRef.current?.readyState !== WebSocket.OPEN) return;
             if (!isTalkingRef.current) return;
             const float32 = e.inputBuffer.getChannelData(0);
-            // Skip true silence only
             const energy = float32.reduce((s, v) => s + v * v, 0) / float32.length;
             if (energy < 0.00001) return;
             const int16buf = float32ToInt16(float32);
-            // Safe base64 — no spread operator (stack overflow on large buffers)
             const bytes = new Uint8Array(int16buf);
             let binary = "";
             for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
@@ -112,7 +109,6 @@ export default function DashboardPage() {
           console.warn("Mic unavailable — audio input disabled");
         }
 
-        // Fix: no spread operator — safe base64 for large JPEG frames
         const canvas = document.createElement("canvas");
         const canvasCtx = canvas.getContext("2d");
 
@@ -133,7 +129,6 @@ export default function DashboardPage() {
             }, "image/jpeg", 0.7);
           });
 
-        // WS connection extracted so it can be called again on reconnect
         async function connectWs(sid: string) {
           const newWs = await connectObserveSocket(sid, async (msg) => {
             if (msg.type === "request_frame") {
@@ -188,14 +183,20 @@ export default function DashboardPage() {
     };
   }, [router]);
 
-  // End session on page unload
+  // Reset emotion to neutral when Rumi finishes speaking — not on a timer
+  useEffect(() => {
+    if (prevSpeakingRef.current && !speaking) {
+      setRumiEmotion("neutral");
+    }
+    prevSpeakingRef.current = speaking;
+  }, [speaking]);
+
   useEffect(() => {
     const handleUnload = () => { if (sessionId) endSession(sessionId); };
     window.addEventListener("beforeunload", handleUnload);
     return () => window.removeEventListener("beforeunload", handleUnload);
   }, [sessionId]);
 
-  // Space key toggle push-to-talk (desktop)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat) return;
@@ -213,7 +214,6 @@ export default function DashboardPage() {
     setRumiEmotion(next ? "thinking" : "neutral");
   }
 
-  // Play a PCM chunk from Gemini — chunks are scheduled sequentially, no gaps/overlap
   async function playAudio(b64: string) {
     try {
       if (!playCtxRef.current) {
@@ -236,16 +236,13 @@ export default function DashboardPage() {
       source.buffer = buffer;
       source.connect(ctx.destination);
 
-      // Reset stale ref — can happen after Gemini reconnects mid-session
       if (nextPlayTimeRef.current > ctx.currentTime + 10) nextPlayTimeRef.current = 0;
-      // Schedule this chunk to start exactly when the previous chunk ends
       const startAt = Math.max(ctx.currentTime + 0.02, nextPlayTimeRef.current);
       source.start(startAt);
       nextPlayTimeRef.current = startAt + buffer.duration;
 
       setSpeaking(true);
       source.onended = () => {
-        // Only stop speaking indicator when all chunks have played
         if (ctx.currentTime >= nextPlayTimeRef.current - 0.05) {
           setSpeaking(false);
         }
@@ -260,14 +257,11 @@ export default function DashboardPage() {
     if (msg.type === "intervention") {
       const m = msg as InterventionMessage;
       setInterventionQueue(q => [...q, { interactionId: m.interaction_id, trigger: m.trigger, text: m.text }]);
-      // Show matching emotion on Rumi's face
       const emotionMap: Record<string, typeof rumiEmotion> = {
         A: "concerned", B: "thinking", C: "concerned", E: "happy",
       };
-      setRumiEmotion(emotionMap[m.trigger] ?? "neutral");
-      setTimeout(() => setRumiEmotion("neutral"), 8000);
+      setRumiEmotion(emotionMap[m.trigger] ?? "neutral"); // reset to neutral when Rumi finishes speaking
     } else if (msg.type === "audio_response") {
-      console.log("audio_response WS message received");
       playAudio((msg as { type: string; data: string }).data);
     } else if (msg.type === "memory_updated") {
       const m = msg as { type: string; message: string };
@@ -288,88 +282,196 @@ export default function DashboardPage() {
 
   if (error) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-gray-950 text-red-400">
-        <p>{error}</p>
+      <main className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
+        <div className="rumi-card text-center max-w-sm">
+          <p className="text-sm mb-4" style={{ color: "var(--error)" }}>{error}</p>
+          <button className="btn-ghost" onClick={() => router.push("/")}>Back to sign in</button>
+        </div>
       </main>
     );
   }
 
-  return (
-    <main className="min-h-screen bg-gray-950 text-white p-4 sm:p-8">
-      <div className="max-w-2xl mx-auto flex flex-col items-center gap-6 sm:gap-8">
+  const stateColor =
+    observationState === "active" ? "var(--teal)" :
+    observationState === "degraded" ? "#f97316" :
+    "var(--muted)";
 
-        {/* Header */}
-        <div className="w-full flex items-center justify-between">
-          <div>
-            <h1 className="text-xl sm:text-2xl font-semibold truncate">
-              {name ? `Marhaba, ${name}` : "Loading…"}
-            </h1>
-            <p className="text-gray-500 text-xs sm:text-sm mt-1">Rumi is watching. Witnessing. Understanding.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <a
-              href="/profile"
-              className="p-2 rounded-full bg-gray-800 hover:bg-gray-700 transition text-gray-300 hover:text-white"
-              title="Edit your profile"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>
-              </svg>
-            </a>
-            {sessionId && (
-              <PauseButton
-                sessionId={sessionId}
-                observationState={observationState}
-                onStateChange={setObservationState}
-              />
-            )}
-          </div>
+  const stateLabel =
+    observationState === "active" ? "Observing" :
+    observationState === "degraded" ? "Degraded" :
+    "Paused";
+
+  return (
+    <main
+      className="dot-grid noise-overlay min-h-screen flex flex-col"
+      style={{ background: "var(--bg)" }}
+    >
+      {/* ── Navbar ─────────────────────────────────────────────────────────── */}
+      <nav
+        className="glass sticky top-0 z-20 flex items-center justify-between px-5 py-3"
+        style={{ borderLeft: "none", borderRight: "none", borderTop: "none" }}
+      >
+        {/* Brand */}
+        <div className="flex items-center gap-2.5">
+          <div
+            className="w-2 h-2 rounded-full"
+            style={{
+              backgroundColor: stateColor,
+              boxShadow: `0 0 8px ${stateColor}`,
+              animation: observationState === "active" ? "pulse 2s ease-in-out infinite" : "none",
+            }}
+          />
+          <span
+            className="font-display text-gold"
+            style={{ fontSize: "1.25rem", fontWeight: 400, letterSpacing: "0.06em" }}
+          >
+            Rumi
+          </span>
         </div>
 
-        {/* Robot face */}
-        <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
+        {/* Status pill */}
+        <div
+          className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full"
+          style={{
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            fontSize: "0.7rem",
+            letterSpacing: "0.15em",
+            textTransform: "uppercase",
+            color: stateColor,
+          }}
+        >
+          <span>{stateLabel}</span>
+        </div>
 
-        {/* Hidden video for webcam frames */}
+        {/* Actions */}
+        <div className="flex items-center gap-2">
+          <a href="/profile" className="btn-icon" title="Your memory">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
+            </svg>
+          </a>
+          {sessionId && (
+            <PauseButton
+              sessionId={sessionId}
+              observationState={observationState}
+              onStateChange={setObservationState}
+            />
+          )}
+        </div>
+      </nav>
+
+      {/* ── Main content ────────────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 gap-8">
+
+        {/* Greeting */}
+        <div className="text-center animate-fade-up">
+          {name ? (
+            <h1
+              className="font-display text-gold"
+              style={{ fontSize: "2rem", fontWeight: 300, letterSpacing: "0.04em" }}
+            >
+              Marhaba, {name}
+            </h1>
+          ) : (
+            <div
+              className="h-8 w-40 rounded-lg mx-auto"
+              style={{ background: "var(--surface-2)", animation: "pulse 1.5s ease-in-out infinite" }}
+            />
+          )}
+          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
+            {speaking ? "Rumi is speaking…" :
+             isTalking ? "Listening…" :
+             observationState === "active" ? "Witnessing. Understanding." :
+             observationState === "degraded" ? "Camera unavailable — text mode" :
+             "Observation paused"}
+          </p>
+        </div>
+
+        {/* Rumi face portal */}
+        <div
+          className="glass animate-fade-up delay-100 rounded-2xl p-8 flex flex-col items-center gap-4"
+          style={{
+            boxShadow: observationState === "active"
+              ? "0 0 48px rgba(34,211,238,0.08), 0 0 80px rgba(201,168,76,0.05)"
+              : "none",
+          }}
+        >
+          <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
+        </div>
+
+        {/* Hidden webcam */}
         <video ref={videoRef} autoPlay muted playsInline className="hidden" />
 
-        {/* Hold-to-talk button */}
-        <div className="flex flex-col items-center gap-2 select-none">
+        {/* Talk button */}
+        <div className="flex flex-col items-center gap-2 select-none animate-fade-up delay-200">
           <button
             onClick={toggleTalking}
-            className={`
-              w-20 h-20 rounded-full border-4 transition-all duration-150
-              flex items-center justify-center text-3xl
-              ${isTalking
-                ? "bg-cyan-500 border-cyan-300 shadow-[0_0_24px_rgba(6,182,212,0.8)] scale-95"
-                : "bg-gray-800 border-gray-600 hover:border-gray-400 active:scale-95"
-              }
-            `}
-            aria-label={isTalking ? "Stop talking" : "Start talking"}
+            aria-label={isTalking ? "Stop talking" : "Talk to Rumi"}
+            style={{
+              width: 72,
+              height: 72,
+              borderRadius: "50%",
+              border: `2px solid ${isTalking ? "var(--teal)" : "var(--border-2)"}`,
+              background: isTalking
+                ? "rgba(34,211,238,0.12)"
+                : "var(--surface)",
+              color: isTalking ? "var(--teal)" : "var(--muted)",
+              boxShadow: isTalking
+                ? "0 0 24px rgba(34,211,238,0.35), 0 0 48px rgba(34,211,238,0.15)"
+                : "none",
+              transform: isTalking ? "scale(0.96)" : "scale(1)",
+              transition: "all 0.15s ease",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
-            🎙️
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z" />
+              <path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z" />
+            </svg>
           </button>
-          <p className="text-xs text-gray-500">
-            {isTalking ? "Listening… tap to send" : "Tap to talk · Space"}
+          <p className="text-xs" style={{ color: "var(--muted)" }}>
+            {isTalking ? "Tap to send · Space" : "Tap to talk · Space"}
           </p>
         </div>
 
         {/* Intervention card */}
         {intervention && (
-          <InterventionCard
-            interactionId={intervention.interactionId}
-            trigger={intervention.trigger}
-            text={intervention.text}
-            onRespond={handleInterventionRespond}
-          />
+          <div className="w-full max-w-lg animate-fade-up">
+            <InterventionCard
+              interactionId={intervention.interactionId}
+              trigger={intervention.trigger}
+              text={intervention.text}
+              onRespond={handleInterventionRespond}
+            />
+          </div>
         )}
       </div>
 
-      {/* Memory update toast */}
+      {/* Memory toast */}
       {memoryToast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 border border-cyan-700 text-cyan-300 text-sm px-4 py-3 rounded-xl shadow-xl max-w-sm text-center animate-fade-in">
-          🧠 {memoryToast}
+        <div
+          className="animate-toast fixed bottom-6 left-1/2 glass rounded-xl px-5 py-3 text-sm text-center max-w-sm shadow-xl"
+          style={{
+            transform: "translateY(0) translateX(-50%)",
+            border: "1px solid var(--border-2)",
+            color: "var(--teal)",
+          }}
+        >
+          <span style={{ color: "var(--gold)", marginRight: "0.5rem" }}>&#9670;</span>
+          {memoryToast}
         </div>
       )}
+
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 0.5; transform: scale(1); }
+          50% { opacity: 1; transform: scale(1.15); }
+        }
+      `}</style>
     </main>
   );
 }
