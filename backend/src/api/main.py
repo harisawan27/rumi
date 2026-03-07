@@ -95,11 +95,34 @@ def get_identity(uid: str = Depends(get_current_uid)):
         raise HTTPException(status_code=503, detail="FIRESTORE_UNAVAILABLE")
 
 
+class IdentityUpdate(BaseModel):
+    name: str
+    full_name: str = ""
+    age: int | None = None
+    location: str = ""
+    roles: list[str] = []
+    projects: list[dict] = []
+    interests: list[str] = []
+    work_style: str = ""
+    focus_breakers: list[str] = []
+    communication_preference: str = ""
+    faith: str = ""
+    salah_awareness: str = ""
+    turkish_goal: str = ""
+    leisure: str = ""
+    immediate_goal: str = ""
+    long_term_goal: str = ""
+    driving_fear: str = ""
+    wellness_trigger: str = ""
+    student_context: str = ""
+    environment: str = ""
+
+
 @app.put("/identity", status_code=200)
-def put_identity(body: dict, uid: str = Depends(get_current_uid)):
+def put_identity(body: IdentityUpdate, uid: str = Depends(get_current_uid)):
     from src.identity.identity_loader import save_identity
     try:
-        save_identity(uid, body)
+        save_identity(uid, body.model_dump(exclude_none=True))
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
     return {"status": "saved"}
@@ -129,24 +152,29 @@ def get_session_summaries(
 # Session lifecycle (T030 + T040 + T042)
 # ---------------------------------------------------------------------------
 
-# Global session manager — single-user MVP; one concurrent session
+# Per-user session managers — one SessionManager per authenticated user
 from src.session.session_manager import SessionManager  # noqa: E402
 
-_session_manager: SessionManager | None = None
+_session_managers: dict[str, SessionManager] = {}
 
 
-def _get_session_manager() -> SessionManager:
-    global _session_manager
-    if _session_manager is None:
-        _session_manager = SessionManager()
-    return _session_manager
+def _get_session_manager(uid: str) -> SessionManager:
+    if uid not in _session_managers:
+        _session_managers[uid] = SessionManager()
+    return _session_managers[uid]
 
 
 @app.post("/session/start", status_code=201)
 async def start_session(uid: str = Depends(get_current_uid)):
-    mgr = _get_session_manager()
+    mgr = _get_session_manager(uid)
+    # End any stale active session (e.g. page refresh without clean close)
     if mgr.status == "active":
-        raise HTTPException(status_code=409, detail="SESSION_ALREADY_ACTIVE")
+        try:
+            await mgr.end_session()
+        except Exception:
+            pass
+        _session_managers[uid] = SessionManager()
+        mgr = _session_managers[uid]
     try:
         session_id = await mgr.start_session(uid)
     except Exception as exc:
@@ -163,7 +191,7 @@ async def start_session(uid: str = Depends(get_current_uid)):
 
 @app.put("/session/{session_id}/pause")
 async def pause_session(session_id: str, uid: str = Depends(get_current_uid)):
-    mgr = _get_session_manager()
+    mgr = _get_session_manager(uid)
     await mgr.pause_session()
     from datetime import datetime, timezone
     return {
@@ -175,7 +203,7 @@ async def pause_session(session_id: str, uid: str = Depends(get_current_uid)):
 
 @app.put("/session/{session_id}/resume")
 async def resume_session(session_id: str, uid: str = Depends(get_current_uid)):
-    mgr = _get_session_manager()
+    mgr = _get_session_manager(uid)
     await mgr.resume_session()
     mgr.start_watchman()
     from datetime import datetime, timezone
@@ -188,8 +216,10 @@ async def resume_session(session_id: str, uid: str = Depends(get_current_uid)):
 
 @app.post("/session/{session_id}/end", status_code=202)
 async def end_session(session_id: str, uid: str = Depends(get_current_uid)):
-    mgr = _get_session_manager()
+    mgr = _get_session_manager(uid)
     await mgr.end_session()
+    # Remove from active managers so next start gets a clean instance
+    _session_managers.pop(uid, None)
     from datetime import datetime, timezone
     return {
         "session_id": session_id,
@@ -214,8 +244,8 @@ class InteractionRequest(BaseModel):
 
 @app.post("/interactions", status_code=201)
 def record_interaction(body: InteractionRequest, uid: str = Depends(get_current_uid)):
-    if body.trigger_type not in ("A", "B"):
-        raise HTTPException(status_code=422, detail="trigger_type must be 'A' or 'B'")
+    if body.trigger_type not in ("A", "B", "C", "E"):
+        raise HTTPException(status_code=422, detail="trigger_type must be A, B, C or E")
     if body.user_response not in ("accepted", "dismissed", "no_response"):
         raise HTTPException(status_code=422, detail="invalid user_response value")
 
@@ -252,7 +282,8 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
         return
 
     await websocket.accept()
-    mgr = _get_session_manager()
+    uid = decoded["uid"]
+    mgr = _get_session_manager(uid)
     mgr._websocket = websocket
 
     # Connect Gemini Live API now that WebSocket is established

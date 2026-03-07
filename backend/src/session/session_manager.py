@@ -156,6 +156,11 @@ class SessionManager:
             self._idle_timer_task = None
         self._status = "active"
         await self._update_firestore_status("active")
+        # Reset long-session clock so 90-min countdown restarts from resume, not session start
+        if hasattr(self, "_state_monitor") and self._state_monitor:
+            tracker = getattr(self._state_monitor, "_long_session_tracker", None)
+            if tracker:
+                tracker.reset_clock()
         logger.info("SessionManager: session resumed — %s", self._session_id)
 
     async def end_session(self) -> None:

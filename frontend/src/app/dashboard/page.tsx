@@ -50,6 +50,8 @@ export default function DashboardPage() {
   const playCtxRef = useRef<AudioContext | null>(null);        // Gemini playback (24kHz)
   const nextPlayTimeRef = useRef<number>(0);                   // scheduled end of last chunk
   const isTalkingRef = useRef<boolean>(false);                 // push-to-talk gate
+  const sessionIdRef = useRef<string | null>(null);            // for WS reconnect
+  const shouldReconnectRef = useRef<boolean>(true);            // false on intentional close
 
   useEffect(() => {
     let scriptProcessor: ScriptProcessorNode | null = null;
@@ -89,7 +91,7 @@ export default function DashboardPage() {
           // eslint-disable-next-line @typescript-eslint/no-deprecated
           scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
           scriptProcessor.onaudioprocess = (e) => {
-            if (ws?.readyState !== WebSocket.OPEN) return;
+            if (wsRef.current?.readyState !== WebSocket.OPEN) return;
             if (!isTalkingRef.current) return;
             const float32 = e.inputBuffer.getChannelData(0);
             // Skip true silence only
@@ -100,7 +102,7 @@ export default function DashboardPage() {
             const bytes = new Uint8Array(int16buf);
             let binary = "";
             for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-            ws.send(JSON.stringify({ type: "audio", data: btoa(binary) }));
+            wsRef.current?.send(JSON.stringify({ type: "audio", data: btoa(binary) }));
           };
           micSource.connect(scriptProcessor);
           scriptProcessor.connect(audioCtx.destination);
@@ -108,7 +110,7 @@ export default function DashboardPage() {
           console.warn("Mic unavailable — audio input disabled");
         }
 
-        // Connect WebSocket — frame sending is on-demand (backend requests it)
+        // Fix: no spread operator — safe base64 for large JPEG frames
         const canvas = document.createElement("canvas");
         const canvasCtx = canvas.getContext("2d");
 
@@ -121,23 +123,43 @@ export default function DashboardPage() {
             canvas.toBlob((blob) => {
               if (!blob) return resolve(null);
               blob.arrayBuffer().then((buf) => {
-                resolve(btoa(String.fromCharCode(...new Uint8Array(buf))));
+                const bytes = new Uint8Array(buf);
+                let binary = "";
+                for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+                resolve(btoa(binary));
               });
             }, "image/jpeg", 0.7);
           });
 
-        ws = await connectObserveSocket(sid, async (msg) => {
-          // Handle request_frame before passing to general handler
-          if (msg.type === "request_frame") {
-            const b64 = await captureFrame();
-            if (b64 && ws?.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "frame", data: b64 }));
+        // WS connection extracted so it can be called again on reconnect
+        async function connectWs(sid: string) {
+          const newWs = await connectObserveSocket(sid, async (msg) => {
+            if (msg.type === "request_frame") {
+              const b64 = await captureFrame();
+              const current = wsRef.current;
+              if (b64 && current?.readyState === WebSocket.OPEN) {
+                current.send(JSON.stringify({ type: "frame", data: b64 }));
+              }
+              return;
             }
-            return;
-          }
-          handleWsMessage(msg);
-        });
-        wsRef.current = ws;
+            handleWsMessage(msg);
+          });
+          wsRef.current = newWs;
+
+          newWs.addEventListener("close", () => {
+            if (!shouldReconnectRef.current) return;
+            console.warn("WS closed — reconnecting in 3s…");
+            setTimeout(() => {
+              if (shouldReconnectRef.current && sessionIdRef.current) {
+                connectWs(sessionIdRef.current);
+              }
+            }, 3000);
+          });
+        }
+
+        sessionIdRef.current = sid;
+        await connectWs(sid);
+        ws = wsRef.current;
 
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Session error";
@@ -152,7 +174,8 @@ export default function DashboardPage() {
     init();
 
     return () => {
-      ws?.close();
+      shouldReconnectRef.current = false;
+      wsRef.current?.close();
       scriptProcessor?.disconnect();
       micSource?.disconnect();
       videoStream?.getTracks().forEach((t) => t.stop());
@@ -211,6 +234,8 @@ export default function DashboardPage() {
       source.buffer = buffer;
       source.connect(ctx.destination);
 
+      // Reset stale ref — can happen after Gemini reconnects mid-session
+      if (nextPlayTimeRef.current > ctx.currentTime + 10) nextPlayTimeRef.current = 0;
       // Schedule this chunk to start exactly when the previous chunk ends
       const startAt = Math.max(ctx.currentTime + 0.02, nextPlayTimeRef.current);
       source.start(startAt);

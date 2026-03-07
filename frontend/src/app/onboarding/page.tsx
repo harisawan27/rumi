@@ -311,7 +311,10 @@ export default function OnboardingPage() {
           {step < steps.length - 1 ? (
             <button
               onClick={() => setStep((s) => s + 1)}
-              disabled={!form.name.trim()}
+              disabled={
+                (step === 0 && !form.name.trim()) ||
+                (step === 1 && form.projects.every(p => !p.name.trim()))
+              }
               className="flex-1 py-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white font-medium transition text-sm"
             >
               Continue

@@ -168,7 +168,10 @@ export default function ProfilePage() {
   async function patch(updates: Partial<Identity>) {
     if (!identity) return;
     const merged = { ...identity, ...updates };
-    await saveIdentity(merged);
+    // Strip Firestore server fields that can't round-trip as JSON
+    const { last_updated, user_id, ...payload } = merged as Record<string, unknown>;
+    void last_updated; void user_id;
+    await saveIdentity(payload);
     setIdentity(merged);
   }
 

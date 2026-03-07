@@ -12,9 +12,9 @@ AUTO_SUMMARIZER_MODEL = "gemini-2.0-flash"
 
 AUTO_SUMMARIZER_PROMPT_TEMPLATE = """\
 You are a concise session summarizer for Mirr'at. Given the following interaction log
-from a session with Haris, write EXACTLY 2 sentences summarizing:
+from a session with {name}, write EXACTLY 2 sentences summarizing:
 1. The key emotional or cognitive states detected.
-2. The most notable intervention offered and Haris's response.
+2. The most notable intervention offered and the user's response.
 
 Do not include any implementation details, model names, or system information.
 Write in third person, past tense. Plain text only — no bullet points, no markdown.
@@ -36,6 +36,14 @@ class AutoSummarizer:
         import json
 
         db = get_db()
+
+        # Load user's name for personalised summary
+        try:
+            user_doc = db.collection("users").document(uid).get()
+            name = (user_doc.to_dict() or {}).get("name", "The user")
+        except Exception:
+            name = "The user"
+
         interactions_ref = (
             db.collection("users")
             .document(uid)
@@ -48,7 +56,7 @@ class AutoSummarizer:
 
         if not interactions:
             return (
-                f"Haris completed a session without any detected triggers. "
+                f"{name} completed a session without any detected triggers. "
                 f"No interventions were offered during this session."
             )
 
@@ -64,6 +72,7 @@ class AutoSummarizer:
         ]
 
         prompt = AUTO_SUMMARIZER_PROMPT_TEMPLATE.format(
+            name=name,
             interaction_log_json=json.dumps(safe_interactions, ensure_ascii=False, indent=2)
         )
 
