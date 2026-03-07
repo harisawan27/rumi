@@ -6,7 +6,7 @@ from src.watchman.state_monitor import StateResult
 
 logger = logging.getLogger(__name__)
 
-FRUSTRATION_THRESHOLD_SECONDS = 120  # 2 minutes
+FRUSTRATION_THRESHOLD_SECONDS = 20  # 20 seconds (testing)
 COOLDOWN_MINUTES = 30
 
 
@@ -14,7 +14,7 @@ class FrustrationTracker:
     """Tracks sustained frustration posture and fires Trigger A.
 
     Trigger A fires when the user has been in a 'frustrated' state for
-    >= FRUSTRATION_THRESHOLD_SECONDS continuously, subject to a 30-minute cooldown.
+    >= 30 seconds continuously, subject to a 30-minute cooldown.
     """
 
     def __init__(self):

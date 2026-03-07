@@ -94,17 +94,20 @@ class SessionManager:
         self._gemini_idle_task = asyncio.create_task(self._gemini_idle_disconnect())
 
     async def _gemini_idle_disconnect(self) -> None:
-        """Disconnect Gemini Live after 2 minutes of silence."""
-        await asyncio.sleep(120)
+        """Disconnect Gemini Live after 10 minutes of silence."""
+        await asyncio.sleep(600)
         if self._gemini and self._gemini.is_connected:
             await self._gemini.disconnect()
             logger.info("SessionManager: Gemini Live disconnected (idle timeout)")
 
     async def connect_gemini(self) -> None:
         """Called when frontend WebSocket is established.
-        Starts watchman and sends the opening greeting — Gemini is opened
-        on-demand for the greeting then closes after 2 min idle.
+        Only starts the watchman and greets if the session is active — not if paused.
+        This prevents auto-greeting on backend restarts when the user had paused.
         """
+        if self._status == "paused":
+            logger.info("SessionManager: WebSocket reconnected but session is paused — skipping watchman + greeting")
+            return
         self.start_watchman()
         asyncio.create_task(self._send_greeting())
         logger.info("SessionManager: WebSocket ready — greeting queued")
@@ -145,6 +148,10 @@ class SessionManager:
         self._status = "paused"
         if self._watchman_task:
             self._watchman_task.cancel()
+            try:
+                await self._watchman_task
+            except asyncio.CancelledError:
+                pass
             self._watchman_task = None
         await self._update_firestore_status("paused")
         self._start_idle_timer()
@@ -161,6 +168,19 @@ class SessionManager:
             tracker = getattr(self._state_monitor, "_long_session_tracker", None)
             if tracker:
                 tracker.reset_clock()
+        # Restart the watchman loop — it was cancelled on pause
+        if hasattr(self, "_state_monitor") and self._state_monitor and not self._watchman_task:
+            self._watchman_task = asyncio.create_task(
+                self._state_monitor.run_loop(
+                    on_frustration=self._fire_trigger_a,
+                    on_coding_block=self._fire_trigger_b,
+                    on_long_session=self._fire_trigger_c,
+                    on_deep_focus=self._fire_trigger_e,
+                )
+            )
+            logger.info("SessionManager: Watchman loop restarted after resume")
+        # Send greeting so Rumi acknowledges the (re)start
+        asyncio.create_task(self._send_greeting())
         logger.info("SessionManager: session resumed — %s", self._session_id)
 
     async def end_session(self) -> None:

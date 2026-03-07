@@ -114,6 +114,7 @@ class GeminiLiveClient:
         except Exception as exc:
             logger.warning("GeminiLiveClient: receive loop ended: %s", exc)
         finally:
+            self._connected = False  # session dropped — force reconnect on next use
             await self._response_queue.put(("done", None))
 
     def set_audio_callback(self, callback: Callable) -> None:
@@ -147,6 +148,31 @@ class GeminiLiveClient:
                 media_chunks=[types.Blob(data=pcm_bytes, mime_type="audio/pcm;rate=16000")]
             )
         )
+
+    async def activity_start(self) -> None:
+        """Signal that the user started speaking (push-to-talk open)."""
+        if not self._session:
+            return
+        try:
+            await self._session.send(
+                input=types.LiveClientRealtimeInput(activityStart=types.ActivityStart())
+            )
+            logger.info("GeminiLiveClient: activity_start sent")
+        except Exception as exc:
+            logger.warning("GeminiLiveClient: activity_start failed: %s", exc)
+
+    async def activity_end(self) -> None:
+        """Signal that the user stopped speaking — Gemini will generate a reply."""
+        if not self._session:
+            logger.warning("GeminiLiveClient: activity_end called but no session")
+            return
+        try:
+            await self._session.send(
+                input=types.LiveClientRealtimeInput(activityEnd=types.ActivityEnd())
+            )
+            logger.info("GeminiLiveClient: activity_end sent — awaiting Gemini reply")
+        except Exception as exc:
+            logger.warning("GeminiLiveClient: activity_end failed: %s", exc)
 
     async def send_frame(self, frame_bytes: bytes) -> None:
         """Send a JPEG frame. PRIVACY_CHECK: ephemeral — never written to disk or Firestore."""
@@ -187,6 +213,13 @@ class GeminiLiveClient:
             elif kind == "done":
                 break
         return "".join(parts)
+
+    async def send_text(self, text: str) -> None:
+        """Send a text turn; audio reply arrives via the _on_audio callback."""
+        if not self._session:
+            return
+        await self._session.send(input=text, end_of_turn=True)
+        logger.info("GeminiLiveClient: send_text — '%s'", text[:60])
 
     async def reconnect(self) -> None:
         delays = [1, 2, 4, 8, 16, 30]

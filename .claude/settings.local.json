@@ -5,7 +5,8 @@
       "Bash(powershell:*)",
       "Bash(powershell.exe:*)",
       "Bash(pip install:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(xargs grep:*)"
     ]
   }
 }

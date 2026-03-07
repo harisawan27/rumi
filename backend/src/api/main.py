@@ -348,13 +348,36 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     ).document(session_id).collection("interactions").document(
                         interaction_id
                     ).update({"user_response": response, "response_at": datetime.now(timezone.utc)})
+            elif msg.get("type") == "talk_start":
+                # Pre-connect Gemini then signal speech start
+                await mgr.ensure_gemini_connected()
+                if mgr.gemini and mgr.gemini.is_connected:
+                    await mgr.gemini.activity_start()
             elif msg.get("type") == "audio":
                 import base64
                 pcm_bytes = base64.b64decode(msg["data"])
-                await mgr.ensure_gemini_connected()
                 if mgr.gemini and mgr.gemini.is_connected:
                     await mgr.gemini.send_audio(pcm_bytes)
                     mgr._reset_gemini_idle_timer()
+            elif msg.get("type") == "audio_end":
+                # User released mic — signal speech end, Gemini generates reply
+                if mgr.gemini and mgr.gemini.is_connected:
+                    await mgr.gemini.activity_end()
+                else:
+                    logger.warning("audio_end received but Gemini not connected — reply lost")
+            elif msg.get("type") == "user_text":
+                # Web Speech API transcript — use query() (same proven path as greeting)
+                text = msg.get("text", "").strip()
+                if text:
+                    async def _respond(t: str = text) -> None:
+                        try:
+                            await mgr.ensure_gemini_connected()
+                            if mgr.gemini and mgr.gemini.is_connected:
+                                await mgr.gemini.query(t)
+                                mgr._reset_gemini_idle_timer()
+                        except Exception as exc:
+                            logger.warning("ws_observe: user_text response failed: %s", exc)
+                    asyncio.create_task(_respond())
     except WebSocketDisconnect:
         pass
     finally:
