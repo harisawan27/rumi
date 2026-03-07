@@ -19,6 +19,7 @@ export default function SignInPage() {
       const result = await signInWithPopup(auth, provider);
       const idToken = await result.user.getIdToken();
       sessionStorage.setItem("id_token", idToken);
+      setLoading(true);
       await verifyAuth();
       const identity = await getIdentity();
       router.push(identity ? "/dashboard" : "/onboarding");
@@ -40,7 +41,7 @@ export default function SignInPage() {
           disabled={loading}
           className="w-full py-3 px-6 bg-white text-gray-900 rounded-lg font-medium hover:bg-gray-100 disabled:opacity-50 transition"
         >
-          {loading ? "Signing in…" : "Sign in with Google"}
+          {loading ? "Setting up…" : "Sign in with Google"}
         </button>
         {error && (
           <p className="text-red-400 text-sm">{error}</p>

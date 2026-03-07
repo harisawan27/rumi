@@ -48,10 +48,9 @@ steps:
       - "--min-instances=1"
       - "--max-instances=1"
       - "--allow-unauthenticated"
-      - "--set-env-vars=GEMINI_API_KEY=$$GEMINI_API_KEY,AUTHORISED_USER_UID=$$AUTHORISED_USER_UID,SESSION_SUMMARY_DEPTH=$$SESSION_SUMMARY_DEPTH,IDLE_TIMEOUT_MINUTES=$$IDLE_TIMEOUT_MINUTES"
+      - "--set-env-vars=GEMINI_API_KEY=$$GEMINI_API_KEY,SESSION_SUMMARY_DEPTH=$$SESSION_SUMMARY_DEPTH,IDLE_TIMEOUT_MINUTES=$$IDLE_TIMEOUT_MINUTES"
     secretEnv:
       - "GEMINI_API_KEY"
-      - "AUTHORISED_USER_UID"
       - "SESSION_SUMMARY_DEPTH"
       - "IDLE_TIMEOUT_MINUTES"
     waitFor:
@@ -73,8 +72,6 @@ availableSecrets:
   secretManager:
     - versionName: "projects/$PROJECT_ID/secrets/GEMINI_API_KEY/versions/latest"
       env: "GEMINI_API_KEY"
-    - versionName: "projects/$PROJECT_ID/secrets/AUTHORISED_USER_UID/versions/latest"
-      env: "AUTHORISED_USER_UID"
     - versionName: "projects/$PROJECT_ID/secrets/SESSION_SUMMARY_DEPTH/versions/latest"
       env: "SESSION_SUMMARY_DEPTH"
     - versionName: "projects/$PROJECT_ID/secrets/IDLE_TIMEOUT_MINUTES/versions/latest"

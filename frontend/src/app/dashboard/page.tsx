@@ -39,7 +39,8 @@ export default function DashboardPage() {
   const [name, setName] = useState<string | null>(null);
   const [observationState, setObservationState] = useState<ObservationState>("paused");
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [intervention, setIntervention] = useState<ActiveIntervention | null>(null);
+  const [interventionQueue, setInterventionQueue] = useState<ActiveIntervention[]>([]);
+  const intervention = interventionQueue[0] ?? null;
   const [speaking, setSpeaking] = useState(false);
   const [isTalking, setIsTalking] = useState(false);
   const [mirratEmotion, setMirratEmotion] = useState<"neutral" | "concerned" | "happy" | "thinking">("neutral");
@@ -257,7 +258,7 @@ export default function DashboardPage() {
   function handleWsMessage(msg: WsMessage) {
     if (msg.type === "intervention") {
       const m = msg as InterventionMessage;
-      setIntervention({ interactionId: m.interaction_id, trigger: m.trigger, text: m.text });
+      setInterventionQueue(q => [...q, { interactionId: m.interaction_id, trigger: m.trigger, text: m.text }]);
       // Show matching emotion on Mirr'at's face
       const emotionMap: Record<string, typeof mirratEmotion> = {
         A: "concerned", B: "thinking", C: "concerned", E: "happy",
@@ -277,7 +278,7 @@ export default function DashboardPage() {
 
   function handleInterventionRespond(interactionId: string, response: "accepted" | "dismissed") {
     if (wsRef.current) sendInterventionResponse(wsRef.current, interactionId, response);
-    setIntervention(null);
+    setInterventionQueue(q => q.slice(1));
   }
 
   if (error) {

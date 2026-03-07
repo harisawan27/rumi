@@ -43,6 +43,18 @@ def get_current_uid(authorization: str = Header(...)) -> str:
 # Health
 # ---------------------------------------------------------------------------
 
+@app.on_event("startup")
+async def _startup():
+    uid = os.getenv("AUTHORISED_USER_UID", "")
+    if uid:
+        logger.warning(
+            "AUTHORISED_USER_UID is set (%s) — only that user can sign in. "
+            "Remove it from .env to enable multi-user mode.", uid
+        )
+    else:
+        logger.info("Multi-user mode active (AUTHORISED_USER_UID not set)")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "0.1.0"}

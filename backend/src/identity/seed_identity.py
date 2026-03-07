@@ -18,7 +18,10 @@ load_dotenv()
 from src.memory.firestore_client import get_db
 
 
-HARIS_UID = os.getenv("AUTHORISED_USER_UID", "uid_haris_001")
+if len(sys.argv) < 2:
+    print("Usage: python src/identity/seed_identity.py <firebase_uid>")
+    sys.exit(1)
+HARIS_UID = sys.argv[1]
 
 CORE_IDENTITY = {
     "user_id": HARIS_UID,
