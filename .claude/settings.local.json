@@ -6,7 +6,15 @@
       "Bash(powershell.exe:*)",
       "Bash(pip install:*)",
       "Bash(python:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(pip show:*)",
+      "Bash(uvicorn:*)",
+      "Bash(\"C:/Users/lenovo/AppData/Local/Programs/Python/Python311/python.exe\":*)",
+      "Bash(where python:*)",
+      "Bash(C:\\\\Users\\\\lenovo\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe:*)",
+      "Bash(pip:*)",
+      "Bash(python3.11:*)",
+      "Bash(where uvicorn:*)"
     ]
   }
 }
