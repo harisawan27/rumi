@@ -279,6 +279,29 @@ def record_interaction(body: InteractionRequest, uid: str = Depends(get_current_
 
 
 # ---------------------------------------------------------------------------
+# Debug — manual trigger (remove before submission)
+# ---------------------------------------------------------------------------
+
+@app.post("/debug/trigger/{trigger_type}", status_code=200)
+async def debug_trigger(trigger_type: str, uid: str = Depends(get_current_uid)):
+    """Fire any trigger manually to test the intervention pipeline."""
+    if trigger_type not in ("A", "B", "C", "E"):
+        raise HTTPException(status_code=422, detail="trigger_type must be A B C or E")
+    mgr = _get_session_manager(uid)
+    if mgr.status != "active":
+        raise HTTPException(status_code=409, detail="No active session")
+    dispatch = {
+        "A": mgr._fire_trigger_a,
+        "B": mgr._fire_trigger_b,
+        "C": mgr._fire_trigger_c,
+        "E": mgr._fire_trigger_e,
+    }
+    import asyncio
+    asyncio.create_task(dispatch[trigger_type]())
+    return {"fired": trigger_type}
+
+
+# ---------------------------------------------------------------------------
 # WebSocket observe (T030 contract)
 # ---------------------------------------------------------------------------
 

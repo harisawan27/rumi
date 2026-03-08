@@ -21,6 +21,7 @@ class StateResult:
     state: str
     confidence: float
     cues: list = field(default_factory=list)
+    landmarks: dict = field(default_factory=dict)
 
 
 class StateMonitor:
@@ -89,6 +90,7 @@ class StateMonitor:
             state=observation.event,
             confidence=round(confidence, 2),
             cues=observation.cues,
+            landmarks=observation.landmarks,
         )
         self._last_result = result
         logger.debug(
@@ -98,7 +100,8 @@ class StateMonitor:
         return result
 
     async def run_loop(self, on_frustration=None, on_coding_block=None,
-                       on_long_session=None, on_deep_focus=None) -> None:
+                       on_long_session=None, on_deep_focus=None,
+                       on_soft_frustration=None) -> None:
         """Main watchman loop — free, always-on, event-driven."""
         self._stop_event.clear()
 
@@ -112,6 +115,19 @@ class StateMonitor:
                 await asyncio.sleep(0.3)  # brief wait for frame to arrive
 
                 result = await self.run_cycle()
+
+                # Broadcast detection overlay to frontend
+                if self._websocket:
+                    try:
+                        await self._websocket.send_text(json.dumps({
+                            "type": "detection_update",
+                            "state": result.state,
+                            "confidence": result.confidence,
+                            "cues": result.cues,
+                            "landmarks": result.landmarks,
+                        }))
+                    except Exception:
+                        pass
 
                 # Away mode
                 if result.state == "idle":
@@ -146,6 +162,12 @@ class StateMonitor:
                 trigger_b = self._coding_block_tracker and self._coding_block_tracker.should_fire()
                 trigger_c = self._long_session_tracker and self._long_session_tracker.should_fire()
                 trigger_e = self._deep_focus_tracker and self._deep_focus_tracker.should_fire()
+
+                # Soft check-in before full trigger A
+                if self._frustration_tracker and self._frustration_tracker.should_soft_check():
+                    self._frustration_tracker.reset_soft_check()
+                    if on_soft_frustration:
+                        await on_soft_frustration()
 
                 if trigger_a:
                     self._frustration_tracker.reset_fire()

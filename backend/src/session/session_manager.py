@@ -176,6 +176,7 @@ class SessionManager:
                     on_coding_block=self._fire_trigger_b,
                     on_long_session=self._fire_trigger_c,
                     on_deep_focus=self._fire_trigger_e,
+                    on_soft_frustration=self._soft_frustration_checkin,
                 )
             )
             logger.info("SessionManager: Watchman loop restarted after resume")
@@ -329,6 +330,7 @@ class SessionManager:
                 on_coding_block=self._fire_trigger_b,
                 on_long_session=self._fire_trigger_c,
                 on_deep_focus=self._fire_trigger_e,
+                on_soft_frustration=self._soft_frustration_checkin,
             )
         )
         logger.info("SessionManager: Watchman loop started (triggers A, B, C, E)")
@@ -403,6 +405,14 @@ class SessionManager:
         )
         await self.dispatch_intervention("E", interaction_id, intervention_text)
         logger.info("SessionManager: Trigger E fired — interaction %s", interaction_id)
+
+    async def _soft_frustration_checkin(self) -> None:
+        """10-second early check-in — gentle voice only, no intervention card."""
+        await self._speak(
+            "I notice you might be feeling a bit tense or stuck. "
+            "What's going on? I'm here if you want to talk it through."
+        )
+        logger.info("SessionManager: soft frustration check-in fired")
 
     async def _speak(self, text: str) -> None:
         """Ensure Gemini Live is open, then speak the text aloud."""

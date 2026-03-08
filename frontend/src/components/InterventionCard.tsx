@@ -68,14 +68,14 @@ export default function InterventionCard({ interactionId, trigger, text, onRespo
           className="btn-primary"
           style={{ flex: 1, fontSize: "0.8125rem", padding: "0.6rem 1rem" }}
         >
-          Accept
+          Thank you
         </button>
         <button
           onClick={() => handle("dismissed")}
           className="btn-ghost"
           style={{ flex: 1, fontSize: "0.8125rem", padding: "0.6rem 1rem" }}
         >
-          Dismiss
+          Not now
         </button>
       </div>
     </div>

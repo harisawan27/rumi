@@ -1,4 +1,6 @@
 import logging
+import sys
+import types
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -14,58 +16,57 @@ class LocalObservation:
     frustration_score: float
     idle_score: float
     cues: list = field(default_factory=list)
+    landmarks: dict = field(default_factory=dict)
 
 
 class LocalObserver:
-    """On-device MediaPipe observer. Zero API cost. Runs on every frame.
+    """On-device emotion observer. Zero API cost. Runs on every frame.
 
     Layer 1 of the robot-style perception stack:
-    - MediaPipe Pose  → detects frustration signals (head drop, shoulder hunch, hand-to-face)
-    - MediaPipe Face  → detects squinting / tired eyes
-    - Frame diff      → detects idle / static screen
+    - FER (CNN trained on AffectNet) → classifies emotions from face
+    - Frame diff                      → detects idle / static screen
 
-    Only fires ADK Agent when scores cross threshold — no continuous LLM calls.
+    Frustration score = weighted sum of angry + sad + disgust probabilities.
+    Only fires ADK Agent when score is sustained above threshold for 30s.
     """
 
-    # MediaPipe pose landmark indices
-    _NOSE = 0
-    _LEFT_EAR = 7
-    _RIGHT_EAR = 8
-    _LEFT_SHOULDER = 11
-    _RIGHT_SHOULDER = 12
-    _LEFT_WRIST = 15
-    _RIGHT_WRIST = 16
-
-    # Face mesh eyelid landmarks (left eye)
-    _EYE_UPPER = 159
-    _EYE_LOWER = 145
+    _FRUSTRATION_THRESHOLD = 0.45
 
     def __init__(self):
-        self._pose = None
-        self._face_mesh = None
+        self._fer = None
+        self._fer_loaded = False
         self._prev_gray: Optional[np.ndarray] = None
-        self._mp_loaded = False
-        self._load_mediapipe()
+        import threading
+        threading.Thread(target=self._load_fer, daemon=True).start()
 
-    def _load_mediapipe(self) -> None:
+    def _load_fer(self) -> None:
         try:
-            import mediapipe as mp
-            self._mp_pose = mp.solutions.pose
-            self._mp_face = mp.solutions.face_mesh
-            self._pose = self._mp_pose.Pose(
-                static_image_mode=False,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
+            # pkg_resources was removed from setuptools 82+ as a top-level import.
+            # FER uses it for version lookup AND resource_filename (model path).
+            # Inject a minimal stub that satisfies both without requiring setuptools shim.
+            if "pkg_resources" not in sys.modules:
+                import importlib.util, os
+
+                def _resource_filename(pkg_name, resource_path):
+                    spec = importlib.util.find_spec(pkg_name)
+                    if spec and spec.origin:
+                        return os.path.join(os.path.dirname(spec.origin), resource_path)
+                    return resource_path
+
+                stub = types.ModuleType("pkg_resources")
+                stub.get_distribution = lambda n: type("D", (), {"version": "0.0"})()
+                stub.DistributionNotFound = Exception
+                stub.resource_filename = _resource_filename
+                sys.modules["pkg_resources"] = stub
+
+            from fer.fer import FER
+            self._fer = FER(mtcnn=False)
+            self._fer_loaded = True
+            logger.info("LocalObserver: FER emotion detector loaded")
+        except Exception as exc:
+            logger.warning(
+                "LocalObserver: fer unavailable (%s) — emotion detection disabled", exc
             )
-            self._face_mesh = self._mp_face.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                min_detection_confidence=0.5,
-            )
-            self._mp_loaded = True
-            logger.info("LocalObserver: MediaPipe loaded")
-        except ImportError:
-            logger.warning("LocalObserver: mediapipe not installed — using frame diff only")
 
     def observe(self, frame_bytes: bytes) -> LocalObservation:
         """Analyse a JPEG frame locally. No API call ever."""
@@ -74,11 +75,10 @@ class LocalObserver:
         if frame is None:
             return LocalObservation(event="neutral", frustration_score=0.0, idle_score=0.0)
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frustration_score, cues = self._score_frustration(rgb) if self._mp_loaded else (0.0, [])
+        frustration_score, cues, emotions = self._score_frustration(frame) if self._fer_loaded else (0.0, [], {})
         idle_score = self._score_idle(frame)
 
-        if frustration_score >= 0.55:
+        if frustration_score >= self._FRUSTRATION_THRESHOLD:
             event = "frustrated"
         elif idle_score >= 0.85:
             event = "idle"
@@ -90,55 +90,37 @@ class LocalObserver:
             frustration_score=round(frustration_score, 2),
             idle_score=round(idle_score, 2),
             cues=cues,
+            landmarks=emotions,
         )
 
-    def _score_frustration(self, rgb: np.ndarray) -> tuple:
-        score = 0.0
-        cues = []
+    def _score_frustration(self, frame: np.ndarray) -> tuple:
+        """Score frustration using FER's CNN emotion classifier."""
         try:
-            pose_result = self._pose.process(rgb)
-            face_result = self._face_mesh.process(rgb)
+            results = self._fer.detect_emotions(frame)
+            if not results:
+                return 0.0, [], {}
 
-            if pose_result.pose_landmarks:
-                lm = pose_result.pose_landmarks.landmark
-                nose = lm[self._NOSE]
-                left_shoulder = lm[self._LEFT_SHOULDER]
-                right_shoulder = lm[self._RIGHT_SHOULDER]
-                left_ear = lm[self._LEFT_EAR]
-                left_wrist = lm[self._LEFT_WRIST]
-                right_wrist = lm[self._RIGHT_WRIST]
+            face = max(results, key=lambda r: r["box"][2] * r["box"][3])
+            emotions = face["emotions"]
 
-                shoulder_y = (left_shoulder.y + right_shoulder.y) / 2
+            score = (
+                emotions.get("angry", 0.0) * 0.70
+                + emotions.get("sad", 0.0) * 0.20
+                + emotions.get("disgust", 0.0) * 0.10
+            )
 
-                # Head drooping down
-                if nose.y > shoulder_y + 0.12:
-                    score += 0.3
-                    cues.append("head_down")
+            cues = [e for e, v in emotions.items() if v > 0.15]
 
-                # Shoulders hunched up toward ears
-                if abs(left_shoulder.y - left_ear.y) < 0.08:
-                    score += 0.2
-                    cues.append("shoulders_hunched")
-
-                # Hand near face (head-in-hands / rubbing face)
-                for wrist in (left_wrist, right_wrist):
-                    dist = ((wrist.x - nose.x) ** 2 + (wrist.y - nose.y) ** 2) ** 0.5
-                    if dist < 0.15:
-                        score += 0.25
-                        cues.append("hand_near_face")
-                        break
-
-            if face_result.multi_face_landmarks:
-                face_lm = face_result.multi_face_landmarks[0].landmark
-                eye_open = abs(face_lm[self._EYE_UPPER].y - face_lm[self._EYE_LOWER].y)
-                if eye_open < 0.012:
-                    score += 0.2
-                    cues.append("squinting")
+            logger.debug(
+                "LocalObserver: angry=%.2f sad=%.2f happy=%.2f neutral=%.2f → score=%.2f",
+                emotions.get("angry", 0), emotions.get("sad", 0),
+                emotions.get("happy", 0), emotions.get("neutral", 0), score,
+            )
+            return min(score, 1.0), cues, {e: round(v, 2) for e, v in emotions.items()}
 
         except Exception as exc:
-            logger.debug("LocalObserver: pose scoring error: %s", exc)
-
-        return min(score, 1.0), cues
+            logger.debug("LocalObserver: FER scoring error: %s", exc)
+            return 0.0, [], {}
 
     def _score_idle(self, frame: np.ndarray) -> float:
         """Frame diff: 0.0 = active movement, 1.0 = completely static."""

@@ -13,9 +13,9 @@ import {
   type WsMessage,
 } from "@/services/session";
 import { ObservationState } from "@/components/ObservationIndicator";
-import RumiFace from "@/components/RumiFace";
 import InterventionCard from "@/components/InterventionCard";
 import PauseButton from "@/components/PauseButton";
+import RumiFace from "@/components/RumiFace";
 
 interface ActiveIntervention {
   interactionId: string;
@@ -38,9 +38,17 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [memoryToast, setMemoryToast] = useState<string | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
+  const [detection, setDetection] = useState<{ state: string; confidence: number; cues: string[]; emotions: Record<string, number> } | null>(null);
+  const [showCameraPopup, setShowCameraPopup] = useState(false);
+  const [showEmotionPopup, setShowEmotionPopup] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraPopupVideoRef = useRef<HTMLVideoElement | null>(null);
+  const videoStreamRef = useRef<MediaStream | null>(null);
   const playCtxRef = useRef<AudioContext | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const sessionIdRef = useRef<string | null>(null);
@@ -65,12 +73,14 @@ export default function DashboardPage() {
         const sid = await startSession();
         setSessionId(sid);
 
-        // Webcam — stay paused until user starts observation
+        // Webcam
         try {
           videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
-          if (videoRef.current) videoRef.current.srcObject = videoStream;
+          videoStreamRef.current = videoStream;
+          setLiveStream(videoStream); // effect attaches stream to video element
         } catch {
           setObservationState("degraded");
+          setCameraEnabled(false);
         }
 
         // Frame capture helper
@@ -131,6 +141,7 @@ export default function DashboardPage() {
     return () => {
       shouldReconnectRef.current = false;
       wsRef.current?.close();
+      videoStreamRef.current?.getTracks().forEach((t) => t.stop());
       videoStream?.getTracks().forEach((t) => t.stop());
       playCtxRef.current?.close();
       playCtxRef.current = null;
@@ -144,6 +155,23 @@ export default function DashboardPage() {
     window.addEventListener("beforeunload", handleUnload);
     return () => window.removeEventListener("beforeunload", handleUnload);
   }, [sessionId]);
+
+  // Attach stream to hidden video (captureFrame) whenever stream changes
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !liveStream) return;
+    v.srcObject = liveStream;
+    v.play().catch(() => {});
+  }, [liveStream]);
+
+  // Attach stream to camera popup video when popup opens
+  useEffect(() => {
+    if (showCameraPopup && cameraPopupVideoRef.current && liveStream) {
+      cameraPopupVideoRef.current.srcObject = liveStream;
+      cameraPopupVideoRef.current.play().catch(() => {});
+    }
+  }, [showCameraPopup, liveStream]);
+
 
   // Reset emotion when Rumi finishes speaking
   useEffect(() => {
@@ -327,11 +355,40 @@ export default function DashboardPage() {
   }
 
   function handleMicToggle() {
-    if (speaking) return; // don't interrupt Rumi
+    if (speaking || !micEnabled) return;
     if (isTalkingRef.current) {
       stopListening();
     } else {
       startListeningWithRef();
+    }
+  }
+
+  async function handleCameraToggle() {
+    if (cameraEnabled) {
+      videoStreamRef.current?.getTracks().forEach((t) => t.stop());
+      videoStreamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      setLiveStream(null);
+      setCameraEnabled(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoStreamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+        setLiveStream(stream);
+        setCameraEnabled(true);
+      } catch {
+        setError("Camera access denied.");
+      }
+    }
+  }
+
+  function handleMicDeviceToggle() {
+    if (!micEnabled) {
+      setMicEnabled(true);
+    } else {
+      if (isTalkingRef.current) stopListening();
+      setMicEnabled(false);
     }
   }
 
@@ -383,6 +440,14 @@ export default function DashboardPage() {
       setTranscript("");
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
       playAudio((msg as { type: string; data: string }).data);
+    } else if (msg.type === "detection_update") {
+      const d = msg as { type: string; state: string; confidence: number; cues: string[]; landmarks: Record<string, number> };
+      const newEmotions = d.landmarks ?? {};
+      // Keep previous emotions when no face detected — prevents bars flickering to 0 between frames
+      setDetection(prev => ({
+        state: d.state, confidence: d.confidence, cues: d.cues,
+        emotions: Object.keys(newEmotions).length > 0 ? newEmotions : (prev?.emotions ?? {}),
+      }));
     } else if (msg.type === "memory_updated") {
       const m = msg as { type: string; message: string };
       setMemoryToast(m.message);
@@ -401,6 +466,15 @@ export default function DashboardPage() {
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  const EMOTION_COLORS: Record<string, string> = {
+    happy: "#22c55e", neutral: "#64748b", angry: "#ef4444",
+    sad: "#60a5fa", disgust: "#f97316", fear: "#a855f7", surprise: "#eab308",
+  };
+  const emotionEntries = detection
+    ? Object.entries(detection.emotions).sort(([, a], [, b]) => b - a)
+    : [];
+  const dominantEmotion = emotionEntries[0] ?? null;
+
   if (error) {
     return (
       <main className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
@@ -417,7 +491,10 @@ export default function DashboardPage() {
     observationState === "degraded" ? "#f97316" : "var(--muted)";
 
   return (
-    <main className="dot-grid noise-overlay min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
+    <main className="dot-grid noise-overlay" style={{ height: "100dvh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+
+      {/* Hidden video — always in DOM so captureFrame always works */}
+      <video ref={videoRef} autoPlay muted playsInline style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", top: 0, left: 0 }} />
 
       {/* Navbar */}
       <nav className="glass sticky top-0 z-20 flex items-center justify-between px-5 py-3"
@@ -450,39 +527,119 @@ export default function DashboardPage() {
         </div>
       </nav>
 
-      {/* Main */}
-      <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 gap-8">
+      {/* Stage — Rumi robot as main character */}
+      <div className="rumi-stage">
 
         {/* Greeting */}
-        <div className="text-center animate-fade-up">
-          {name ? (
-            <h1 className="font-display text-gold" style={{ fontSize: "2rem", fontWeight: 300, letterSpacing: "0.04em" }}>
-              Marhaba, {name}
-            </h1>
-          ) : (
-            <div className="h-8 w-40 rounded-lg mx-auto" style={{ background: "var(--surface-2)", animation: "statusPulse 1.5s ease-in-out infinite" }} />
-          )}
-          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-            {speaking ? "Rumi is speaking…"
-              : isProcessing ? "Rumi is thinking…"
-              : isTalking ? "Listening — stop talking to send"
-              : observationState === "active" ? "Witnessing. Understanding."
-              : observationState === "degraded" ? "Camera unavailable — text mode"
-              : "Observation paused"}
-          </p>
-        </div>
+        {name ? (
+          <p className="rumi-greeting">Hi, {name}</p>
+        ) : (
+          <div style={{ height: 22, width: 100, borderRadius: 6, background: "var(--surface-2)", animation: "statusPulse 1.5s ease-in-out infinite" }} />
+        )}
 
-        {/* Rumi face */}
-        <div className="glass animate-fade-up delay-100 rounded-2xl p-8 flex flex-col items-center gap-4"
-          style={{ boxShadow: observationState === "active" ? "0 0 48px rgba(34,211,238,0.08), 0 0 80px rgba(201,168,76,0.05)" : "none" }}>
+        {/* Robot — clickable body zones */}
+        <div style={{ position: "relative", display: "inline-block" }}>
           <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
+
+          {/* Zone: head → expression panel */}
+          <div className="body-zone zone-head" onClick={() => setShowEmotionPopup(p => !p)} />
+
+          {/* Zone: chest → camera panel */}
+          <div className="body-zone zone-chest" onClick={() => setShowCameraPopup(p => !p)} />
+
+          {/* ── Expression HUD panel ──────────────────────────────────────── */}
+          {showEmotionPopup && (
+            <div className="hud-panel popup-head">
+              <div className="hud-corner tl"/><div className="hud-corner tr"/>
+              <div className="hud-corner bl"/><div className="hud-corner br"/>
+              <div className="hud-header">
+                <span className="hud-live-dot" />
+                <span className="hud-title">Expression Analysis</span>
+                <button className="hud-close" onClick={(e) => { e.stopPropagation(); setShowEmotionPopup(false); }}>✕</button>
+              </div>
+              {dominantEmotion && (
+                <div className="hud-dominant">
+                  <span style={{ color: EMOTION_COLORS[dominantEmotion[0]] ?? "var(--teal)" }}>
+                    {dominantEmotion[0].toUpperCase()}
+                  </span>
+                  <span className="hud-dominant-score">{Math.round(dominantEmotion[1] * 100)}%</span>
+                </div>
+              )}
+              <div className="hud-divider" />
+              {emotionEntries.length > 0 ? emotionEntries.map(([emotion, score]) => (
+                <div key={emotion} className="hud-row">
+                  <span className="hud-label">{emotion}</span>
+                  <div className="hud-bar-track">
+                    <div className="hud-bar-fill" style={{ width: `${Math.round(score * 100)}%`, background: EMOTION_COLORS[emotion] ?? "var(--teal)" }} />
+                  </div>
+                  <span className="hud-value">{Math.round(score * 100)}</span>
+                </div>
+              )) : (
+                <p className="hud-empty">No face detected</p>
+              )}
+            </div>
+          )}
+
+          {/* ── Camera HUD panel ─────────────────────────────────────────── */}
+          {showCameraPopup && (
+            <div className="hud-panel popup-chest">
+              <div className="hud-corner tl"/><div className="hud-corner tr"/>
+              <div className="hud-corner bl"/><div className="hud-corner br"/>
+              <div className="hud-header">
+                {observationState === "active" && cameraEnabled && <span className="hud-live-dot" />}
+                <span className="hud-title">Camera Preview</span>
+                <button className="hud-close" onClick={(e) => { e.stopPropagation(); setShowCameraPopup(false); }}>✕</button>
+              </div>
+              <div className="hud-video-wrap" style={{ borderColor: observationState === "active" ? "var(--teal)" : "var(--border)", boxShadow: observationState === "active" ? "0 0 10px rgba(34,211,238,0.15)" : "none" }}>
+                <video ref={cameraPopupVideoRef} autoPlay muted playsInline
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: cameraEnabled ? 1 : 0 }} />
+                {!cameraEnabled && (
+                  <div className="hud-cam-off">CAM OFF</div>
+                )}
+                {observationState === "active" && cameraEnabled && (
+                  <div style={{ position: "absolute", top: 6, left: 6, width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 6px rgba(34,211,238,0.9)", animation: "statusPulse 2s ease-in-out infinite" }} />
+                )}
+              </div>
+              <div className="hud-divider" />
+              <div className="hud-controls">
+                <button onClick={handleCameraToggle} className={`hud-ctrl-btn ${cameraEnabled ? "active-teal" : "active-red"}`} title={cameraEnabled ? "Camera off" : "Camera on"}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M18 10.5V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-4.5l4 4v-11l-4 4z" opacity={cameraEnabled ? 1 : 0.4}/></svg>
+                  <span>{cameraEnabled ? "Cam On" : "Cam Off"}</span>
+                </button>
+                <button onClick={handleMicDeviceToggle} className={`hud-ctrl-btn ${micEnabled ? "active-gold" : "active-red"}`} title={micEnabled ? "Mute mic" : "Unmute mic"}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z" opacity={micEnabled ? 1 : 0.4}/><path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z" opacity={micEnabled ? 1 : 0.4}/></svg>
+                  <span>{micEnabled ? "Mic On" : "Mic Off"}</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        <video ref={videoRef} autoPlay muted playsInline className="hidden" />
+        {/* Zone hint — tap affordance */}
+        <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "center" }}>
+          <span className="zone-tag" onClick={() => setShowEmotionPopup(p => !p)}>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            Tap face for expressions
+          </span>
+          <span style={{ color: "var(--border)", fontSize: "0.5rem", opacity: 0.4 }}>·</span>
+          <span className="zone-tag" onClick={() => setShowCameraPopup(p => !p)}>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            Tap chest for camera
+          </span>
+        </div>
+
+        {/* Status */}
+        <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: 0, textAlign: "center" }}>
+          {speaking ? "Rumi is speaking…" : isProcessing ? "Rumi is thinking…"
+            : isTalking ? "Listening — stop talking to send"
+            : observationState === "active" ? "Witnessing. Understanding."
+            : observationState === "degraded" ? "Camera unavailable — text mode"
+            : "Observation paused"}
+        </p>
 
         {/* Begin observation */}
         {sessionReady && observationState === "paused" && (
-          <div className="animate-fade-up delay-200 text-center">
+          <div style={{ textAlign: "center" }}>
             <button
               onClick={() => {
                 setObservationState("active");
@@ -493,93 +650,64 @@ export default function DashboardPage() {
                 }
               }}
               className="btn-primary"
-              style={{ fontSize: "0.9rem", padding: "0.75rem 2rem" }}
+              style={{ fontSize: "0.9rem", padding: "0.65rem 2rem" }}
             >
               Begin Observation
             </button>
-            <p className="mt-2 text-xs" style={{ color: "var(--muted)" }}>
-              Rumi will start watching when you&apos;re ready
-            </p>
+            <p style={{ marginTop: 5, fontSize: "0.7rem", color: "var(--muted)" }}>Rumi will start watching when you&apos;re ready</p>
           </div>
         )}
 
-        {/* Talk button — Google Voice Search style */}
+        {/* Talk controls */}
         {observationState !== "paused" && (
-          <div className="flex flex-col items-center gap-3 select-none animate-fade-up delay-200">
-
-            {/* Live transcript */}
+          <div className="select-none" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
             {(isTalking || isProcessing) && transcript && (
-              <div className="glass rounded-xl px-4 py-2 max-w-xs text-center" style={{ minWidth: 200 }}>
-                <p className="text-sm" style={{ color: isTalking ? "var(--text)" : "var(--muted)", fontStyle: isProcessing ? "italic" : "normal" }}>
-                  &ldquo;{transcript}&rdquo;
-                </p>
+              <div className="glass rounded-xl px-3 py-1.5 text-center" style={{ maxWidth: 280 }}>
+                <p className="text-sm" style={{ color: isTalking ? "var(--text)" : "var(--muted)", fontStyle: isProcessing ? "italic" : "normal" }}>&ldquo;{transcript}&rdquo;</p>
               </div>
             )}
-
-            {/* Waveform bars — visible while listening */}
             {isTalking && (
-              <div className="flex items-end gap-0.5 h-6">
-                {[3, 5, 8, 5, 10, 6, 4, 9, 6, 3].map((h, i) => (
-                  <div key={i} style={{
-                    width: 3, borderRadius: 2,
-                    backgroundColor: "var(--teal)",
-                    height: h * 2,
-                    animation: `waveBar 0.6s ease-in-out ${i * 0.06}s infinite alternate`,
-                  }} />
+              <div className="flex items-end gap-0.5" style={{ height: 20 }}>
+                {[3,5,8,5,10,6,4,9,6,3].map((h,i) => (
+                  <div key={i} style={{ width: 3, borderRadius: 2, backgroundColor: "var(--teal)", height: h*2, animation: `waveBar 0.6s ease-in-out ${i*0.06}s infinite alternate` }} />
                 ))}
               </div>
             )}
-
-            {/* Mic button */}
             <button
               onClick={handleMicToggle}
               disabled={speaking}
               aria-label={isTalking ? "Stop and send" : "Talk to Rumi"}
               style={{
-                width: 72, height: 72, borderRadius: "50%",
+                width: 64, height: 64, borderRadius: "50%",
                 border: `2px solid ${isTalking ? "var(--teal)" : isProcessing ? "var(--gold-dim)" : "var(--border-2)"}`,
                 background: isTalking ? "rgba(34,211,238,0.12)" : isProcessing ? "rgba(201,168,76,0.08)" : "var(--surface)",
                 color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : "var(--muted)",
-                boxShadow: isTalking ? "0 0 24px rgba(34,211,238,0.4), 0 0 48px rgba(34,211,238,0.15)"
-                  : isProcessing ? "0 0 20px rgba(201,168,76,0.2)" : "none",
-                transform: isTalking ? "scale(0.95)" : "scale(1)",
-                transition: "all 0.2s ease",
+                boxShadow: isTalking ? "0 0 24px rgba(34,211,238,0.4), 0 0 48px rgba(34,211,238,0.15)" : isProcessing ? "0 0 20px rgba(201,168,76,0.2)" : "none",
+                transform: isTalking ? "scale(0.95)" : "scale(1)", transition: "all 0.2s ease",
                 cursor: speaking ? "default" : "pointer",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}
             >
               {isProcessing ? (
-                <span style={{
-                  display: "inline-block", width: 22, height: 22, borderRadius: "50%",
-                  border: "2.5px solid var(--gold-dim)", borderTopColor: "var(--gold)",
-                  animation: "spin 0.8s linear infinite",
-                }} />
+                <span style={{ display: "inline-block", width: 20, height: 20, borderRadius: "50%", border: "2.5px solid var(--gold-dim)", borderTopColor: "var(--gold)", animation: "spin 0.8s linear infinite" }} />
               ) : speaking ? (
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
-                </svg>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02z" /></svg>
               ) : (
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z" />
                   <path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z" />
                 </svg>
               )}
             </button>
-
-            <p className="text-xs" style={{
-              color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)"
-            }}>
-              {isTalking ? "Tap or Space to send"
-                : isProcessing ? "Sending to Rumi…"
-                : speaking ? "Rumi is speaking"
-                : "Tap to talk · Space"}
+            <p style={{ fontSize: "0.72rem", color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)" }}>
+              {isTalking ? "Tap or Space to send" : isProcessing ? "Sending to Rumi…" : speaking ? "Rumi is speaking" : "Tap to talk · Space"}
             </p>
           </div>
         )}
 
         {/* Intervention card */}
         {intervention && (
-          <div className="w-full max-w-lg animate-fade-up">
+          <div className="w-full animate-fade-up" style={{ maxWidth: 400, padding: "0 16px" }}>
             <InterventionCard
               interactionId={intervention.interactionId}
               trigger={intervention.trigger}
@@ -588,6 +716,7 @@ export default function DashboardPage() {
             />
           </div>
         )}
+
       </div>
 
       {/* Memory toast */}
@@ -603,6 +732,154 @@ export default function DashboardPage() {
         @keyframes statusPulse { 0%, 100% { opacity: 0.5; transform: scale(1); } 50% { opacity: 1; transform: scale(1.15); } }
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes waveBar { from { transform: scaleY(0.4); opacity: 0.6; } to { transform: scaleY(1); opacity: 1; } }
+        @keyframes rumiGlowPulse {
+          0%, 100% { opacity: 0.2; transform: scale(1); }
+          50%       { opacity: 0.55; transform: scale(1.1); }
+        }
+        @keyframes popupIn {
+          from { opacity: 0; transform: translateX(10px); }
+          to   { opacity: 1; transform: translateX(0); }
+        }
+        .rumi-stage {
+          flex: 1; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; gap: 8px; overflow: hidden; padding: 4px 16px 10px;
+        }
+        .rumi-greeting {
+          font-family: var(--font-display), serif;
+          font-size: clamp(1.1rem, 3vw, 1.5rem); color: var(--gold);
+          font-weight: 400; letter-spacing: 0.06em; margin: 0;
+        }
+        /* ── Clickable zones ───────────────────────────────────────────── */
+        .body-zone {
+          position: absolute; cursor: pointer; border-radius: 40%;
+          transition: background 0.15s ease;
+        }
+        .body-zone:hover { background: rgba(255,255,255,0.05); }
+        .zone-head  { top: 2%;  left: 20%; width: 60%; height: 20%; }
+        .zone-chest { top: 24%; left: 14%; width: 72%; height: 24%; border-radius: 12px; }
+
+        /* ── Zone tag hint below robot ─────────────────────────────────── */
+        .zone-tag {
+          display: inline-flex; align-items: center; gap: 4px;
+          font-size: 0.52rem; letter-spacing: 0.06em;
+          color: var(--muted); cursor: pointer; opacity: 0.6;
+          transition: opacity 0.15s ease, color 0.15s ease;
+          user-select: none;
+        }
+        .zone-tag:hover { opacity: 1; color: var(--text); }
+
+        /* ── HUD panel base ────────────────────────────────────────────── */
+        .hud-panel {
+          position: absolute; z-index: 30;
+          background: rgba(4, 8, 15, 0.92);
+          backdrop-filter: blur(18px);
+          border: 1px solid rgba(34,211,238,0.18);
+          border-radius: 10px;
+          padding: 10px 12px;
+          width: 200px;
+          animation: popupIn 0.16s ease;
+          box-shadow: 0 0 0 1px rgba(34,211,238,0.04), 0 12px 40px rgba(0,0,0,0.6), inset 0 0 30px rgba(34,211,238,0.02);
+        }
+        /* corner bracket accents */
+        .hud-corner {
+          position: absolute; width: 8px; height: 8px;
+          border-color: rgba(34,211,238,0.5); border-style: solid;
+        }
+        .hud-corner.tl { top: -1px; left: -1px; border-width: 1.5px 0 0 1.5px; border-radius: 3px 0 0 0; }
+        .hud-corner.tr { top: -1px; right: -1px; border-width: 1.5px 1.5px 0 0; border-radius: 0 3px 0 0; }
+        .hud-corner.bl { bottom: -1px; left: -1px; border-width: 0 0 1.5px 1.5px; border-radius: 0 0 0 3px; }
+        .hud-corner.br { bottom: -1px; right: -1px; border-width: 0 1.5px 1.5px 0; border-radius: 0 0 3px 0; }
+        /* header */
+        .hud-header {
+          display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+        }
+        .hud-live-dot {
+          width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+          background: var(--teal); box-shadow: 0 0 5px var(--teal);
+          animation: statusPulse 2s ease-in-out infinite;
+        }
+        .hud-title {
+          flex: 1; font-size: 0.52rem; letter-spacing: 0.14em;
+          text-transform: uppercase; color: var(--teal); font-weight: 500;
+        }
+        .hud-close {
+          background: none; border: none; color: var(--muted); cursor: pointer;
+          font-size: 0.7rem; line-height: 1; padding: 0; opacity: 0.6;
+          transition: opacity 0.15s;
+        }
+        .hud-close:hover { opacity: 1; }
+        .hud-divider {
+          height: 1px; background: rgba(34,211,238,0.1); margin: 7px 0;
+        }
+        /* expression rows */
+        .hud-dominant {
+          display: flex; justify-content: space-between; align-items: baseline;
+          margin-bottom: 6px;
+        }
+        .hud-dominant span:first-child {
+          font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em;
+        }
+        .hud-dominant-score {
+          font-size: 0.62rem; color: var(--muted);
+        }
+        .hud-row {
+          display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+        }
+        .hud-label {
+          width: 44px; font-size: 0.5rem; color: var(--muted);
+          text-transform: capitalize; flex-shrink: 0; letter-spacing: 0.04em;
+        }
+        .hud-bar-track {
+          flex: 1; height: 2px; background: rgba(255,255,255,0.06); border-radius: 1px;
+        }
+        .hud-bar-fill {
+          height: 100%; border-radius: 1px; transition: width 0.5s ease;
+        }
+        .hud-value {
+          width: 20px; font-size: 0.48rem; color: var(--muted); text-align: right;
+          flex-shrink: 0;
+        }
+        .hud-empty {
+          font-size: 0.5rem; color: var(--muted); margin: 0; text-align: center;
+          padding: 4px 0;
+        }
+        /* camera */
+        .hud-video-wrap {
+          width: 100%; aspect-ratio: 16/9; overflow: hidden;
+          border-radius: 6px; background: var(--surface);
+          position: relative; border: 1px solid var(--border);
+          transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .hud-cam-off {
+          position: absolute; inset: 0; display: flex; align-items: center;
+          justify-content: center; background: var(--surface-2);
+          font-size: 0.55rem; color: var(--muted); letter-spacing: 0.1em;
+        }
+        .hud-controls {
+          display: flex; gap: 6px; justify-content: center;
+        }
+        .hud-ctrl-btn {
+          display: flex; align-items: center; gap: 4px;
+          padding: 4px 10px; border-radius: 20px; border: none; cursor: pointer;
+          font-size: 0.5rem; letter-spacing: 0.06em; text-transform: uppercase;
+          transition: opacity 0.15s ease;
+        }
+        .hud-ctrl-btn:hover { opacity: 0.8; }
+        .hud-ctrl-btn.active-teal { background: rgba(34,211,238,0.1); color: var(--teal); }
+        .hud-ctrl-btn.active-gold { background: rgba(201,168,76,0.1); color: var(--gold); }
+        .hud-ctrl-btn.active-red  { background: rgba(239,68,68,0.1);  color: #ef4444; }
+
+        /* desktop positioning */
+        .popup-head  { top: 0;   left: calc(100% + 16px); }
+        .popup-chest { top: 46%; left: calc(100% + 16px); }
+
+        /* mobile — both panels fixed, stacked in right column, no overlap */
+        @media (max-width: 639px) {
+          .rumi-stage { gap: 4px; padding: 2px 8px 8px; }
+          .hud-panel  { width: min(52vw, 200px); }
+          .popup-head  { position: fixed; top: 68px;  right: 10px; left: auto; }
+          .popup-chest { position: fixed; bottom: 70px; right: 10px; left: auto; top: auto; }
+        }
       `}</style>
     </main>
   );

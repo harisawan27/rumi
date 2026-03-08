@@ -6,7 +6,8 @@ from src.watchman.state_monitor import StateResult
 
 logger = logging.getLogger(__name__)
 
-FRUSTRATION_THRESHOLD_SECONDS = 20  # 20 seconds (testing)
+FRUSTRATION_THRESHOLD_SECONDS = 30
+SOFT_CHECK_SECONDS = 10       # gentle voice check-in before full intervention
 COOLDOWN_MINUTES = 30
 
 
@@ -22,6 +23,8 @@ class FrustrationTracker:
         self._last_cycle_state: Optional[str] = None
         self._last_fired_at: Optional[datetime] = None
         self._pending_fire: bool = False
+        self._pending_soft_check: bool = False
+        self._soft_checked: bool = False
 
     def update(self, state_result: StateResult) -> None:
         """Called every Watchman cycle with the latest StateResult."""
@@ -32,10 +35,14 @@ class FrustrationTracker:
                 "FrustrationTracker: elapsed=%.0fs threshold=%ds",
                 self._elapsed_seconds, FRUSTRATION_THRESHOLD_SECONDS,
             )
+            if self._elapsed_seconds >= SOFT_CHECK_SECONDS and not self._soft_checked:
+                self._pending_soft_check = True
             if self._elapsed_seconds >= FRUSTRATION_THRESHOLD_SECONDS:
                 self._check_cooldown_and_arm()
         else:
             self._elapsed_seconds = 0.0
+            self._soft_checked = False
+            self._pending_soft_check = False
 
     def _check_cooldown_and_arm(self) -> None:
         now = datetime.now(timezone.utc)
@@ -52,6 +59,14 @@ class FrustrationTracker:
 
     def should_fire(self) -> bool:
         return self._pending_fire
+
+    def should_soft_check(self) -> bool:
+        return self._pending_soft_check
+
+    def reset_soft_check(self) -> None:
+        self._pending_soft_check = False
+        self._soft_checked = True
+        logger.info("FrustrationTracker: soft check-in fired")
 
     def reset_fire(self) -> None:
         """Mark the trigger as fired; reset elapsed counter and record fire time."""
