@@ -386,6 +386,15 @@ export default function DashboardPage() {
     setCanvasOpen(false);
   }
 
+  function openCanvas(item: CanvasContent) {
+    setCanvasHistory(prev => {
+      const next = [...prev, item];
+      setCanvasIndex(next.length - 1);
+      return next;
+    });
+    setCanvasOpen(true);
+  }
+
   // ── Audio playback ────────────────────────────────────────────────────────
   async function playAudio(b64: string) {
     try {
@@ -440,15 +449,28 @@ export default function DashboardPage() {
     } else if (msg.type === "audio_response") {
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
       playAudio((msg as { type: string; data: string }).data);
+    } else if (msg.type === "canvas_history") {
+      const m = msg as { type: string; items: { query: string; title: string; content: string; content_type: string; timestamp: string }[] };
+      const items: CanvasContent[] = m.items.map(i => ({
+        title: i.title, body: i.content,
+        type: (i.content_type as "text" | "code" | "markdown") ?? "markdown",
+        query: i.query, timestamp: i.timestamp,
+      }));
+      setCanvasHistory(items);
+      setCanvasIndex(items.length - 1);
     } else if (msg.type === "text_response") {
       if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
       setIsProcessing(false);
       setTranscript("");
       const m = msg as { type: string; title: string; content: string; content_type?: string };
+      const now = new Date();
+      const stamp = now.toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const newItem: CanvasContent = {
         title: m.title,
         body: m.content,
         type: (m.content_type as "text" | "code" | "markdown") ?? "markdown",
+        query: transcript || "",
+        timestamp: stamp,
       };
       setCanvasHistory(prev => {
         const next = [...prev, newItem];
@@ -533,7 +555,7 @@ export default function DashboardPage() {
           </div>
           {/* Canvas indicator — shows new split-screen feature is active */}
           <div
-            onClick={() => canvasOpen ? handleCanvasDismiss() : (setCanvasContent({ title: "Canvas Ready", body: "## Artifact Canvas\n\nThis is your projection screen.\n\nAsk Rumi anything complex — a poem, a code problem, a calculation — and the answer will render here while Rumi speaks it aloud.\n\n**Notebook mode:** Point your camera at a notebook or screen and ask Rumi to solve or explain what it sees.\n\n> Press `/` to type instead of speaking.", type: "markdown" }), setCanvasOpen(true))}
+            onClick={() => canvasOpen ? handleCanvasDismiss() : openCanvas({ title: "Canvas Ready", body: "## Artifact Canvas\n\nThis is your projection screen.\n\nAsk Rumi anything complex — a poem, a code problem, a calculation — and the answer will render here while Rumi speaks it aloud.\n\n**Notebook mode:** Point your camera at a notebook or screen and ask Rumi to solve or explain what it sees.\n\n> Press `/` to type instead of speaking.", type: "markdown" })}
             style={{
               display: "flex", alignItems: "center", gap: 5,
               padding: "3px 10px", borderRadius: 99, cursor: "pointer",
@@ -781,8 +803,7 @@ export default function DashboardPage() {
           <div
             className="canvas-pull-tab"
             onClick={() => {
-              setCanvasContent({ title: "Canvas Ready", body: "## Artifact Canvas\n\nThis is your projection screen.\n\nAsk Rumi anything complex — a poem, a code problem, a calculation — and the answer will render here while Rumi speaks it aloud.\n\n**Notebook mode:** Point your camera at a notebook and ask Rumi to solve or explain what it sees.\n\n> Press `/` to type instead of speaking.", type: "markdown" });
-              setCanvasOpen(true);
+              openCanvas({ title: "Canvas Ready", body: "## Artifact Canvas\n\nThis is your projection screen.\n\nAsk Rumi anything complex — a poem, a code problem, a calculation — and the answer will render here while Rumi speaks it aloud.\n\n**Notebook mode:** Point your camera at a notebook and ask Rumi to solve or explain what it sees.\n\n> Press `/` to type instead of speaking.", type: "markdown" });
             }}
             title="Open artifact canvas"
           >

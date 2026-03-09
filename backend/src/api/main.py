@@ -407,6 +407,60 @@ async def _flash_with_image(text: str, image_b64: str, system_prompt: str = "") 
 
 
 # ---------------------------------------------------------------------------
+# Canvas history — Firestore persistence (cap 20 per user)
+# ---------------------------------------------------------------------------
+
+async def _save_canvas_entry(uid: str, query: str, title: str, content: str, content_type: str) -> None:
+    """Persist a canvas answer to Firestore. Trims to 20 most recent entries."""
+    try:
+        from src.memory.firestore_client import get_db
+        from datetime import datetime, timezone
+        db = get_db()
+        col = db.collection("users").document(uid).collection("canvas_history")
+        col.add({
+            "query": query,
+            "title": title,
+            "content": content,
+            "content_type": content_type,
+            "timestamp": datetime.now(timezone.utc),
+        })
+        # Trim oldest beyond 20
+        docs = list(col.order_by("timestamp", direction="DESCENDING").stream())
+        for doc in docs[20:]:
+            doc.reference.delete()
+    except Exception as exc:
+        logger.warning("_save_canvas_entry: failed: %s", exc)
+
+
+def _load_canvas_history(uid: str, limit: int = 20) -> list:
+    """Load canvas history from Firestore, oldest-first for nav order."""
+    try:
+        from src.memory.firestore_client import get_db
+        db = get_db()
+        docs = list(
+            db.collection("users").document(uid).collection("canvas_history")
+            .order_by("timestamp", direction="DESCENDING")
+            .limit(limit)
+            .stream()
+        )
+        items = []
+        for doc in reversed(docs):  # chronological order
+            d = doc.to_dict()
+            ts = d.get("timestamp")
+            items.append({
+                "query": d.get("query", ""),
+                "title": d.get("title", ""),
+                "content": d.get("content", ""),
+                "content_type": d.get("content_type", "markdown"),
+                "timestamp": ts.strftime("%b %d") if ts else "",
+            })
+        return items
+    except Exception as exc:
+        logger.warning("_load_canvas_history: failed: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # WebSocket observe (T030 contract)
 # ---------------------------------------------------------------------------
 
@@ -433,6 +487,17 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
     except Exception as exc:
         await websocket.send_text(json.dumps({"type": "error", "code": "GEMINI_DISCONNECTED", "message": str(exc)}))
         logger.warning("ws_observe: Gemini connect failed: %s", exc)
+
+    # Send canvas history so frontend can pre-populate navigation
+    try:
+        history = await asyncio.get_event_loop().run_in_executor(
+            None, _load_canvas_history, uid
+        )
+        if history:
+            await websocket.send_text(json.dumps({"type": "canvas_history", "items": history}))
+            logger.info("ws_observe: sent %d canvas history items", len(history))
+    except Exception as exc:
+        logger.warning("ws_observe: canvas_history send failed: %s", exc)
 
     # Keepalive ping every 30s
     import asyncio
@@ -528,7 +593,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                 content = ""
                                 try:
                                     sys_prompt = mgr._system_prompt or ""
-                                content = await (_flash_with_image(t, img, sys_prompt) if img else _flash_text_only(t, sys_prompt))
+                                    content = await (_flash_with_image(t, img, sys_prompt) if img else _flash_text_only(t, sys_prompt))
                                 except Exception as exc:
                                     logger.warning("ws_observe: Flash threw: %s", exc)
 
@@ -538,13 +603,15 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                         "Please try again in a moment."
                                     )
 
+                                title = _make_title(t)
                                 await _ws.send_text(json.dumps({
                                     "type": "text_response",
-                                    "title": _make_title(t),
+                                    "title": title,
                                     "content": content,
                                     "content_type": "markdown",
                                 }))
                                 logger.info("ws_observe: text_response sent (%d chars)", len(content))
+                                asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
                                 mgr._speak_task = asyncio.create_task(mgr._speak_verbatim(content))
                             except BaseException as exc:
                                 logger.warning("ws_observe: _respond failed: %s", exc)

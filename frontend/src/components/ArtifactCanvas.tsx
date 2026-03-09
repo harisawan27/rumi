@@ -6,6 +6,8 @@ export interface CanvasContent {
   title: string;
   body: string;
   type: "text" | "code" | "markdown";
+  query?: string;      // original user question
+  timestamp?: string;  // e.g. "Apr 12"
 }
 
 interface Props {
@@ -205,8 +207,8 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
       {/* History navigation — only shown when there are multiple entries */}
       {total > 1 && onNavigate && (
         <div style={{
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
-          padding: "8px 16px", borderTop: "1px solid rgba(34,211,238,0.07)",
+          display: "flex", alignItems: "center", gap: 8,
+          padding: "7px 14px", borderTop: "1px solid rgba(34,211,238,0.07)",
           flexShrink: 0, background: "rgba(4,8,15,0.3)",
         }}>
           <button
@@ -216,13 +218,28 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
               background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 5,
               color: historyIndex === 0 ? "var(--muted)" : "var(--teal)",
               cursor: historyIndex === 0 ? "default" : "pointer",
-              padding: "3px 9px", fontSize: "0.72rem", lineHeight: 1, transition: "all 0.15s",
-              opacity: historyIndex === 0 ? 0.35 : 1,
+              padding: "3px 8px", fontSize: "0.72rem", lineHeight: 1, transition: "all 0.15s",
+              opacity: historyIndex === 0 ? 0.35 : 1, flexShrink: 0,
             }}
           >←</button>
-          <span style={{ fontSize: "0.58rem", color: "var(--muted)", letterSpacing: "0.12em", minWidth: 42, textAlign: "center" }}>
-            {historyIndex + 1} / {total}
-          </span>
+
+          {/* Query label + counter */}
+          <div style={{ flex: 1, minWidth: 0, textAlign: "center" }}>
+            {content?.query && (
+              <p style={{
+                margin: "0 0 1px", fontSize: "0.56rem", color: "var(--teal)",
+                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                opacity: 0.75,
+              }}>
+                {content.timestamp && <span style={{ color: "var(--muted)", marginRight: 4 }}>{content.timestamp} ·</span>}
+                &ldquo;{content.query}&rdquo;
+              </p>
+            )}
+            <p style={{ margin: 0, fontSize: "0.5rem", color: "var(--muted)", letterSpacing: "0.12em" }}>
+              {historyIndex + 1} / {total}
+            </p>
+          </div>
+
           <button
             onClick={() => onNavigate(historyIndex + 1)}
             disabled={isLatest}
@@ -230,8 +247,8 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
               background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 5,
               color: isLatest ? "var(--muted)" : "var(--teal)",
               cursor: isLatest ? "default" : "pointer",
-              padding: "3px 9px", fontSize: "0.72rem", lineHeight: 1, transition: "all 0.15s",
-              opacity: isLatest ? 0.35 : 1,
+              padding: "3px 8px", fontSize: "0.72rem", lineHeight: 1, transition: "all 0.15s",
+              opacity: isLatest ? 0.35 : 1, flexShrink: 0,
             }}
           >→</button>
         </div>
