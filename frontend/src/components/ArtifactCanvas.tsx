@@ -11,6 +11,9 @@ export interface CanvasContent {
 interface Props {
   content: CanvasContent | null;
   onDismiss: () => void;
+  history?: CanvasContent[];
+  historyIndex?: number;
+  onNavigate?: (index: number) => void;
 }
 
 // ── Inline renderer — bold + inline code ─────────────────────────────────────
@@ -103,8 +106,10 @@ function renderMarkdown(body: string): React.ReactNode[] {
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
-export default function ArtifactCanvas({ content, onDismiss }: Props) {
+export default function ArtifactCanvas({ content, onDismiss, history = [], historyIndex = 0, onNavigate }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const total = history.length;
+  const isLatest = historyIndex === total - 1;
 
   useEffect(() => {
     if (content) scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
@@ -160,7 +165,7 @@ export default function ArtifactCanvas({ content, onDismiss }: Props) {
       {/* Scrollable content */}
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "22px 24px 40px" }}>
         {content ? (
-          <div key={content.title} style={{ animation: "typeReveal 3.8s ease-out both" }}>
+          <div key={content.title} style={{ animation: isLatest ? "typeReveal 3.8s ease-out both" : "none" }}>
           {content.type === "code" ? (
             <pre style={{
               margin: 0, background: "rgba(4,8,15,0.9)",
@@ -196,6 +201,41 @@ export default function ArtifactCanvas({ content, onDismiss }: Props) {
           </div>
         )}
       </div>
+
+      {/* History navigation — only shown when there are multiple entries */}
+      {total > 1 && onNavigate && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 12,
+          padding: "8px 16px", borderTop: "1px solid rgba(34,211,238,0.07)",
+          flexShrink: 0, background: "rgba(4,8,15,0.3)",
+        }}>
+          <button
+            onClick={() => onNavigate(historyIndex - 1)}
+            disabled={historyIndex === 0}
+            style={{
+              background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 5,
+              color: historyIndex === 0 ? "var(--muted)" : "var(--teal)",
+              cursor: historyIndex === 0 ? "default" : "pointer",
+              padding: "3px 9px", fontSize: "0.72rem", lineHeight: 1, transition: "all 0.15s",
+              opacity: historyIndex === 0 ? 0.35 : 1,
+            }}
+          >←</button>
+          <span style={{ fontSize: "0.58rem", color: "var(--muted)", letterSpacing: "0.12em", minWidth: 42, textAlign: "center" }}>
+            {historyIndex + 1} / {total}
+          </span>
+          <button
+            onClick={() => onNavigate(historyIndex + 1)}
+            disabled={isLatest}
+            style={{
+              background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 5,
+              color: isLatest ? "var(--muted)" : "var(--teal)",
+              cursor: isLatest ? "default" : "pointer",
+              padding: "3px 9px", fontSize: "0.72rem", lineHeight: 1, transition: "all 0.15s",
+              opacity: isLatest ? 0.35 : 1,
+            }}
+          >→</button>
+        </div>
+      )}
 
       <style>{`
         @keyframes canvasPing {

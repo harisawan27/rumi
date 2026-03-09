@@ -48,7 +48,9 @@ export default function DashboardPage() {
 
   // ── Canvas state ────────────────────────────────────────────────────────────
   const [canvasOpen, setCanvasOpen] = useState(false);
-  const [canvasContent, setCanvasContent] = useState<CanvasContent | null>(null);
+  const [canvasHistory, setCanvasHistory] = useState<CanvasContent[]>([]);
+  const [canvasIndex, setCanvasIndex] = useState(0);
+  const canvasContent = canvasHistory[canvasIndex] ?? null;
 
   // ── Override command state ──────────────────────────────────────────────────
   const [overrideOpen, setOverrideOpen] = useState(false);
@@ -382,7 +384,6 @@ export default function DashboardPage() {
   // ── Canvas ────────────────────────────────────────────────────────────────
   function handleCanvasDismiss() {
     setCanvasOpen(false);
-    setTimeout(() => setCanvasContent(null), 550);
   }
 
   // ── Audio playback ────────────────────────────────────────────────────────
@@ -444,12 +445,16 @@ export default function DashboardPage() {
       setIsProcessing(false);
       setTranscript("");
       const m = msg as { type: string; title: string; content: string; content_type?: string };
-      setCanvasContent({
+      const newItem: CanvasContent = {
         title: m.title,
         body: m.content,
         type: (m.content_type as "text" | "code" | "markdown") ?? "markdown",
+      };
+      setCanvasHistory(prev => {
+        const next = [...prev, newItem];
+        setCanvasIndex(next.length - 1);
+        return next;
       });
-      // Open immediately — Gemini voice starts simultaneously, typewriter animates in sync
       setCanvasOpen(true);
     } else if (msg.type === "detection_update") {
       const d = msg as { type: string; state: string; confidence: number; cues: string[]; landmarks: Record<string, number> };
@@ -762,7 +767,13 @@ export default function DashboardPage() {
 
         {/* ZONE 2 — Artifact Canvas */}
         <div className={`canvas-zone${canvasOpen ? " canvas-open" : ""}`}>
-          <ArtifactCanvas content={canvasContent} onDismiss={handleCanvasDismiss} />
+          <ArtifactCanvas
+            content={canvasContent}
+            onDismiss={handleCanvasDismiss}
+            history={canvasHistory}
+            historyIndex={canvasIndex}
+            onNavigate={setCanvasIndex}
+          />
         </div>
 
         {/* Canvas pull tab — visible when session active but canvas closed */}
