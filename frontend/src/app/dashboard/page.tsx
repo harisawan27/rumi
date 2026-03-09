@@ -9,6 +9,7 @@ import {
   endSession,
   connectObserveSocket,
   sendInterventionResponse,
+  getCanvasHistory,
   type InterventionMessage,
   type WsMessage,
 } from "@/services/session";
@@ -70,6 +71,10 @@ export default function DashboardPage() {
   const isTalkingRef = useRef<boolean>(false);
   const overrideInputRef = useRef<HTMLInputElement | null>(null);
   const captureFrameRef = useRef<(() => Promise<string | null>) | null>(null);
+  const preListenerRef = useRef<SpeechRecognition | null>(null);
+  const wakeWordActiveRef = useRef<boolean>(false);
+  const micEnabledRef = useRef<boolean>(true);
+  const [wakeListening, setWakeListening] = useState(false);
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -85,6 +90,19 @@ export default function DashboardPage() {
 
         const sid = await startSession();
         setSessionId(sid);
+
+        // Load canvas history via REST immediately — no WS timing dependency
+        getCanvasHistory().then(items => {
+          if (items.length > 0) {
+            const mapped = items.map(i => ({
+              title: i.title, body: i.content,
+              type: (i.content_type as "text" | "code" | "markdown") ?? "markdown",
+              query: i.query, timestamp: i.timestamp,
+            }));
+            setCanvasHistory(mapped);
+            setCanvasIndex(mapped.length - 1);
+          }
+        }).catch(() => { /* silently fall back to WS canvas_history message */ });
 
         // Webcam
         try {
@@ -162,6 +180,9 @@ export default function DashboardPage() {
       playCtxRef.current?.close();
       playCtxRef.current = null;
       recognitionRef.current?.abort();
+      wakeWordActiveRef.current = false;
+      preListenerRef.current?.abort();
+      preListenerRef.current = null;
       if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
     };
   }, [router]);
@@ -194,6 +215,9 @@ export default function DashboardPage() {
     prevSpeakingRef.current = speaking;
   }, [speaking]);
 
+  // Keep micEnabledRef in sync for wake word callbacks
+  useEffect(() => { micEnabledRef.current = micEnabled; }, [micEnabled]);
+
   // Space bar shortcut for mic
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -205,6 +229,17 @@ export default function DashboardPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Start/stop wake word listener based on active state
+  useEffect(() => {
+    if (observationState === "active" && micEnabled && sessionReady) {
+      startWakeWordListener();
+    } else {
+      stopWakeWordListener();
+    }
+    return () => stopWakeWordListener();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [observationState, micEnabled, sessionReady]);
 
   // "/" opens override command — Escape closes it
   useEffect(() => {
@@ -229,6 +264,77 @@ export default function DashboardPage() {
 
   // ── Speech Recognition ────────────────────────────────────────────────────
   const transcriptRef = useRef<string>("");
+
+  // ── Wake word pre-listener ("Hey Rumi" / "Rumi") ─────────────────────────
+  // Phonetic variants — speech recognition often mishears "Rumi" as these
+  const WAKE_WORDS = [
+    "rumi", "roomy", "roomie", "room me", "room e", "room-e", "roome",
+    "hey rumi", "hey roomy", "hey roomie", "hey room", "hey, rumi",
+    "a rumi", "arumi", "room i",
+  ];
+
+  function stopWakeWordListener() {
+    wakeWordActiveRef.current = false;
+    preListenerRef.current?.abort();
+    preListenerRef.current = null;
+    setWakeListening(false);
+  }
+
+  function startWakeWordListener() {
+    const SR =
+      (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition })
+        .SpeechRecognition ??
+      (window as unknown as { webkitSpeechRecognition?: typeof window.SpeechRecognition })
+        .webkitSpeechRecognition;
+    if (!SR || !micEnabledRef.current || isTalkingRef.current) return;
+    if (preListenerRef.current) return; // already running
+
+    wakeWordActiveRef.current = true;
+    setWakeListening(true);
+
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    preListenerRef.current = rec;
+
+    rec.onresult = (e: SpeechRecognitionEvent) => {
+      // Accumulate the full transcript (all results, final + interim) for reliable matching
+      let fullText = "";
+      for (let i = 0; i < e.results.length; i++) {
+        fullText += e.results[i][0].transcript.toLowerCase() + " ";
+      }
+      fullText = fullText.trim();
+      if (WAKE_WORDS.some(w => fullText.includes(w))) {
+        wakeWordActiveRef.current = false;
+        rec.abort();
+        preListenerRef.current = null;
+        setWakeListening(false);
+        // Brief pause lets mic hardware fully release before main listener grabs it
+        setTimeout(() => startListeningWithRef(), 180);
+      }
+    };
+
+    rec.onend = () => {
+      preListenerRef.current = null;
+      // Auto-restart — handles browser's 15-min recognition kill
+      if (wakeWordActiveRef.current && micEnabledRef.current && !isTalkingRef.current) {
+        setTimeout(() => {
+          wakeWordActiveRef.current = false; // reset so startWakeWordListener() passes the guard
+          startWakeWordListener();
+        }, 200);
+      } else {
+        setWakeListening(false);
+      }
+    };
+
+    rec.onerror = (e: SpeechRecognitionErrorEvent) => {
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      console.warn("Wake word listener error:", e.error);
+    };
+
+    try { rec.start(); } catch { /* ignore race */ }
+  }
 
   function startListeningWithRef() {
     const SpeechRecognition =
@@ -293,6 +399,10 @@ export default function DashboardPage() {
         setTranscript("");
         setRumiEmotion("neutral");
       }
+      // Resume wake word standby after main listener finishes
+      setTimeout(() => {
+        if (micEnabledRef.current && !isTalkingRef.current) startWakeWordListener();
+      }, 400);
     };
 
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
@@ -339,6 +449,8 @@ export default function DashboardPage() {
     if (isTalkingRef.current) {
       stopListening();
     } else {
+      // Stop wake word standby before starting main listener
+      stopWakeWordListener();
       startListeningWithRef();
     }
   }
@@ -456,8 +568,10 @@ export default function DashboardPage() {
         type: (i.content_type as "text" | "code" | "markdown") ?? "markdown",
         query: i.query, timestamp: i.timestamp,
       }));
-      setCanvasHistory(items);
-      setCanvasIndex(items.length - 1);
+      if (items.length > 0) {
+        setCanvasHistory(items);
+        setCanvasIndex(items.length - 1);
+      }
     } else if (msg.type === "text_response") {
       if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
       setIsProcessing(false);
@@ -555,7 +669,7 @@ export default function DashboardPage() {
           </div>
           {/* Canvas indicator — shows new split-screen feature is active */}
           <div
-            onClick={() => canvasOpen ? handleCanvasDismiss() : openCanvas({ title: "Canvas Ready", body: "## Artifact Canvas\n\nThis is your projection screen.\n\nAsk Rumi anything complex — a poem, a code problem, a calculation — and the answer will render here while Rumi speaks it aloud.\n\n**Notebook mode:** Point your camera at a notebook or screen and ask Rumi to solve or explain what it sees.\n\n> Press `/` to type instead of speaking.", type: "markdown" })}
+            onClick={() => canvasOpen ? handleCanvasDismiss() : setCanvasOpen(true)}
             style={{
               display: "flex", alignItems: "center", gap: 5,
               padding: "3px 10px", borderRadius: 99, cursor: "pointer",
@@ -597,7 +711,7 @@ export default function DashboardPage() {
             )}
 
             {/* Robot — clickable body zones */}
-            <div style={{ position: "relative", display: "inline-block" }}>
+            <div className="robot-wrap" style={{ position: "relative", display: "inline-block" }}>
               <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
 
               {/* Zone: head → expression panel */}
@@ -766,21 +880,43 @@ export default function DashboardPage() {
                     </svg>
                   )}
                 </button>
-                <p style={{ fontSize: "0.72rem", color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)" }}>
-                  {isTalking ? "Tap or Space to send" : isProcessing ? "Sending to Rumi…" : speaking ? "Rumi is speaking" : "Tap · Space · / for text"}
+                {/* Status label — always directly under mic */}
+                <p style={{ margin: 0, fontSize: "0.72rem", color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)" }}>
+                  {isTalking ? "Tap or Space to send" : isProcessing ? "Sending to Rumi…" : speaking ? "Rumi is speaking" : "Tap to speak"}
                 </p>
-              </div>
-            )}
-
-            {/* Intervention card */}
-            {intervention && (
-              <div className="w-full animate-fade-up" style={{ maxWidth: 400, padding: "0 16px" }}>
-                <InterventionCard
-                  interactionId={intervention.interactionId}
-                  trigger={intervention.trigger}
-                  text={intervention.text}
-                  onRespond={handleInterventionRespond}
-                />
+                {/* Type button — shown when idle */}
+                {!isTalking && !isProcessing && !speaking && (
+                  <button
+                    onClick={() => setOverrideOpen(true)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 5,
+                      background: "rgba(34,211,238,0.06)", border: "1px solid rgba(34,211,238,0.18)",
+                      borderRadius: 99, padding: "5px 14px", cursor: "pointer",
+                      color: "var(--muted)", transition: "all 0.15s",
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = "rgba(34,211,238,0.12)"; e.currentTarget.style.color = "var(--teal)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "rgba(34,211,238,0.06)"; e.currentTarget.style.color = "var(--muted)"; }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="4" width="20" height="16" rx="2"/>
+                      <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M6 16h12"/>
+                    </svg>
+                    <span style={{ fontSize: "0.65rem", letterSpacing: "0.06em" }}>Type</span>
+                  </button>
+                )}
+                {/* Wake word standby indicator */}
+                {wakeListening && !isTalking && !isProcessing && !speaking && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <div style={{
+                      width: 5, height: 5, borderRadius: "50%",
+                      background: "var(--teal)", opacity: 0.55,
+                      animation: "statusPulse 2.4s ease-in-out infinite",
+                    }} />
+                    <span style={{ fontSize: "0.58rem", color: "var(--muted)", opacity: 0.7, letterSpacing: "0.06em" }}>
+                      Say &ldquo;Hey Rumi&rdquo;
+                    </span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -802,9 +938,7 @@ export default function DashboardPage() {
         {observationState !== "paused" && !canvasOpen && (
           <div
             className="canvas-pull-tab"
-            onClick={() => {
-              openCanvas({ title: "Canvas Ready", body: "## Artifact Canvas\n\nThis is your projection screen.\n\nAsk Rumi anything complex — a poem, a code problem, a calculation — and the answer will render here while Rumi speaks it aloud.\n\n**Notebook mode:** Point your camera at a notebook and ask Rumi to solve or explain what it sees.\n\n> Press `/` to type instead of speaking.", type: "markdown" });
-            }}
+            onClick={() => setCanvasOpen(true)}
             title="Open artifact canvas"
           >
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="9 18 15 12 9 6"/></svg>
@@ -812,6 +946,22 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      {/* Intervention card — fixed overlay, always on-screen */}
+      {intervention && (
+        <div style={{
+          position: "fixed", bottom: 90, left: "50%", transform: "translateX(-50%)",
+          zIndex: 50, width: "min(420px, calc(100vw - 32px))",
+          animation: "interventionIn 0.3s ease",
+        }}>
+          <InterventionCard
+            interactionId={intervention.interactionId}
+            trigger={intervention.trigger}
+            text={intervention.text}
+            onRespond={handleInterventionRespond}
+          />
+        </div>
+      )}
 
       {/* Override command — slides up from bottom */}
       <div className={`override-panel${overrideOpen ? " open" : ""}`}>
@@ -887,7 +1037,7 @@ export default function DashboardPage() {
           flex-direction: column;
           min-width: 0;
           min-height: 0;
-          overflow: visible;
+          overflow: hidden;
           position: relative;
         }
         .canvas-zone {
@@ -923,10 +1073,15 @@ export default function DashboardPage() {
         /* ── Rumi stage ────────────────────────────────────────────────── */
         .rumi-stage {
           flex: 1; display: flex; flex-direction: column; align-items: center;
-          justify-content: center; gap: 8px; overflow: visible; padding: 4px 16px 10px;
+          justify-content: flex-start; gap: 8px; overflow-y: auto; overflow-x: hidden;
+          padding: clamp(6px, 2vh, 24px) 16px 16px;
+          min-height: 0;
+          /* Hide scrollbar but keep scrollability */
+          scrollbar-width: none;
         }
+        .rumi-stage::-webkit-scrollbar { display: none; }
         .rumi-greeting {
-          font-family: var(--font-display), serif;
+          font-family: var(--font-cormorant), 'Cormorant Garamond', serif;
           font-size: clamp(1.1rem, 3vw, 1.5rem); color: var(--gold);
           font-weight: 400; letter-spacing: 0.06em; margin: 0;
         }
@@ -1071,11 +1226,27 @@ export default function DashboardPage() {
             border-left: none !important;
             border-top: 1px solid rgba(34,211,238,0.1);
           }
-          .rumi-stage { gap: 4px; padding: 2px 8px 8px; }
+          .rumi-stage { gap: 4px; }
           .hud-panel  { width: min(52vw, 200px); }
           .popup-head  { position: fixed; top: 68px;  right: 10px; left: auto; }
-          .popup-chest { position: fixed; bottom: 70px; right: 10px; left: auto; top: auto; }
-          .override-panel { padding: 10px 14px 28px; }
+          .popup-chest { position: fixed; bottom: 140px; right: 10px; left: auto; top: auto; }
+          .override-panel { padding: 10px 14px env(safe-area-inset-bottom, 16px); }
+        }
+
+        /* ── Robot scale-down for smaller viewports ────────────────────── */
+        /* WRAP_H = 480px. Scale down so robot doesn't dominate layout.    */
+        .robot-wrap { transform-origin: top center; }
+
+        @media (max-height: 780px) {
+          .robot-wrap { transform: scale(0.82); margin-bottom: -86px; }
+        }
+        @media (max-height: 660px) {
+          .robot-wrap { transform: scale(0.65); margin-bottom: -168px; }
+          .rumi-stage { gap: 4px; }
+        }
+        @media (max-height: 520px) {
+          .robot-wrap { transform: scale(0.5); margin-bottom: -240px; }
+          .rumi-stage { gap: 2px; padding: 4px 8px 8px; }
         }
       `}</style>
     </main>

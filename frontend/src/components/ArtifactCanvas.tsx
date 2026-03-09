@@ -168,6 +168,25 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "22px 24px 40px" }}>
         {content ? (
           <div key={content.title} style={{ animation: isLatest ? "typeReveal 3.8s ease-out both" : "none" }}>
+          {/* Full query label */}
+          {content.query && (
+            <div style={{
+              marginBottom: 18, paddingBottom: 14,
+              borderBottom: "1px solid rgba(34,211,238,0.08)",
+            }}>
+              {content.timestamp && (
+                <span style={{ fontSize: "0.5rem", color: "var(--muted)", letterSpacing: "0.14em", textTransform: "uppercase", display: "block", marginBottom: 4 }}>
+                  {content.timestamp}
+                </span>
+              )}
+              <p style={{
+                margin: 0, fontSize: "0.78rem", color: "var(--teal)",
+                lineHeight: 1.65, opacity: 0.85, fontStyle: "italic",
+              }}>
+                &ldquo;{content.query}&rdquo;
+              </p>
+            </div>
+          )}
           {content.type === "code" ? (
             <pre style={{
               margin: 0, background: "rgba(4,8,15,0.9)",
@@ -223,22 +242,10 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
             }}
           >←</button>
 
-          {/* Query label + counter */}
-          <div style={{ flex: 1, minWidth: 0, textAlign: "center" }}>
-            {content?.query && (
-              <p style={{
-                margin: "0 0 1px", fontSize: "0.56rem", color: "var(--teal)",
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                opacity: 0.75,
-              }}>
-                {content.timestamp && <span style={{ color: "var(--muted)", marginRight: 4 }}>{content.timestamp} ·</span>}
-                &ldquo;{content.query}&rdquo;
-              </p>
-            )}
-            <p style={{ margin: 0, fontSize: "0.5rem", color: "var(--muted)", letterSpacing: "0.12em" }}>
-              {historyIndex + 1} / {total}
-            </p>
-          </div>
+          {/* Counter only — full query is shown inside content area */}
+          <p style={{ flex: 1, margin: 0, fontSize: "0.5rem", color: "var(--muted)", letterSpacing: "0.12em", textAlign: "center" }}>
+            {historyIndex + 1} / {total}
+          </p>
 
           <button
             onClick={() => onNavigate(historyIndex + 1)}

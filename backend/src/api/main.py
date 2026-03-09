@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from fastapi import FastAPI, Depends, HTTPException, Header
@@ -296,7 +297,6 @@ async def debug_trigger(trigger_type: str, uid: str = Depends(get_current_uid)):
         "C": mgr._fire_trigger_c,
         "E": mgr._fire_trigger_e,
     }
-    import asyncio
     asyncio.create_task(dispatch[trigger_type]())
     return {"fired": trigger_type}
 
@@ -410,24 +410,31 @@ async def _flash_with_image(text: str, image_b64: str, system_prompt: str = "") 
 # Canvas history — Firestore persistence (cap 20 per user)
 # ---------------------------------------------------------------------------
 
+def _do_save_canvas_entry(uid: str, query: str, title: str, content: str, content_type: str) -> None:
+    """Synchronous Firestore write — run via executor to avoid blocking the event loop."""
+    from src.memory.firestore_client import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    col = db.collection("users").document(uid).collection("canvas_history")
+    col.add({
+        "query": query,
+        "title": title,
+        "content": content,
+        "content_type": content_type,
+        "timestamp": datetime.now(timezone.utc),
+    })
+    # Trim oldest beyond 20
+    docs = list(col.order_by("timestamp", direction="DESCENDING").stream())
+    for doc in docs[20:]:
+        doc.reference.delete()
+
+
 async def _save_canvas_entry(uid: str, query: str, title: str, content: str, content_type: str) -> None:
-    """Persist a canvas answer to Firestore. Trims to 20 most recent entries."""
+    """Persist a canvas answer to Firestore without blocking the event loop."""
     try:
-        from src.memory.firestore_client import get_db
-        from datetime import datetime, timezone
-        db = get_db()
-        col = db.collection("users").document(uid).collection("canvas_history")
-        col.add({
-            "query": query,
-            "title": title,
-            "content": content,
-            "content_type": content_type,
-            "timestamp": datetime.now(timezone.utc),
-        })
-        # Trim oldest beyond 20
-        docs = list(col.order_by("timestamp", direction="DESCENDING").stream())
-        for doc in docs[20:]:
-            doc.reference.delete()
+        await asyncio.get_event_loop().run_in_executor(
+            None, _do_save_canvas_entry, uid, query, title, content, content_type
+        )
     except Exception as exc:
         logger.warning("_save_canvas_entry: failed: %s", exc)
 
@@ -460,6 +467,13 @@ def _load_canvas_history(uid: str, limit: int = 20) -> list:
         return []
 
 
+@app.get("/canvas/history")
+async def get_canvas_history(uid: str = Depends(get_current_uid)):
+    """REST endpoint — lets frontend fetch history at page load without WS timing dependency."""
+    items = await asyncio.get_event_loop().run_in_executor(None, _load_canvas_history, uid)
+    return {"items": items}
+
+
 # ---------------------------------------------------------------------------
 # WebSocket observe (T030 contract)
 # ---------------------------------------------------------------------------
@@ -481,14 +495,8 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
     mgr = _get_session_manager(uid)
     mgr._websocket = websocket
 
-    # Connect Gemini Live API now that WebSocket is established
-    try:
-        await mgr.connect_gemini()
-    except Exception as exc:
-        await websocket.send_text(json.dumps({"type": "error", "code": "GEMINI_DISCONNECTED", "message": str(exc)}))
-        logger.warning("ws_observe: Gemini connect failed: %s", exc)
-
-    # Send canvas history so frontend can pre-populate navigation
+    # Send canvas history FIRST — before Gemini connects so frontend shows
+    # history immediately without waiting for the Gemini handshake delay
     try:
         history = await asyncio.get_event_loop().run_in_executor(
             None, _load_canvas_history, uid
@@ -499,9 +507,14 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
     except Exception as exc:
         logger.warning("ws_observe: canvas_history send failed: %s", exc)
 
-    # Keepalive ping every 30s
-    import asyncio
+    # Connect Gemini Live API (can take a few seconds — history already sent above)
+    try:
+        await mgr.connect_gemini()
+    except Exception as exc:
+        await websocket.send_text(json.dumps({"type": "error", "code": "GEMINI_DISCONNECTED", "message": str(exc)}))
+        logger.warning("ws_observe: Gemini connect failed: %s", exc)
 
+    # Keepalive ping every 30s
     async def _ping():
         while True:
             await asyncio.sleep(30)

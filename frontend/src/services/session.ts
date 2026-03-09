@@ -84,6 +84,22 @@ export interface InterventionMessage {
   options: string[];
 }
 
+export interface CanvasHistoryItem {
+  query: string;
+  title: string;
+  content: string;
+  content_type: string;
+  timestamp: string;
+}
+
+export async function getCanvasHistory(): Promise<CanvasHistoryItem[]> {
+  const headers = await authHeaders();
+  const res = await fetch(`${BACKEND_URL}/canvas/history`, { headers });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.items ?? [];
+}
+
 export type WsMessage =
   | InterventionMessage
   | { type: "state"; state: string; confidence: number }
