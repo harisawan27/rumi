@@ -314,15 +314,20 @@ def _make_title(query: str, max_words: int = 5) -> str:
     return " ".join(words[:max_words]).title() + "\u2026"
 
 
-async def _flash_text_only(text: str) -> str:
+async def _flash_text_only(text: str, system_prompt: str = "") -> str:
     """Call Gemini Flash for a text-only response. Returns markdown string.
     Tries gemini-2.5-flash first, falls back to gemini-2.0-flash on failure.
+    system_prompt carries the user's identity/memory so Flash knows who it's talking to.
     """
     from google import genai as _genai
 
+    identity_block = f"{system_prompt}\n\n---\n\n" if system_prompt else ""
     prompt = (
-        f'The user asked Rumi: "{text}"\n\n'
-        "Respond in well-structured Markdown. If it is a creative request (poem, story), "
+        f"{identity_block}"
+        f'The user asked: "{text}"\n\n'
+        "Respond as Rumi in well-structured Markdown. Use the identity and memory above "
+        "to give a personalised answer — mention the user by name and reference their "
+        "projects or context where relevant. If it is a creative request (poem, story), "
         "write it beautifully formatted. If it is a question or task, give a thorough "
         "step-by-step answer with headings. Be the Sufi-Engineer — precise and soulful."
     )
@@ -362,7 +367,7 @@ async def _flash_canvas_task(text: str, image_b64: str | None, ws) -> None:
         logger.warning("_flash_canvas_task: failed: %s", exc)
 
 
-async def _flash_with_image(text: str, image_b64: str) -> str:
+async def _flash_with_image(text: str, image_b64: str, system_prompt: str = "") -> str:
     """Call Gemini Flash multimodal (notebook mode). Returns markdown string.
     PRIVACY_CHECK: image processed ephemerally — never persisted.
     """
@@ -372,16 +377,17 @@ async def _flash_with_image(text: str, image_b64: str) -> str:
 
     client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     image_bytes = _b64.b64decode(image_b64)
+    identity_block = f"{system_prompt}\n\n---\n\n" if system_prompt else ""
     text_prompt = (
+        f"{identity_block}"
         f'The user asked: "{text}"\n\n'
         "A live camera frame is attached as ambient context. "
         "IMPORTANT: Do NOT describe the camera image unless it is directly relevant "
         "to answering the question (e.g. the user is holding up a document, math problem, "
         "diagram, or code). If the image just shows the user's face or general environment, "
         "ignore it completely and answer the text question directly.\n\n"
-        "Respond in well-structured Markdown. If it is a creative request (poem, story), "
-        "write it beautifully formatted. If it is a question or task, give a thorough "
-        "step-by-step answer with headings. Be the Sufi-Engineer — precise and soulful."
+        "Respond as Rumi in well-structured Markdown. Use the identity context above "
+        "to personalise your answer. Be the Sufi-Engineer — precise and soulful."
     )
     contents = [
         _types.Part(inline_data=_types.Blob(data=image_bytes, mime_type="image/jpeg")),
@@ -521,7 +527,8 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                 # Flash = single source of truth
                                 content = ""
                                 try:
-                                    content = await (_flash_with_image(t, img) if img else _flash_text_only(t))
+                                    sys_prompt = mgr._system_prompt or ""
+                                content = await (_flash_with_image(t, img, sys_prompt) if img else _flash_text_only(t, sys_prompt))
                                 except Exception as exc:
                                     logger.warning("ws_observe: Flash threw: %s", exc)
 

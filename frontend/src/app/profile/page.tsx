@@ -336,6 +336,50 @@ export default function ProfilePage() {
 
         <div className="flex flex-col gap-4">
 
+          {/* Companion Style */}
+          <div className="animate-fade-up">
+            <div className="rumi-card" style={{ borderColor: "rgba(201,168,76,0.3)", background: "rgba(201,168,76,0.03)" }}>
+              <p className="uppercase-label mb-1" style={{ color: "var(--gold)" }}>Companion Style</p>
+              <p className="text-xs mb-4" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
+                How should your AI companion sound? Be specific — the more detail, the better.
+                Pick a preset below or write your own.
+              </p>
+
+              {/* Quick-pick presets */}
+              <div className="flex flex-wrap gap-2 mb-4">
+                {[
+                  { label: "Sufi Mystic", value: "Like Jalāl ad-Dīn Rūmī — warm, poetic, and philosophical. Draw on Sufi wisdom, use metaphor naturally, and quote Rumi or Iqbal accurately. Blend engineering precision with spiritual depth. Use Urdu terms of warmth (yaar, bhai) when the moment calls." },
+                  { label: "Sarcastic Friend", value: "Like a witty, brutally honest friend. Call me out when I'm being lazy or overthinking. Use dark humour, light roasts, and zero sugarcoating — but always with genuine care underneath. Keep it real." },
+                  { label: "Strict Professor", value: "Like a demanding Oxford professor — no fluff, no hand-holding. Push me to think harder and justify every decision. High standards, concise feedback, intellectual rigour. Compliment only when truly earned." },
+                  { label: "Hype Coach", value: "Like an enthusiastic life coach and hype man. Celebrate every small win. Keep energy high, use encouraging language, and remind me of my potential when I'm stuck. Motivational but not fake." },
+                  { label: "Calm Mentor", value: "Like a patient senior engineer who has seen it all. Calm, methodical, never rushed. Walk me through things step by step. Make complex problems feel manageable. Zero drama." },
+                  { label: "Philosopher", value: "Like Socrates — answer my questions with deeper questions. Push me to examine assumptions, think about first principles, and arrive at my own conclusions. Thought-provoking over answer-giving." },
+                ].map(preset => (
+                  <button
+                    key={preset.label}
+                    onClick={() => patch({ companion_style: preset.value })}
+                    className="rumi-tag"
+                    style={{
+                      cursor: "pointer", padding: "4px 12px", fontSize: "0.72rem",
+                      background: (identity.companion_style as string) === preset.value ? "rgba(201,168,76,0.15)" : "var(--surface-2)",
+                      borderColor: (identity.companion_style as string) === preset.value ? "var(--gold)" : "var(--border)",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+
+              <EditableText
+                label="Custom style description"
+                value={String(identity.companion_style ?? "")}
+                onSave={(v) => patch({ companion_style: v })}
+                multiline
+              />
+            </div>
+          </div>
+
           {/* Personal */}
           <div className="animate-fade-up delay-100">
             <Section title="Personal">
