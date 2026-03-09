@@ -302,6 +302,105 @@ async def debug_trigger(trigger_type: str, uid: str = Depends(get_current_uid)):
 
 
 # ---------------------------------------------------------------------------
+# Canvas helpers (Phase 3 + 5)
+# ---------------------------------------------------------------------------
+
+def _make_title(query: str, max_words: int = 5) -> str:
+    """Derive a short canvas title from the user query."""
+    q = query.strip().rstrip("?!.")
+    words = q.split()
+    if len(words) <= max_words:
+        return q.title()
+    return " ".join(words[:max_words]).title() + "\u2026"
+
+
+async def _flash_text_only(text: str) -> str:
+    """Call Gemini Flash for a text-only response. Returns markdown string.
+    Tries gemini-2.5-flash first, falls back to gemini-2.0-flash on failure.
+    """
+    from google import genai as _genai
+
+    prompt = (
+        f'The user asked Rumi: "{text}"\n\n'
+        "Respond in well-structured Markdown. If it is a creative request (poem, story), "
+        "write it beautifully formatted. If it is a question or task, give a thorough "
+        "step-by-step answer with headings. Be the Sufi-Engineer — precise and soulful."
+    )
+    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        try:
+            logger.info("_flash_text_only: trying %s for: %.60s", model, text)
+            client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=prompt,
+            )
+            result = (response.text or "").strip()
+            logger.info("_flash_text_only: %s returned %d chars", model, len(result))
+            if result:
+                return result
+        except Exception as exc:
+            logger.warning("_flash_text_only: %s failed: %s", model, exc)
+    return ""
+
+
+async def _flash_canvas_task(text: str, image_b64: str | None, ws) -> None:
+    """Generate canvas content via Flash and push text_response to frontend.
+    Runs as a background task — never blocks voice response.
+    """
+    import json as _json
+    try:
+        content = await (_flash_with_image(text, image_b64) if image_b64 else _flash_text_only(text))
+        if content and len(content) > 30:
+            await ws.send_text(_json.dumps({
+                "type": "text_response",
+                "title": _make_title(text),
+                "content": content,
+                "content_type": "markdown",
+            }))
+            logger.info("_flash_canvas_task: sent %d chars", len(content))
+    except Exception as exc:
+        logger.warning("_flash_canvas_task: failed: %s", exc)
+
+
+async def _flash_with_image(text: str, image_b64: str) -> str:
+    """Call Gemini Flash multimodal (notebook mode). Returns markdown string.
+    PRIVACY_CHECK: image processed ephemerally — never persisted.
+    """
+    import base64 as _b64
+    from google import genai as _genai
+    from google.genai import types as _types
+
+    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    image_bytes = _b64.b64decode(image_b64)
+    text_prompt = (
+        f'The user asked: "{text}"\n\n'
+        "A live camera frame is attached as ambient context. "
+        "IMPORTANT: Do NOT describe the camera image unless it is directly relevant "
+        "to answering the question (e.g. the user is holding up a document, math problem, "
+        "diagram, or code). If the image just shows the user's face or general environment, "
+        "ignore it completely and answer the text question directly.\n\n"
+        "Respond in well-structured Markdown. If it is a creative request (poem, story), "
+        "write it beautifully formatted. If it is a question or task, give a thorough "
+        "step-by-step answer with headings. Be the Sufi-Engineer — precise and soulful."
+    )
+    contents = [
+        _types.Part(inline_data=_types.Blob(data=image_bytes, mime_type="image/jpeg")),
+        _types.Part(text=text_prompt),
+    ]
+    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        try:
+            response = await client.aio.models.generate_content(
+                model=model, contents=contents
+            )
+            result = (response.text or "").strip()
+            if result:
+                return result
+        except Exception as exc:
+            logger.warning("_flash_with_image: %s failed: %s", model, exc)
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # WebSocket observe (T030 contract)
 # ---------------------------------------------------------------------------
 
@@ -389,18 +488,64 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 else:
                     logger.warning("audio_end received but Gemini not connected — reply lost")
             elif msg.get("type") == "user_text":
-                # Web Speech API transcript — use query() (same proven path as greeting)
+                # Web Speech API transcript — Flash generates text (single source of truth),
+                # Live speaks it verbatim, canvas opens 1500ms later (voice-first UX).
+                # Phase 5: optional camera snapshot for notebook mode.
                 text = msg.get("text", "").strip()
+                image_b64 = msg.get("image")  # base64 JPEG or None
                 if text:
-                    async def _respond(t: str = text) -> None:
-                        try:
-                            await mgr.ensure_gemini_connected()
-                            if mgr.gemini and mgr.gemini.is_connected:
-                                await mgr.gemini.query(t)
-                                mgr._reset_gemini_idle_timer()
-                        except Exception as exc:
-                            logger.warning("ws_observe: user_text response failed: %s", exc)
-                    asyncio.create_task(_respond())
+                    # Safety: reset stuck flag if no active speak task
+                    if mgr._is_responding and (mgr._speak_task is None or mgr._speak_task.done()):
+                        logger.warning("ws_observe: _is_responding stuck — resetting")
+                        mgr._is_responding = False
+                    if mgr._is_responding:
+                        logger.info("ws_observe: duplicate user_text dropped — already responding")
+                    else:
+                        async def _respond(t: str = text, img=image_b64, _ws=websocket) -> None:
+                            mgr._is_responding = True
+                            mgr._suppress_audio = True
+                            try:
+                                # Cancel greeting if still running
+                                gt = mgr._greeting_task
+                                if gt and not gt.done():
+                                    gt.cancel()
+
+                                # Clear any stale audio from greeting / previous turn
+                                try:
+                                    await asyncio.sleep(0.3)
+                                    await _ws.send_text(json.dumps({"type": "audio_interrupt"}))
+                                except Exception:
+                                    pass  # WS hiccup — still try to generate content
+                                mgr._suppress_audio = False
+
+                                # Flash = single source of truth
+                                content = ""
+                                try:
+                                    content = await (_flash_with_image(t, img) if img else _flash_text_only(t))
+                                except Exception as exc:
+                                    logger.warning("ws_observe: Flash threw: %s", exc)
+
+                                if not content or len(content) <= 30:
+                                    content = (
+                                        "I'm having trouble reaching my thoughts right now. "
+                                        "Please try again in a moment."
+                                    )
+
+                                await _ws.send_text(json.dumps({
+                                    "type": "text_response",
+                                    "title": _make_title(t),
+                                    "content": content,
+                                    "content_type": "markdown",
+                                }))
+                                logger.info("ws_observe: text_response sent (%d chars)", len(content))
+                                mgr._speak_task = asyncio.create_task(mgr._speak_verbatim(content))
+                            except BaseException as exc:
+                                logger.warning("ws_observe: _respond failed: %s", exc)
+                            finally:
+                                mgr._is_responding = False
+                                mgr._suppress_audio = False
+
+                        asyncio.create_task(_respond())
     except WebSocketDisconnect:
         pass
     finally:

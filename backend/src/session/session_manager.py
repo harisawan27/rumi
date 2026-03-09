@@ -26,6 +26,19 @@ class SessionManager:
         self._gemini_idle_task: Optional[asyncio.Task] = None
         self._system_prompt: Optional[str] = None
         self._gemini_connecting: bool = False  # guard against concurrent connects
+        # Serialise watchman _speak calls — prevents concurrent trigger audio
+        self._gemini_lock: asyncio.Lock = asyncio.Lock()
+        # Greeting task ref — cancelled immediately when user speaks
+        self._greeting_task: Optional[asyncio.Task] = None
+        # When True, _forward_audio drops bytes (suppresses stale greeting audio)
+        self._suppress_audio: bool = False
+        # Prevent double-greeting (connect_gemini + resume both call _send_greeting)
+        self._has_greeted: bool = False
+        # True while a user query response is in progress — blocks duplicate responses
+        # and prevents watchman from speaking over the user's response
+        self._is_responding: bool = False
+        # Tracks the current speak_verbatim task so a new query can cancel it
+        self._speak_task: Optional[asyncio.Task] = None
 
     # -----------------------------------------------------------------------
     # Session lifecycle
@@ -109,29 +122,41 @@ class SessionManager:
             logger.info("SessionManager: WebSocket reconnected but session is paused — skipping watchman + greeting")
             return
         self.start_watchman()
-        asyncio.create_task(self._send_greeting())
+        self._greeting_task = asyncio.create_task(self._send_greeting())
         logger.info("SessionManager: WebSocket ready — greeting queued")
 
     async def _send_greeting(self) -> None:
-        """Open Gemini Live, greet the user, then let idle timer close the session."""
-        await asyncio.sleep(1.5)  # small delay to let WS stabilise
+        """Open Gemini Live, greet the user once per session.
+        Uses _gemini_lock so it never conflicts with _speak_verbatim.
+        _has_greeted prevents double-greeting from connect_gemini + resume_session.
+        """
+        if self._has_greeted:
+            logger.info("SessionManager: greeting skipped — already greeted this session")
+            return
+        self._has_greeted = True
         try:
-            await self.ensure_gemini_connected()
-            await self._gemini.query(
-                "You have just started a new observation session with the user. "
-                "Greet them warmly and briefly (1–2 sentences max). "
-                "Use their name and mention one of their active projects naturally. "
-                "Be the Sufi-Engineer you are — precise, warm, human."
-            )
-            # Idle timer already running — session closes after 2 min if no activity
+            await asyncio.sleep(1.5)  # let WS stabilise
+            async with self._gemini_lock:
+                await self.ensure_gemini_connected()
+                await self._gemini.query(
+                    "You have just started a new observation session with the user. "
+                    "Greet them warmly and briefly (1–2 sentences max). "
+                    "Use their name and mention one of their active projects naturally. "
+                    "Be the Sufi-Engineer you are — precise, warm, human."
+                )
+        except asyncio.CancelledError:
+            logger.info("SessionManager: greeting cancelled — user spoke first")
         except Exception as exc:
             logger.warning("SessionManager: greeting failed: %s", exc)
 
     async def _forward_audio(self, pcm_bytes: bytes) -> None:
         """Forward Gemini audio response to the frontend WebSocket.
         Also resets the idle timer — Gemini is still active while sending audio.
+        Drops audio silently when _suppress_audio is True (user cancelled greeting).
         """
         if self._websocket is None:
+            return
+        if self._suppress_audio:
             return
         import base64
         import json
@@ -181,7 +206,7 @@ class SessionManager:
             )
             logger.info("SessionManager: Watchman loop restarted after resume")
         # Send greeting so Rumi acknowledges the (re)start
-        asyncio.create_task(self._send_greeting())
+        self._greeting_task = asyncio.create_task(self._send_greeting())
         logger.info("SessionManager: session resumed — %s", self._session_id)
 
     async def end_session(self) -> None:
@@ -414,13 +439,52 @@ class SessionManager:
         )
         logger.info("SessionManager: soft frustration check-in fired")
 
-    async def _speak(self, text: str) -> None:
-        """Ensure Gemini Live is open, then speak the text aloud."""
+    async def _speak_verbatim(self, text: str) -> None:
+        """Speak a brief natural acknowledgment of the canvas content via Gemini Live.
+
+        We do NOT ask Gemini to read the full text verbatim — that creates multi-turn
+        audio overlap. Instead we ask for a 1–2 sentence warm spoken intro so the user
+        knows what's on the canvas. The canvas itself is for deep reading.
+        """
+        # Take up to first 120 words as context hint — enough for a good intro
+        words = text.split()
+        snippet = " ".join(words[:120])
+        prompt = (
+            "You've just displayed detailed content on the user's canvas screen. "
+            f"The content begins: \"{snippet}\"\n\n"
+            "Speak a warm, natural 1–2 sentence response — briefly acknowledge what "
+            "you've prepared and invite them to read it. "
+            "Do NOT read the full text. Just a quick, human acknowledgment."
+        )
         try:
-            await self.ensure_gemini_connected()
-            await self._gemini.query(f"Say this warmly to the user: {text}")
+            async with self._gemini_lock:
+                await self.ensure_gemini_connected()
+                self._suppress_audio = False
+                await self._gemini.query(prompt)
+                self._reset_gemini_idle_timer()
+                self._suppress_audio = True
+            await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            logger.info("SessionManager: speak_verbatim cancelled")
         except Exception as exc:
-            logger.warning("SessionManager: speak failed: %s", exc)
+            logger.warning("SessionManager: speak_verbatim failed: %s", exc)
+        finally:
+            self._suppress_audio = False
+
+    async def _speak(self, text: str) -> None:
+        """Ensure Gemini Live is open, then speak the text aloud.
+        Acquires the lock so it never overlaps with a concurrent query or greeting.
+        Skips if a user response is currently in progress.
+        """
+        if self._is_responding:
+            logger.info("SessionManager: _speak skipped — user response in progress")
+            return
+        async with self._gemini_lock:
+            try:
+                await self.ensure_gemini_connected()
+                await self._gemini.query(f"Say this warmly to the user: {text}")
+            except Exception as exc:
+                logger.warning("SessionManager: speak failed: %s", exc)
 
     # -----------------------------------------------------------------------
     # Properties
