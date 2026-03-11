@@ -59,11 +59,21 @@ class StateMonitor:
         self._non_owner_streak    = 0
         self._non_owner_threshold = 3    # 3 consecutive mismatches → guest confirmed
         self._guest_active        = False
+        self._on_guest_detected   = None  # set via set_guest_callback()
+        self._on_owner_returned   = None  # set via set_owner_returned_callback()
 
     def set_owner_photo(self, url: str) -> None:
         """Called by session_manager after loading identity — enables face verification."""
         self._owner_photo_url = url
         logger.info("StateMonitor: owner photo loaded for face verification")
+
+    def set_guest_callback(self, cb) -> None:
+        """Callback fired when a confirmed guest is detected. Set by session_manager."""
+        self._on_guest_detected = cb
+
+    def set_owner_returned_callback(self, cb) -> None:
+        """Callback fired when owner returns after a guest visit."""
+        self._on_owner_returned = cb
 
     def set_websocket(self, ws) -> None:
         self._websocket = ws
@@ -230,6 +240,9 @@ class StateMonitor:
                             "type": "guest_detected",
                             "confidence": result.confidence,
                         }))
+                    # Fire session_manager callback for voice intervention
+                    if self._on_guest_detected:
+                        asyncio.create_task(self._on_guest_detected())
             else:
                 if self._guest_active:
                     logger.info("StateMonitor: owner returned")
@@ -237,6 +250,9 @@ class StateMonitor:
                         await self._websocket.send_text(json.dumps({
                             "type": "owner_returned",
                         }))
+                    # Reset so next guest gets a fresh greeting
+                    if hasattr(self, "_on_owner_returned") and self._on_owner_returned:
+                        asyncio.create_task(self._on_owner_returned())
                 self._non_owner_streak = 0
                 self._guest_active = False
 

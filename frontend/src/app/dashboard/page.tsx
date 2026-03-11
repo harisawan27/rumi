@@ -22,7 +22,7 @@ import ArtifactCanvas, { type CanvasContent } from "@/components/ArtifactCanvas"
 
 interface ActiveIntervention {
   interactionId: string;
-  trigger: "A" | "B" | "C" | "E";
+  trigger: "A" | "B" | "C" | "E" | "G";
   text: string;
 }
 
@@ -42,6 +42,7 @@ export default function DashboardPage() {
   const [memoryToast, setMemoryToast] = useState<string | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [guestMode, setGuestMode] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
   const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
   const [detection, setDetection] = useState<{ state: string; confidence: number; cues: string[]; emotions: Record<string, number> } | null>(null);
@@ -592,7 +593,7 @@ export default function DashboardPage() {
     if (msg.type === "intervention") {
       const m = msg as InterventionMessage;
       setInterventionQueue(q => [...q, { interactionId: m.interaction_id, trigger: m.trigger, text: m.text }]);
-      const emotionMap: Record<string, typeof rumiEmotion> = { A: "concerned", B: "thinking", C: "concerned", E: "happy" };
+      const emotionMap: Record<string, typeof rumiEmotion> = { A: "concerned", B: "thinking", C: "concerned", E: "happy", G: "neutral" };
       setRumiEmotion(emotionMap[m.trigger] ?? "neutral");
     } else if (msg.type === "audio_interrupt") {
       // Clear all scheduled audio — stops greeting tail before new response starts
@@ -648,6 +649,11 @@ export default function DashboardPage() {
       const m = msg as { type: string; message: string };
       setMemoryToast(m.message);
       setTimeout(() => setMemoryToast(null), 6000);
+    } else if (msg.type === "guest_detected") {
+      setGuestMode(true);
+      setRumiEmotion("neutral");
+    } else if (msg.type === "owner_returned") {
+      setGuestMode(false);
     } else if (msg.type === "paused") {
       setObservationState("paused");
     } else if (msg.type === "error") {
@@ -1046,6 +1052,30 @@ export default function DashboardPage() {
           title="Close (Esc)"
         >✕</button>
       </div>
+
+      {/* Guest mode banner */}
+      {guestMode && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, zIndex: 60,
+          background: "rgba(201,168,76,0.08)",
+          backdropFilter: "blur(12px)",
+          borderBottom: "1px solid rgba(201,168,76,0.25)",
+          padding: "10px 20px",
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+          animation: "fadeSlideUp 0.3s ease",
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+          </svg>
+          <span style={{ fontSize: "0.8rem", color: "var(--gold)" }}>
+            Guest mode — <strong>{name}</strong> isn&apos;t at their desk. Rumi is here to help.
+          </span>
+          <button onClick={() => setGuestMode(false)} style={{
+            marginLeft: 8, background: "none", border: "none", cursor: "pointer",
+            color: "var(--muted)", fontSize: "1rem", lineHeight: 1,
+          }}>×</button>
+        </div>
+      )}
 
       {/* Memory toast */}
       {memoryToast && (
