@@ -373,7 +373,10 @@ export default function DashboardPage() {
       let display = "";
       for (let i = 0; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
-          transcriptRef.current += e.results[i][0].transcript + " ";
+          // Only accumulate results we haven't seen before (e.resultIndex marks the new ones)
+          if (i >= e.resultIndex) {
+            transcriptRef.current += e.results[i][0].transcript + " ";
+          }
           display += e.results[i][0].transcript + " ";
         } else {
           display += e.results[i][0].transcript;
