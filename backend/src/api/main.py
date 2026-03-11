@@ -239,6 +239,18 @@ async def resume_session(session_id: str, uid: str = Depends(get_current_uid)):
     }
 
 
+@app.post("/session/refresh-context")
+async def refresh_session_context(uid: str = Depends(get_current_uid)):
+    """Hot-reload identity for the active session — call after profile changes."""
+    if uid not in _session_managers:
+        return {"status": "no_active_session"}
+    mgr = _session_managers[uid]
+    if mgr.status not in ("active", "paused"):
+        return {"status": "session_not_active"}
+    await mgr.refresh_context()
+    return {"status": "refreshed"}
+
+
 @app.post("/session/{session_id}/end", status_code=202)
 async def end_session(session_id: str, uid: str = Depends(get_current_uid)):
     mgr = _get_session_manager(uid)

@@ -143,6 +143,18 @@ export function sendInterventionResponse(
   ws.send(JSON.stringify({ type: "intervention_response", interaction_id: interactionId, response }));
 }
 
+export async function refreshSessionContext(): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/session/refresh-context`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  // Silently ignore errors — no active session is fine (user may have ended it)
+  if (!res.ok && res.status !== 404) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail ?? "Failed to refresh session context");
+  }
+}
+
 export async function startSession(): Promise<string> {
   const res = await fetch(`${BACKEND_URL}/session/start`, {
     method: "POST",

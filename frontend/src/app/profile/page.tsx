@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  getIdentity, saveIdentity, verifyAuth,
+  getIdentity, saveIdentity, verifyAuth, refreshSessionContext,
   getKnownPeople, addKnownPerson, updateKnownPerson, deleteKnownPerson,
   uploadPersonPhoto, uploadProfilePhoto,
   type KnownPerson,
@@ -530,15 +530,26 @@ function KnownPeopleEditor({ uid }: { uid: string }) {
     if (!form.name.trim()) return;
     setSaving(true);
     try {
-      // Create record first to get ID, then upload photo with that ID
       const tempId = Date.now().toString();
       let photoUrl = "";
       if (photoFile) {
         photoUrl = await uploadPersonPhoto(uid, photoFile, tempId);
       }
       const id = await addKnownPerson({ ...form, photo_url: photoUrl });
-      const newPeople = await getKnownPeople();
-      setPeople(newPeople);
+      // Optimistic insert — person appears immediately without reload
+      const newPerson: KnownPerson = {
+        id,
+        name: form.name,
+        relationship: form.relationship,
+        photo_url: photoUrl,
+        notes: form.notes,
+        added_by: "manual",
+        status: "verified",
+        added_at: new Date().toISOString(),
+        last_seen: null,
+        interaction_count: 0,
+      };
+      setPeople(prev => [...prev, newPerson]);
       setForm({ name: "", relationship: "Friend", notes: "", photo_url: "" });
       setPhotoFile(null);
       setPhotoPreview("");
@@ -584,6 +595,7 @@ function KnownPeopleEditor({ uid }: { uid: string }) {
               display: "flex", alignItems: "center", gap: 12,
               padding: "10px 14px", borderRadius: 12,
               background: "var(--surface-2)", border: "1px solid var(--border)",
+              animation: "fadeSlideUp 0.25s ease both",
             }}>
               {/* Photo */}
               <div style={{
@@ -685,13 +697,20 @@ function KnownPeopleEditor({ uid }: { uid: string }) {
               value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             <button onClick={handleAdd} disabled={saving || !form.name.trim()} className="btn-primary"
-              style={{ fontSize: "0.75rem", padding: "0.375rem 0.875rem" }}>
-              {saving ? "Saving…" : "Add to Rumi's memory"}
+              style={{ fontSize: "0.75rem", padding: "0.375rem 0.875rem", display: "flex", alignItems: "center", gap: 6 }}>
+              {saving && (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                  strokeLinecap="round" style={{ animation: "rotateSlow 0.8s linear infinite", flexShrink: 0 }}>
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              )}
+              {saving ? (photoFile ? "Uploading photo…" : "Saving…") : "Add to Rumi's memory"}
             </button>
             <button onClick={() => { setAdding(false); setPhotoPreview(""); setPhotoFile(null); }} className="btn-ghost"
-              style={{ fontSize: "0.75rem", padding: "0.375rem 0.875rem" }}>
+              style={{ fontSize: "0.75rem", padding: "0.375rem 0.875rem" }}
+              disabled={saving}>
               Cancel
             </button>
           </div>
@@ -727,6 +746,8 @@ export default function ProfilePage() {
     void last_updated; void user_id;
     await saveIdentity(payload);
     setIdentity(merged);
+    // Refresh active session context so changes take effect immediately
+    refreshSessionContext().catch(() => {});
   }
 
   if (loading) {

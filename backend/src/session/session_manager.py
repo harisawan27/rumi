@@ -487,6 +487,31 @@ class SessionManager:
         """Called when the owner returns — allows the next guest to get a fresh greeting."""
         self._guest_intervention_fired = False
 
+    async def refresh_context(self) -> None:
+        """Reload identity from Firestore and rebuild system prompt live.
+
+        Called when the user changes companion language, expression styles, or tone
+        in the profile page mid-session. Disconnects Gemini so it reconnects with
+        the new system prompt on the next query.
+        """
+        if not self._uid:
+            return
+        import os
+        summary_depth = int(os.getenv("SESSION_SUMMARY_DEPTH", "3"))
+        identity = load_core_identity(self._uid)
+        summaries = load_session_summaries(self._uid, limit=summary_depth)
+        self._system_prompt = build_system_prompt(identity, summaries)
+        self._owner_name = identity.get("name", "the owner")
+        new_photo = identity.get("profile_photo_url", "")
+        if new_photo != self._owner_photo_url:
+            self._owner_photo_url = new_photo
+            if hasattr(self, "_state_monitor") and self._state_monitor and new_photo:
+                self._state_monitor.set_owner_photo(new_photo)
+        # Drop the Gemini Live connection so it reconnects with fresh system prompt
+        if self._gemini and self._gemini.is_connected:
+            await self._gemini.disconnect()
+        logger.info("SessionManager: context refreshed live (new language/tone will apply immediately)")
+
     async def _speak_verbatim(self, text: str) -> None:
         """Speak a brief natural acknowledgment of the canvas content via Gemini Live.
 
