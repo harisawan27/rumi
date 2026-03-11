@@ -165,7 +165,7 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
       </div>
 
       {/* Scrollable content */}
-      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "22px 24px 40px" }}>
+      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "clamp(12px, 3vw, 22px) clamp(14px, 3vw, 24px) 40px" }}>
         {content ? (
           <div key={content.title} style={{ animation: isLatest ? "typeReveal 3.8s ease-out both" : "none" }}>
           {/* Full query label */}

@@ -1105,14 +1105,19 @@ export default function DashboardPage() {
           transition: grid-template-columns 0.55s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .app-body.canvas-open {
-          grid-template-columns: 32fr 68fr;
+          grid-template-columns: minmax(300px, 36fr) 64fr;
+        }
+        @media (min-width: 1200px) {
+          .app-body.canvas-open {
+            grid-template-columns: 30fr 70fr;
+          }
         }
         .rumi-zone {
           display: flex;
           flex-direction: column;
           min-width: 0;
           min-height: 0;
-          overflow: hidden;
+          overflow: visible;
           position: relative;
         }
         .canvas-zone {
@@ -1249,9 +1254,9 @@ export default function DashboardPage() {
         .hud-ctrl-btn.active-gold { background: rgba(201,168,76,0.1); color: var(--gold); }
         .hud-ctrl-btn.active-red  { background: rgba(239,68,68,0.1);  color: #ef4444; }
 
-        /* Desktop HUD positions */
-        .popup-head  { top: 0;   left: calc(100% + 16px); }
-        .popup-chest { top: 46%; left: calc(100% + 16px); }
+        /* HUD positions — fixed on all screens; avoids overflow clipping */
+        .popup-head  { position: fixed; top: 72px;    right: 14px; left: auto; }
+        .popup-chest { position: fixed; bottom: 150px; right: 14px; left: auto; top: auto; }
 
         /* ── Canvas pull tab ────────────────────────────────────────────── */
         .canvas-pull-tab {
@@ -1303,9 +1308,25 @@ export default function DashboardPage() {
           }
           .rumi-stage { gap: 4px; }
           .hud-panel  { width: min(52vw, 200px); }
-          .popup-head  { position: fixed; top: 68px;  right: 10px; left: auto; }
-          .popup-chest { position: fixed; bottom: 140px; right: 10px; left: auto; top: auto; }
           .override-panel { padding: 10px 14px env(safe-area-inset-bottom, 16px); }
+          /* canvas pull tab → bottom-centre on mobile (canvas stacks below) */
+          .canvas-pull-tab {
+            right: auto;
+            top: auto;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            flex-direction: row;
+            padding: 7px 24px 10px;
+            border-radius: 10px 10px 0 0;
+            border-right: 1px solid rgba(34,211,238,0.2);
+            border-bottom: none;
+          }
+          .canvas-pull-tab span { writing-mode: horizontal-tb; }
+          /* scale robot further when canvas is stacked below */
+          .app-body.canvas-open .robot-wrap { transform: scale(0.48); margin-bottom: -250px; }
+          .app-body.canvas-open .rumi-stage { gap: 3px; padding-top: 4px; }
+          .app-body.canvas-open .zone-tag   { display: none; }
         }
 
         /* ── Robot scale-down for smaller viewports ────────────────────── */
@@ -1322,6 +1343,11 @@ export default function DashboardPage() {
         @media (max-height: 520px) {
           .robot-wrap { transform: scale(0.5); margin-bottom: -240px; }
           .rumi-stage { gap: 2px; padding: 4px 8px 8px; }
+        }
+        /* Safe area insets for iPhone home bar */
+        @supports (padding: env(safe-area-inset-bottom)) {
+          .rumi-stage   { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+          .override-panel { padding-bottom: max(24px, env(safe-area-inset-bottom)); }
         }
       `}</style>
     </main>
