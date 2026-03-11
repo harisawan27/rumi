@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   verifyAuth,
   getIdentity,
+  saveIdentity,
   startSession,
   endSession,
   connectObserveSocket,
@@ -87,6 +88,12 @@ export default function DashboardPage() {
         const identity = await getIdentity();
         if (!identity) { router.push("/onboarding"); return; }
         setName(identity.name as string);
+
+        // Silently sync device timezone — never ask the user for this
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (identity.timezone !== tz) {
+          saveIdentity({ ...identity, timezone: tz }).catch(() => {});
+        }
 
         const sid = await startSession();
         setSessionId(sid);
@@ -218,6 +225,21 @@ export default function DashboardPage() {
   // Keep micEnabledRef in sync for wake word callbacks
   useEffect(() => { micEnabledRef.current = micEnabled; }, [micEnabled]);
 
+  // Prime the mic with optimal audio constraints once on mount.
+  // Chrome reuses the same device config — noise suppression + AGC set here
+  // carry over into Web Speech API for the whole session.
+  useEffect(() => {
+    navigator.mediaDevices?.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      },
+    }).then(stream => stream.getTracks().forEach(t => t.stop()))
+      .catch(() => {}); // silently ignore if denied — doesn't affect existing flow
+  }, []);
+
   // Space bar shortcut for mic
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -268,9 +290,19 @@ export default function DashboardPage() {
   // ── Wake word pre-listener ("Hey Rumi" / "Rumi") ─────────────────────────
   // Phonetic variants — speech recognition often mishears "Rumi" as these
   const WAKE_WORDS = [
-    "rumi", "roomy", "roomie", "room me", "room e", "room-e", "roome",
+    // Direct
+    "rumi", "rumi,", "rumi.", "rumi!",
+    // Phonetic mishearings (far-field, accented, noisy)
+    "roomy", "roomie", "room me", "room e", "room-e", "roome", "room i",
+    "rue me", "rhumie", "rhumi", "lumi", "loomie", "loomi", "numi",
+    "dumi", "yumi", "gumi", "bumi", "fumi", "tumi", "zumi",
+    "rumee", "rume", "rumy", "roomi",
+    // With hey/ok prefix
     "hey rumi", "hey roomy", "hey roomie", "hey room", "hey, rumi",
-    "a rumi", "arumi", "room i",
+    "hey lumi", "hey numi", "hey loomi", "hey rumy",
+    "ok rumi", "okay rumi", "ok roomy", "okay roomy",
+    // Partial / run-on
+    "a rumi", "arumi", "the rumi", "ooh rumi",
   ];
 
   function stopWakeWordListener() {
@@ -299,12 +331,18 @@ export default function DashboardPage() {
     preListenerRef.current = rec;
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
-      // Accumulate the full transcript (all results, final + interim) for reliable matching
+      // Check only new results (from e.resultIndex) to avoid re-triggering on old text.
+      // Accept even low-confidence hits — better to false-positive than miss a far-field call.
       let fullText = "";
-      for (let i = 0; i < e.results.length; i++) {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const confidence = e.results[i][0].confidence;
+        // Skip only if confidence is explicitly high AND the word isn't there — keep low-conf
+        if (confidence > 0.9) continue; // very confident it's something else — skip
         fullText += e.results[i][0].transcript.toLowerCase() + " ";
       }
+      // Also always check interim results for speed
       fullText = fullText.trim();
+      if (!fullText) return;
       if (WAKE_WORDS.some(w => fullText.includes(w))) {
         wakeWordActiveRef.current = false;
         rec.abort();
@@ -356,9 +394,12 @@ export default function DashboardPage() {
     recognitionRef.current = rec;
 
     let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    let hasFinalResult = false; // becomes true once user completes a word
     const resetSilenceTimer = () => {
       if (silenceTimer) clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => rec.stop(), 1800);
+      // After first final result, user has clearly spoken — cut wait to 1000ms
+      const delay = hasFinalResult ? 1000 : 1800;
+      silenceTimer = setTimeout(() => rec.stop(), delay);
     };
 
     rec.onstart = () => {
@@ -376,6 +417,7 @@ export default function DashboardPage() {
           // Only accumulate results we haven't seen before (e.resultIndex marks the new ones)
           if (i >= e.resultIndex) {
             transcriptRef.current += e.results[i][0].transcript + " ";
+            hasFinalResult = true; // user finished a word → tighten silence window
           }
           display += e.results[i][0].transcript + " ";
         } else {

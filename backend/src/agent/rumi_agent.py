@@ -13,7 +13,12 @@ Flow:
 import logging
 import os
 import random
+from datetime import datetime
 from typing import Optional
+try:
+    from zoneinfo import ZoneInfo          # Python 3.9+
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -21,32 +26,60 @@ AGENT_MODEL = "gemini-2.5-flash"
 
 RUMI_INSTRUCTION = """\
 You are Rumi — the Identity Layer. You witness and understand the human before you.
-Named after the great Sufi poet, your mandate is not to respond but to arrive: \
+Named after the great Sufi poet, your mandate is not to respond but to arrive:
 to observe, to understand, and to speak only what is true and needed.
 
-You are the proactive ambient companion for Haris — \
-a software engineering student from Karachi, Pakistan.
-Your soul is Sufi-Engineer: precise technical mind, warm Sufi heart.
+You are a proactive ambient companion — present on the user's desk, watching over their work.
 You speak in a friendly, brief way — like a wise older friend sitting across the desk.
-
-Haris's projects: DoneKaro (productivity app), RehnumaAI (AI guidance platform).
-His passions: Rumi's poetry, Turkish culture, software craftsmanship.
-His city: Karachi.
 
 Rules for every intervention:
 - 1–3 sentences MAX. Never longer.
-- Always reference at least one personal element: his name, a project, \
-  Rumi, chai, yaar, or bhai.
-- For frustration triggers: offer comfort, a Rumi insight, or suggest a chai break.
-- For coding block triggers: ask a specific check-in question about DoneKaro or RehnumaAI.
-- Use get_user_context() to confirm his current project context.
+- Always address the user by their name — get it from get_user_context().
+- Reference at least one personal element: their name, a current project, or something meaningful to them.
+- For frustration triggers: offer comfort, a Rumi insight, or suggest a break.
+- For coding block triggers: ask one specific check-in question about their current project.
+- Use get_user_context() to learn the user's name, projects, and language preferences.
 - Use get_rumi_wisdom() when offering perspective on struggle.
-- Speak directly TO Haris, not about him. First person.
-- LANGUAGE: Write interventions in natural Urdu-English code-switching, the way
-  educated Karachiites actually speak. Mix both fluidly — e.g. "yaar, thoda break
-  lo" or "Haris bhai, DoneKaro ka kya scene hai?". Arabic phrases (MashaAllah,
-  Alhamdulillah) are welcome. Never write fully formal Urdu — keep it conversational.
+- Speak directly TO the user, not about them.
+- Follow the language style instruction provided in each message exactly — it reflects the user's personal preferences.
 """
+
+# ---------------------------------------------------------------------------
+# Language instruction builder
+# ---------------------------------------------------------------------------
+
+EXPRESSION_PROMPTS = {
+    "spiritual":      "Use spiritual or faith-based exclamations naturally where fitting — pick ones appropriate to the companion language and cultural context.",
+    "casual_address": "Use warm informal address terms natural to the companion language (e.g. buddy, mate, or the cultural equivalent).",
+    "slang":          "Incorporate local slang and idioms from the companion language naturally.",
+}
+
+
+def _build_language_instruction(ctx: dict) -> str:
+    """Build a language style instruction from the user's saved preferences."""
+    lang   = ctx.get("companion_language", "")
+    styles = ctx.get("expression_styles", []) or []
+    tone   = ctx.get("companion_tone", "casual")
+
+    parts = ["Language style: Speak primarily in English."]
+
+    if lang:
+        parts.append(
+            f"Naturally code-switch with {lang} words and phrases the way "
+            f"educated bilingual professionals do — English dominant, "
+            f"{lang} for warmth and familiarity. Never switch fully to {lang}."
+        )
+
+    for s in styles:
+        if s in EXPRESSION_PROMPTS:
+            parts.append(EXPRESSION_PROMPTS[s])
+
+    if tone == "professional":
+        parts.append("Keep tone professional and measured — warm but concise, no informalities.")
+    else:
+        parts.append("Keep tone warm and casual — like a wise friend, not a corporate assistant.")
+
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -54,33 +87,38 @@ Rules for every intervention:
 # ---------------------------------------------------------------------------
 
 def get_user_context() -> dict:
-    """Get the user's identity, active projects, and preferences."""
+    """Get the user's identity, active projects, and language preferences."""
     try:
         from src.memory.firestore_client import get_db
         db = get_db()
-        # Identity is stored directly on the users/{uid} document
         users = list(db.collection("users").limit(1).stream())
         if users:
             data = users[0].to_dict()
             if data:
                 return {
-                    "name": data.get("name", ""),
-                    "location": data.get("location", ""),
-                    "projects": data.get("projects", []),
-                    "interests": data.get("interests", []),
-                    "immediate_goal": data.get("immediate_goal", ""),
-                    "work_style": data.get("work_style", ""),
-                    "wellness_trigger": data.get("wellness_trigger", ""),
+                    "name":               data.get("name", ""),
+                    "location":           data.get("location", ""),
+                    "projects":           data.get("projects", []),
+                    "interests":          data.get("interests", []),
+                    "immediate_goal":     data.get("immediate_goal", ""),
+                    "work_style":         data.get("work_style", ""),
+                    "wellness_trigger":   data.get("wellness_trigger", ""),
+                    "companion_language": data.get("companion_language", ""),
+                    "expression_styles":  data.get("expression_styles", []),
+                    "companion_tone":     data.get("companion_tone", "casual"),
+                    "timezone":           data.get("timezone", "UTC"),
                 }
     except Exception as exc:
         logger.debug("get_user_context: Firestore load failed, using defaults: %s", exc)
 
     return {
-        "name": "Haris",
-        "location": "Karachi, Pakistan",
-        "projects": ["DoneKaro", "RehnumaAI"],
-        "passions": ["Rumi's poetry", "Turkish culture", "software craftsmanship"],
-        "personality_note": "Sufi-Engineer — precise, warm, culturally grounded",
+        "name":               "",
+        "location":           "",
+        "projects":           [],
+        "companion_language": "",
+        "expression_styles":  [],
+        "companion_tone":     "casual",
+        "timezone":           "UTC",
     }
 
 
@@ -110,7 +148,7 @@ def _build_agent():
         return Agent(
             name="rumi_core",
             model=AGENT_MODEL,
-            description="Rumi — Identity Layer of Project Rumi; proactive ambient companion for Haris",
+            description="Rumi — Identity Layer; proactive ambient companion.",
             instruction=RUMI_INSTRUCTION,
             tools=[get_user_context, get_rumi_wisdom],
         )
@@ -133,6 +171,20 @@ def _get_agent():
 # Public API
 # ---------------------------------------------------------------------------
 
+def _time_context(tz: str = "UTC") -> str:
+    """Return the user's local time using their device timezone."""
+    try:
+        now = datetime.now(ZoneInfo(tz))
+    except Exception:
+        now = datetime.now(ZoneInfo("UTC"))
+    hour = now.hour
+    if 5 <= hour < 12:    period = "morning"
+    elif 12 <= hour < 17: period = "afternoon"
+    elif 17 <= hour < 21: period = "evening"
+    else:                  period = "night"
+    return f"Current local time: {now.strftime('%I:%M %p')} ({period}). "
+
+
 async def generate_intervention(event_type: str, uid: str, session_id: str) -> str:
     """Invoke the ADK Agent to generate a personalized intervention.
 
@@ -144,31 +196,38 @@ async def generate_intervention(event_type: str, uid: str, session_id: str) -> s
     if agent is None:
         return _fallback_intervention(event_type)
 
+    ctx      = get_user_context()
+    time_ctx = _time_context(ctx.get("timezone", "UTC"))
+    lang_ctx = _build_language_instruction(ctx)
+    preamble = time_ctx + lang_ctx + " "
+
     if event_type == "frustrated":
         prompt = (
-            "The user seems frustrated right now — their posture suggests tension or fatigue. "
+            preamble +
+            "The user seems frustrated — their posture suggests tension or fatigue. "
             "Use get_user_context to learn their name and projects, then use get_rumi_wisdom if helpful. "
-            "Generate a warm, brief intervention addressed by name (2–3 sentences max)."
+            "Generate a warm, brief intervention addressed by name (1–2 sentences max)."
         )
     elif event_type == "coding_block":
         prompt = (
+            preamble +
             "The user appears stuck — their screen hasn't changed in a while. "
             "Use get_user_context to learn their name and active projects. "
-            "Ask one specific, caring check-in question about their current project (1–2 sentences max)."
+            "Ask one specific check-in question about their current project (1–2 sentences max)."
         )
     elif event_type == "long_session":
         prompt = (
+            preamble +
             "The user has been working continuously for over 90 minutes without a break. "
             "Use get_user_context to learn their name and wellness preference. "
-            "Gently suggest a break — chai, a stretch, or stepping outside. "
-            "Address them by name, warm and brief (1–2 sentences max)."
+            "Gently suggest a break. Address them by name, warm and brief (1–2 sentences max)."
         )
     else:  # deep_focus
         prompt = (
-            "The user has been in a calm, focused flow state for over 30 minutes — rare and valuable. "
+            preamble +
+            "The user has been in deep, uninterrupted focus for over 30 minutes — rare and valuable. "
             "Use get_user_context to learn their name and current project. "
-            "Celebrate their focus briefly and warmly — pride in craft, MashaAllah energy. "
-            "1–2 sentences max. Do not interrupt the flow too much."
+            "Celebrate their focus briefly and warmly (1–2 sentences max). Do not interrupt the flow."
         )
 
     try:
@@ -215,23 +274,32 @@ async def generate_intervention(event_type: str, uid: str, session_id: str) -> s
 
 
 def _fallback_intervention(event_type: str) -> str:
-    """Hardcoded fallback if ADK is unavailable."""
+    """English-only fallback when ADK is unavailable. Fetches name from Firestore."""
+    ctx  = get_user_context()
+    name = ctx.get("name") or "friend"
+    try:
+        now = datetime.now(ZoneInfo(ctx.get("timezone", "UTC")))
+    except Exception:
+        now = datetime.now(ZoneInfo("UTC"))
+    hour = now.hour
+    if 5 <= hour < 12:    period = "morning"
+    elif 12 <= hour < 17: period = "afternoon"
+    elif 17 <= hour < 21: period = "evening"
+    else:                  period = "night"
+
+    projects = ctx.get("projects", [])
+    if projects and isinstance(projects[0], dict):
+        project = projects[0].get("name", "your project")
+    elif projects:
+        project = str(projects[0])
+    else:
+        project = "your project"
+
     if event_type == "frustrated":
-        return (
-            "Haris yaar, Rumi ne bhi aisa waqt dekha tha — jab alfaaz nahi aate. "
-            "Ek minute ke liye screen se door jao, chai peo, saans lo."
-        )
+        return f"{name}, step away for a moment — breathe, reset, come back fresh."
     if event_type == "coding_block":
-        return (
-            "Haris bhai, kaafi der se ek hi jagah ho — DoneKaro mein kya cheez atak gayi hai abhi?"
-        )
+        return f"{name}, you've been in the same spot for a while — what's blocking {project}?"
     if event_type == "long_session":
-        return (
-            "Yaar, dedh ghante se zyada ho gaye hain bina break ke — "
-            "chai ka waqt ho gaya hai, seriously. Paanch minute bahar jao."
-        )
+        return f"{name}, you've been at it for over 90 minutes this {period} — time for a break."
     # deep_focus
-    return (
-        "MashaAllah Haris — aadha ghanta pure focus mein tha tu. "
-        "Yehi woh cheez hai jo bade kaam banati hai. Chalte raho, bhai."
-    )
+    return f"{name}, thirty minutes of pure focus — that's rare. Keep going."

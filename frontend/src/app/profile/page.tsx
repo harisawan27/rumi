@@ -255,6 +255,202 @@ function ProjectCard({
   );
 }
 
+// ── Speech Preferences ────────────────────────────────────────────────────────
+
+const COMMON_LANGUAGES = [
+  "Urdu", "Spanish", "French", "Arabic", "Hindi",
+  "Mandarin", "Portuguese", "German", "Turkish", "Italian",
+];
+
+const EXPRESSION_STYLES = [
+  { key: "spiritual",      label: "Spiritual expressions",  desc: "Faith-based or awe exclamations natural to your culture" },
+  { key: "casual_address", label: "Casual address terms",   desc: "Informal terms of endearment in your language" },
+  { key: "slang",          label: "Slang & idioms",         desc: "Local informal phrases and expressions" },
+];
+
+function SpeechPrefsEditor({
+  identity, patch,
+}: { identity: Identity; patch: (u: Partial<Identity>) => Promise<void> }) {
+  const lang    = (identity.companion_language as string) ?? "";
+  const styles  = (identity.expression_styles  as string[]) ?? [];
+  const tone    = (identity.companion_tone     as string) ?? "casual";
+
+  const [customLang, setCustomLang] = useState("");
+  const [showCustom, setShowCustom] = useState(false);
+
+  function toggleStyle(key: string) {
+    const next = styles.includes(key) ? styles.filter(s => s !== key) : [...styles, key];
+    patch({ expression_styles: next });
+  }
+
+  function setLang(l: string) {
+    patch({ companion_language: l });
+    setShowCustom(false);
+    setCustomLang("");
+  }
+
+  function saveCustomLang() {
+    const v = customLang.trim();
+    if (v) setLang(v);
+  }
+
+  const isCustom = lang && !COMMON_LANGUAGES.includes(lang);
+
+  return (
+    <div className="rumi-card" style={{ borderColor: "rgba(34,211,238,0.2)", background: "rgba(34,211,238,0.02)" }}>
+      <p className="uppercase-label mb-1" style={{ color: "var(--teal)" }}>How Rumi Speaks With You</p>
+      <p className="text-xs mb-5" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
+        English is always the base. Add a companion language and choose how Rumi mixes it in.
+      </p>
+
+      {/* Companion language */}
+      <div className="mb-5">
+        <span className="uppercase-label mb-2 block" style={{ fontSize: "0.6rem" }}>Companion language</span>
+        <div className="flex flex-wrap gap-2 mb-2">
+          <button
+            onClick={() => setLang("")}
+            className="rumi-tag"
+            style={{
+              cursor: "pointer", padding: "4px 12px", fontSize: "0.72rem",
+              background: !lang ? "rgba(34,211,238,0.12)" : "var(--surface-2)",
+              borderColor: !lang ? "var(--teal)" : "var(--border)",
+              transition: "all 0.15s",
+            }}
+          >
+            English only
+          </button>
+          {COMMON_LANGUAGES.map(l => (
+            <button
+              key={l}
+              onClick={() => setLang(l)}
+              className="rumi-tag"
+              style={{
+                cursor: "pointer", padding: "4px 12px", fontSize: "0.72rem",
+                background: lang === l ? "rgba(34,211,238,0.12)" : "var(--surface-2)",
+                borderColor: lang === l ? "var(--teal)" : "var(--border)",
+                transition: "all 0.15s",
+              }}
+            >
+              {l}
+            </button>
+          ))}
+          <button
+            onClick={() => setShowCustom(v => !v)}
+            className="rumi-tag"
+            style={{
+              cursor: "pointer", padding: "4px 12px", fontSize: "0.72rem",
+              background: showCustom || isCustom ? "rgba(34,211,238,0.12)" : "var(--surface-2)",
+              borderColor: showCustom || isCustom ? "var(--teal)" : "var(--border)",
+              transition: "all 0.15s",
+            }}
+          >
+            {isCustom ? lang : "Other…"}
+          </button>
+        </div>
+
+        {showCustom && (
+          <div className="flex gap-2">
+            <input
+              className="rumi-input flex-1"
+              placeholder="Type your language"
+              value={customLang}
+              onChange={e => setCustomLang(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); saveCustomLang(); } }}
+              autoFocus
+            />
+            <button
+              onClick={saveCustomLang}
+              className="btn-primary"
+              style={{ fontSize: "0.75rem", padding: "0.375rem 0.875rem" }}
+            >
+              Set
+            </button>
+          </div>
+        )}
+
+        {lang && (
+          <p className="text-xs mt-2" style={{ color: "var(--teal)" }}>
+            Rumi will mix English + {lang}
+          </p>
+        )}
+      </div>
+
+      {/* Expression styles */}
+      <div className="mb-5">
+        <span className="uppercase-label mb-2 block" style={{ fontSize: "0.6rem" }}>
+          Expression style{" "}
+          <span style={{ color: "var(--muted)", fontWeight: 400, textTransform: "none" }}>
+            — pick any combination
+          </span>
+        </span>
+        <div className="flex flex-col gap-2">
+          {EXPRESSION_STYLES.map(({ key, label, desc }) => {
+            const active = styles.includes(key);
+            return (
+              <button
+                key={key}
+                onClick={() => toggleStyle(key)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "10px 14px", borderRadius: 10, cursor: "pointer",
+                  background: active ? "rgba(34,211,238,0.08)" : "var(--surface-2)",
+                  border: `1px solid ${active ? "rgba(34,211,238,0.35)" : "var(--border)"}`,
+                  transition: "all 0.15s", textAlign: "left",
+                }}
+              >
+                <div style={{
+                  width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                  border: `2px solid ${active ? "var(--teal)" : "var(--border)"}`,
+                  background: active ? "var(--teal)" : "transparent",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.15s",
+                }}>
+                  {active && (
+                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                      <path d="M2 6l3 3 5-5" stroke="#04080f" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </div>
+                <div>
+                  <p className="text-sm" style={{ color: active ? "var(--text)" : "var(--text-2)", fontWeight: active ? 500 : 400 }}>
+                    {label}
+                  </p>
+                  <p style={{ fontSize: "0.68rem", color: "var(--muted)", marginTop: 1 }}>{desc}</p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Tone */}
+      <div>
+        <span className="uppercase-label mb-2 block" style={{ fontSize: "0.6rem" }}>Tone</span>
+        <div className="flex gap-2">
+          {[
+            { key: "casual",       label: "Casual friend" },
+            { key: "professional", label: "Professional"  },
+          ].map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => patch({ companion_tone: key })}
+              style={{
+                padding: "6px 18px", borderRadius: 8, fontSize: "0.8rem", cursor: "pointer",
+                background: tone === key ? "rgba(34,211,238,0.12)" : "var(--surface-2)",
+                border: `1px solid ${tone === key ? "rgba(34,211,238,0.4)" : "var(--border)"}`,
+                color: tone === key ? "var(--teal)" : "var(--text-2)",
+                transition: "all 0.15s",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function ProfilePage() {
@@ -378,6 +574,11 @@ export default function ProfilePage() {
                 multiline
               />
             </div>
+          </div>
+
+          {/* Speech Preferences */}
+          <div className="animate-fade-up delay-100">
+            <SpeechPrefsEditor identity={identity} patch={patch} />
           </div>
 
           {/* Personal */}
