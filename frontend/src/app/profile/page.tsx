@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getIdentity, saveIdentity, verifyAuth } from "@/services/session";
+import {
+  getIdentity, saveIdentity, verifyAuth,
+  getKnownPeople, addKnownPerson, updateKnownPerson, deleteKnownPerson,
+  uploadPersonPhoto, uploadProfilePhoto,
+  type KnownPerson,
+} from "@/services/session";
 
 type Identity = Record<string, unknown>;
 
@@ -451,16 +456,262 @@ function SpeechPrefsEditor({
   );
 }
 
+// ── Profile Photo Uploader ────────────────────────────────────────────────────
+
+function ProfilePhotoUploader({
+  uid, currentUrl, onSaved,
+}: { uid: string; currentUrl: string; onSaved: (url: string) => Promise<void> }) {
+  const [uploading, setUploading] = useState(false);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await uploadProfilePhoto(uid, file);
+      await onSaved(url);
+    } catch { /* silent */ } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-4">
+      <div style={{
+        width: 72, height: 72, borderRadius: "50%", overflow: "hidden", flexShrink: 0,
+        border: "2px solid var(--gold)", background: "var(--surface-2)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        {currentUrl
+          ? <img src={currentUrl} alt="Profile" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          : <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        }
+      </div>
+      <div className="flex flex-col gap-1">
+        <p className="text-sm" style={{ color: "var(--text-2)" }}>
+          {currentUrl ? "Rumi uses this to recognise you" : "Upload so Rumi can recognise you"}
+        </p>
+        <label className="btn-ghost" style={{ fontSize: "0.75rem", padding: "0.3rem 0.875rem", cursor: "pointer" }}>
+          {uploading ? "Uploading…" : currentUrl ? "Change photo" : "Upload photo"}
+          <input type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} disabled={uploading} />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+// ── Known People Editor ───────────────────────────────────────────────────────
+
+const RELATIONSHIPS = ["Partner", "Parent", "Sibling", "Child", "Friend", "Colleague", "Roommate", "Other"];
+
+function KnownPeopleEditor({ uid }: { uid: string }) {
+  const [people, setPeople]   = useState<KnownPerson[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding]   = useState(false);
+  const [saving, setSaving]   = useState(false);
+
+  // New person form state
+  const [form, setForm] = useState({ name: "", relationship: "Friend", notes: "", photo_url: "" });
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState("");
+
+  useEffect(() => {
+    getKnownPeople().then(setPeople).finally(() => setLoading(false));
+  }, []);
+
+  function handlePhotoSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoFile(file);
+    setPhotoPreview(URL.createObjectURL(file));
+  }
+
+  async function handleAdd() {
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try {
+      // Create record first to get ID, then upload photo with that ID
+      const tempId = Date.now().toString();
+      let photoUrl = "";
+      if (photoFile) {
+        photoUrl = await uploadPersonPhoto(uid, photoFile, tempId);
+      }
+      const id = await addKnownPerson({ ...form, photo_url: photoUrl });
+      const newPeople = await getKnownPeople();
+      setPeople(newPeople);
+      setForm({ name: "", relationship: "Friend", notes: "", photo_url: "" });
+      setPhotoFile(null);
+      setPhotoPreview("");
+      setAdding(false);
+    } catch { /* silent */ } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    await deleteKnownPerson(id);
+    setPeople(p => p.filter(x => x.id !== id));
+  }
+
+  function formatDate(iso: string | null) {
+    if (!iso) return "Never";
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+
+  return (
+    <div className="rumi-card" style={{ borderColor: "rgba(201,168,76,0.2)", background: "rgba(201,168,76,0.02)" }}>
+      <div className="flex items-center justify-between mb-1">
+        <p className="uppercase-label" style={{ color: "var(--gold)" }}>Known People</p>
+        {!adding && (
+          <button onClick={() => setAdding(true)} className="btn-ghost"
+            style={{ fontSize: "0.72rem", padding: "0.25rem 0.75rem" }}>
+            + Add person
+          </button>
+        )}
+      </div>
+      <p className="text-xs mb-4" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
+        Rumi will recognise these people when they appear on camera and greet them by name.
+      </p>
+
+      {/* Person cards */}
+      {loading ? (
+        <p className="text-sm" style={{ color: "var(--muted)" }}>Loading…</p>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {people.map(p => (
+            <div key={p.id} style={{
+              display: "flex", alignItems: "center", gap: 12,
+              padding: "10px 14px", borderRadius: 12,
+              background: "var(--surface-2)", border: "1px solid var(--border)",
+            }}>
+              {/* Photo */}
+              <div style={{
+                width: 48, height: 48, borderRadius: "50%", overflow: "hidden", flexShrink: 0,
+                background: "var(--surface)", border: "1px solid var(--border)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>
+                {p.photo_url
+                  ? <img src={p.photo_url} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+                }
+              </div>
+
+              {/* Info */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-medium" style={{ color: "var(--text)" }}>{p.name}</p>
+                  <span className="rumi-tag" style={{ fontSize: "0.62rem", padding: "1px 8px" }}>
+                    {p.relationship}
+                  </span>
+                  {p.added_by === "rumi_introduction" && (
+                    <span className="rumi-tag" style={{ fontSize: "0.62rem", padding: "1px 8px", borderColor: "rgba(34,211,238,0.3)", color: "var(--teal)" }}>
+                      Added by Rumi
+                    </span>
+                  )}
+                </div>
+                <p style={{ fontSize: "0.68rem", color: "var(--muted)", marginTop: 2 }}>
+                  {p.interaction_count} interaction{p.interaction_count !== 1 ? "s" : ""} · Last seen {formatDate(p.last_seen)}
+                </p>
+              </div>
+
+              {/* Delete */}
+              <button onClick={() => handleDelete(p.id)} className="btn-icon"
+                style={{ width: 28, height: 28, borderRadius: 6, color: "var(--error)", borderColor: "rgba(248,113,113,0.2)", flexShrink: 0 }}
+                title="Remove">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+                  <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                </svg>
+              </button>
+            </div>
+          ))}
+
+          {people.length === 0 && !adding && (
+            <p className="text-sm" style={{ color: "var(--muted)", fontStyle: "italic" }}>
+              No one added yet. Upload a clear photo so Rumi can recognise them.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Add person form */}
+      {adding && (
+        <div style={{
+          marginTop: 16, padding: "16px", borderRadius: 12,
+          background: "var(--surface-2)", border: "1px solid var(--border)",
+        }}>
+          <p className="uppercase-label mb-3" style={{ fontSize: "0.6rem", color: "var(--gold)" }}>New person</p>
+
+          {/* Photo upload */}
+          <div className="flex items-center gap-3 mb-4">
+            <div style={{
+              width: 56, height: 56, borderRadius: "50%", overflow: "hidden", flexShrink: 0,
+              background: "var(--surface)", border: "2px dashed var(--border)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              {photoPreview
+                ? <img src={photoPreview} alt="Preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              }
+            </div>
+            <div>
+              <p className="text-xs mb-1" style={{ color: "var(--text-2)" }}>Clear, front-facing photo gives Rumi the best accuracy</p>
+              <label className="btn-ghost" style={{ fontSize: "0.72rem", padding: "0.25rem 0.75rem", cursor: "pointer" }}>
+                {photoPreview ? "Change photo" : "Upload photo"}
+                <input type="file" accept="image/*" onChange={handlePhotoSelect} style={{ display: "none" }} />
+              </label>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <div>
+              <span className="uppercase-label mb-1 block" style={{ fontSize: "0.6rem" }}>Name</span>
+              <input className="rumi-input w-full" placeholder="Ahmed" value={form.name}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))} autoFocus />
+            </div>
+            <div>
+              <span className="uppercase-label mb-1 block" style={{ fontSize: "0.6rem" }}>Relationship</span>
+              <select className="rumi-input w-full" value={form.relationship}
+                onChange={e => setForm(f => ({ ...f, relationship: e.target.value }))}>
+                {RELATIONSHIPS.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="mb-3">
+            <span className="uppercase-label mb-1 block" style={{ fontSize: "0.6rem" }}>Notes (optional)</span>
+            <input className="rumi-input w-full" placeholder="e.g. usually visits evenings"
+              value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+          </div>
+
+          <div className="flex gap-2">
+            <button onClick={handleAdd} disabled={saving || !form.name.trim()} className="btn-primary"
+              style={{ fontSize: "0.75rem", padding: "0.375rem 0.875rem" }}>
+              {saving ? "Saving…" : "Add to Rumi's memory"}
+            </button>
+            <button onClick={() => { setAdding(false); setPhotoPreview(""); setPhotoFile(null); }} className="btn-ghost"
+              style={{ fontSize: "0.75rem", padding: "0.375rem 0.875rem" }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function ProfilePage() {
   const router = useRouter();
   const [identity, setIdentity] = useState<Identity | null>(null);
+  const [uid, setUid] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     verifyAuth()
-      .then(() => getIdentity())
+      .then((auth) => { setUid(auth.uid); return getIdentity(); })
       .then((id) => {
         if (!id) { router.push("/onboarding"); return; }
         setIdentity(id);
@@ -581,9 +832,21 @@ export default function ProfilePage() {
             <SpeechPrefsEditor identity={identity} patch={patch} />
           </div>
 
+          {/* Known People */}
+          <div className="animate-fade-up delay-100">
+            <KnownPeopleEditor uid={uid} />
+          </div>
+
           {/* Personal */}
           <div className="animate-fade-up delay-100">
             <Section title="Personal">
+              <div className="mb-4">
+                <ProfilePhotoUploader
+                  uid={uid}
+                  currentUrl={String(identity.profile_photo_url ?? "")}
+                  onSaved={(url) => patch({ profile_photo_url: url })}
+                />
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <EditableText label="First name" value={String(identity.name ?? "")} onSave={(v) => patch({ name: v })} />
                 <EditableText label="Full name" value={String(identity.full_name ?? "")} onSave={(v) => patch({ full_name: v })} />

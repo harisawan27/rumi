@@ -160,3 +160,84 @@ export async function endSession(sessionId: string): Promise<void> {
     headers: await authHeaders(),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Known People
+// ---------------------------------------------------------------------------
+
+export interface KnownPerson {
+  id:                string;
+  name:              string;
+  relationship:      string;
+  photo_url:         string;
+  added_by:          "manual" | "rumi_introduction";
+  status:            "verified" | "draft";
+  notes:             string;
+  added_at:          string;
+  last_seen:         string | null;
+  interaction_count: number;
+}
+
+export async function getKnownPeople(): Promise<KnownPerson[]> {
+  const res = await fetch(`${BACKEND_URL}/known-people`, { headers: await authHeaders() });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.people ?? [];
+}
+
+export async function addKnownPerson(
+  person: { name: string; relationship: string; photo_url: string; notes?: string }
+): Promise<string> {
+  const res = await fetch(`${BACKEND_URL}/known-people`, {
+    method: "POST",
+    headers: await authHeaders(),
+    body: JSON.stringify({ ...person, added_by: "manual" }),
+  });
+  if (!res.ok) throw new Error("Failed to add person");
+  const data = await res.json();
+  return data.id;
+}
+
+export async function updateKnownPerson(
+  personId: string,
+  updates: Partial<{ name: string; relationship: string; photo_url: string; notes: string }>
+): Promise<void> {
+  await fetch(`${BACKEND_URL}/known-people/${personId}`, {
+    method: "PUT",
+    headers: await authHeaders(),
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteKnownPerson(personId: string): Promise<void> {
+  await fetch(`${BACKEND_URL}/known-people/${personId}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Photo upload — Firebase Storage direct (bypasses backend for binary data)
+// ---------------------------------------------------------------------------
+
+export async function uploadPersonPhoto(
+  uid: string,
+  file: File,
+  personId: string,
+): Promise<string> {
+  const { storage } = await import("./firebase");
+  const { ref, uploadBytes, getDownloadURL } = await import("firebase/storage");
+  const path = `known-people/${uid}/${personId}_${Date.now()}.jpg`;
+  const storageRef = ref(storage, path);
+  await uploadBytes(storageRef, file, { contentType: file.type });
+  return getDownloadURL(storageRef);
+}
+
+export async function uploadProfilePhoto(uid: string, file: File): Promise<string> {
+  const { storage } = await import("./firebase");
+  const { ref, uploadBytes, getDownloadURL } = await import("firebase/storage");
+  const path = `profile-photos/${uid}/profile_${Date.now()}.jpg`;
+  const storageRef = ref(storage, path);
+  await uploadBytes(storageRef, file, { contentType: file.type });
+  return getDownloadURL(storageRef);
+}

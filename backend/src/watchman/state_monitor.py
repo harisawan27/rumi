@@ -52,6 +52,18 @@ class StateMonitor:
         self._focused_streak = 0
         self._idle_streak = 0
         self._websocket = None
+        # ── Face watcher (owner verification) ──────────────────────────────
+        self._owner_photo_url: Optional[str] = None   # set by session_manager at start
+        self._face_check_counter  = 0
+        self._face_check_interval = 6    # every 6 cycles = 30 seconds
+        self._non_owner_streak    = 0
+        self._non_owner_threshold = 3    # 3 consecutive mismatches → guest confirmed
+        self._guest_active        = False
+
+    def set_owner_photo(self, url: str) -> None:
+        """Called by session_manager after loading identity — enables face verification."""
+        self._owner_photo_url = url
+        logger.info("StateMonitor: owner photo loaded for face verification")
 
     def set_websocket(self, ws) -> None:
         self._websocket = ws
@@ -186,8 +198,50 @@ class StateMonitor:
                     if on_deep_focus:
                         await on_deep_focus()
 
+                # ── Face watcher — runs every 30s, non-blocking ──────────
+                if self._owner_photo_url and self._current_frame:
+                    self._face_check_counter += 1
+                    if self._face_check_counter >= self._face_check_interval:
+                        self._face_check_counter = 0
+                        asyncio.create_task(
+                            self._run_face_check()
+                        )
+
             except Exception as exc:
                 logger.error("StateMonitor: cycle error: %s", exc)
+
+    async def _run_face_check(self) -> None:
+        """Compare current frame against owner photo. Fires guest/owner events via WS."""
+        import base64
+        if not self._current_frame or not self._owner_photo_url:
+            return
+        try:
+            from src.vision.face_matcher import compare_faces
+            frame_b64 = base64.b64encode(self._current_frame).decode()
+            result = await compare_faces(self._owner_photo_url, frame_b64)
+
+            if not result.is_owner:
+                self._non_owner_streak += 1
+                if self._non_owner_streak >= self._non_owner_threshold and not self._guest_active:
+                    self._guest_active = True
+                    logger.info("StateMonitor: guest confirmed (confidence=%.2f)", result.confidence)
+                    if self._websocket:
+                        await self._websocket.send_text(json.dumps({
+                            "type": "guest_detected",
+                            "confidence": result.confidence,
+                        }))
+            else:
+                if self._guest_active:
+                    logger.info("StateMonitor: owner returned")
+                    if self._websocket:
+                        await self._websocket.send_text(json.dumps({
+                            "type": "owner_returned",
+                        }))
+                self._non_owner_streak = 0
+                self._guest_active = False
+
+        except Exception as exc:
+            logger.debug("StateMonitor: face check error: %s", exc)
 
     def stop(self) -> None:
         self._stop_event.set()

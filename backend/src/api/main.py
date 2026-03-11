@@ -110,7 +110,9 @@ def get_identity(uid: str = Depends(get_current_uid)):
 
 
 class IdentityUpdate(BaseModel):
-    name: str
+    model_config = {"extra": "allow"}   # forward-compatible — any new profile field saves cleanly
+
+    name: str = ""
     full_name: str = ""
     age: int | None = None
     location: str = ""
@@ -130,6 +132,15 @@ class IdentityUpdate(BaseModel):
     wellness_trigger: str = ""
     student_context: str = ""
     environment: str = ""
+    # Language & speech preferences
+    companion_language: str = ""
+    expression_styles: list[str] = []
+    companion_tone: str = "casual"
+    companion_style: str = ""
+    # Timezone (auto-detected by browser — never ask the user)
+    timezone: str = "UTC"
+    # Profile photo (Firebase Storage URL)
+    profile_photo_url: str = ""
 
 
 @app.put("/identity", status_code=200)
@@ -299,6 +310,69 @@ async def debug_trigger(trigger_type: str, uid: str = Depends(get_current_uid)):
     }
     asyncio.create_task(dispatch[trigger_type]())
     return {"fired": trigger_type}
+
+
+# ---------------------------------------------------------------------------
+# Known People (face recognition social graph)
+# ---------------------------------------------------------------------------
+
+class KnownPersonCreate(BaseModel):
+    name:         str
+    relationship: str
+    photo_url:    str = ""
+    notes:        str = ""
+    added_by:     str = "manual"   # "manual" | "rumi_introduction"
+
+
+class KnownPersonUpdate(BaseModel):
+    name:         str | None = None
+    relationship: str | None = None
+    photo_url:    str | None = None
+    notes:        str | None = None
+    status:       str | None = None
+
+
+@app.get("/known-people")
+def list_known_people(uid: str = Depends(get_current_uid)):
+    from src.memory.known_people import get_known_people
+    try:
+        return {"people": get_known_people(uid)}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
+
+
+@app.post("/known-people", status_code=201)
+def create_known_person(body: KnownPersonCreate, uid: str = Depends(get_current_uid)):
+    from src.memory.known_people import add_known_person
+    try:
+        person_id = add_known_person(uid, body.model_dump())
+        return {"id": person_id, "status": "created"}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
+
+
+@app.put("/known-people/{person_id}")
+def update_known_person_route(
+    person_id: str,
+    body: KnownPersonUpdate,
+    uid: str = Depends(get_current_uid),
+):
+    from src.memory.known_people import update_known_person
+    try:
+        update_known_person(uid, person_id, body.model_dump(exclude_none=True))
+        return {"status": "updated"}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
+
+
+@app.delete("/known-people/{person_id}", status_code=200)
+def delete_known_person_route(person_id: str, uid: str = Depends(get_current_uid)):
+    from src.memory.known_people import delete_known_person
+    try:
+        delete_known_person(uid, person_id)
+        return {"status": "deleted"}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
 
 
 # ---------------------------------------------------------------------------
