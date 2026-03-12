@@ -5,12 +5,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from src.watchman.local_observer import LocalObserver
+from src.gemini.vision_client import VisionClient
 
 logger = logging.getLogger(__name__)
 
-# Cycle runs every 5s — free (LocalObserver, no API calls)
-# Triggers import this constant to accumulate elapsed time correctly
+# Cycle runs every 5s
+# Gemini vision runs every VISION_CYCLE_INTERVAL cycles = every 15s (3 × 5s)
 CYCLE_INTERVAL_SECONDS = 5
+VISION_CYCLE_INTERVAL  = 3   # Gemini vision call frequency
 
 AWAY_THRESHOLD_CYCLES = 60      # 60 × 5s = 5 minutes of idle → away mode
 FOCUSED_STREAK_THRESHOLD = 12   # 12 × 5s = 1 minute of focus → slow check-in cycle
@@ -42,6 +44,8 @@ class StateMonitor:
                  long_session_tracker=None, deep_focus_tracker=None):
         self._gemini = gemini_client  # kept for voice dispatch in session_manager
         self._local = LocalObserver()
+        self._vision = VisionClient()   # Gemini 2.5 Flash vision — richer analysis
+        self._vision_cycle_counter = 0  # counts cycles between Gemini vision calls
         self._frustration_tracker = frustration_tracker
         self._coding_block_tracker = coding_block_tracker
         self._long_session_tracker = long_session_tracker
@@ -92,33 +96,67 @@ class StateMonitor:
             logger.warning("StateMonitor: request_frame failed: %s", exc)
 
     async def run_cycle(self) -> StateResult:
-        """Run one local observation cycle. No API call."""
+        """Hybrid observation cycle.
+
+        Every cycle:
+          - LocalObserver._score_idle (frame diff, free) → detects away/idle instantly.
+
+        Every VISION_CYCLE_INTERVAL cycles (~15s):
+          - VisionClient (Gemini 2.5 Flash) → rich emotion + state analysis.
+          - Skipped if frame diff shows no movement (person idle → no point calling Gemini).
+        """
         if not self._current_frame:
             logger.debug("StateMonitor: no frame — returning last result")
             return self._last_result or StateResult(state="neutral", confidence=0.0)
 
-        observation = self._local.observe(self._current_frame)
+        # ── Layer 1: frame diff (free, instant) ───────────────────────────────
+        local_obs = self._local.observe(self._current_frame)
 
-        # Map LocalObservation → StateResult
-        # Confidence is the dominant score
-        if observation.event == "frustrated":
-            confidence = observation.frustration_score
-        elif observation.event == "idle":
-            confidence = observation.idle_score
+        # If completely idle (no movement), skip Gemini — no new info to gain
+        if local_obs.idle_score >= 0.85:
+            result = StateResult(
+                state="idle",
+                confidence=round(local_obs.idle_score, 2),
+                cues=["No movement detected"],
+                landmarks={},
+            )
+            self._last_result = result
+            return result
+
+        # ── Layer 2: Gemini vision (every VISION_CYCLE_INTERVAL cycles) ───────
+        self._vision_cycle_counter += 1
+        if self._vision_cycle_counter >= VISION_CYCLE_INTERVAL:
+            self._vision_cycle_counter = 0
+            try:
+                data = await self._vision.analyse_frame(self._current_frame)
+                result = StateResult(
+                    state=data.get("state", "neutral"),
+                    confidence=float(data.get("confidence", 0.5)),
+                    cues=data.get("cues", []),
+                    landmarks=data.get("emotions", {}),
+                )
+                self._last_result = result
+                logger.info(
+                    "StateMonitor [Gemini]: state=%s confidence=%.2f",
+                    result.state, result.confidence,
+                )
+                return result
+            except Exception as exc:
+                logger.warning("StateMonitor: Gemini vision failed, using local: %s", exc)
+
+        # ── Fallback: local FER result (between Gemini calls) ─────────────────
+        if local_obs.event == "frustrated":
+            confidence = local_obs.frustration_score
         else:
-            confidence = 1.0 - max(observation.frustration_score, observation.idle_score)
+            confidence = 1.0 - max(local_obs.frustration_score, local_obs.idle_score)
 
         result = StateResult(
-            state=observation.event,
+            state=local_obs.event,
             confidence=round(confidence, 2),
-            cues=observation.cues,
-            landmarks=observation.landmarks,
+            cues=local_obs.cues,
+            landmarks=local_obs.landmarks,
         )
         self._last_result = result
-        logger.debug(
-            "StateMonitor: state=%s confidence=%.2f cues=%s",
-            result.state, result.confidence, result.cues,
-        )
         return result
 
     async def run_loop(self, on_frustration=None, on_coding_block=None,
