@@ -3,9 +3,11 @@
 .env.local
 .env.*.local
 
-# Firebase service account (secrets)
+# Firebase / GCP service account keys (secrets — never commit)
 backend/firebase-service-account.json
 *.json.key
+gcp-sa-key.json
+firebase-sa.json
 
 # Python
 __pycache__/
