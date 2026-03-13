@@ -58,13 +58,14 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker --quiet
+
       - name: Build and push Docker image
         working-directory: backend
         run: |
-          gcloud builds submit \
-            --tag gcr.io/midyear-acre-322217/rumi-backend \
-            --timeout 20m \
-            --verbosity warning
+          docker build -t gcr.io/midyear-acre-322217/rumi-backend:latest .
+          docker push gcr.io/midyear-acre-322217/rumi-backend:latest
 
       - name: Deploy to Cloud Run
         run: |

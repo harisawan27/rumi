@@ -108,8 +108,13 @@ export type WsMessage =
   | { type: "request_frame" }
   | { type: "audio_response"; data: string }
   | { type: "transcript"; text: string }
-  | { type: "memory_updated"; fields: string[]; message: string }
   | { type: "audio_interrupt" }
+  | { type: "canvas_history"; items: { query: string; title: string; content: string; content_type: string; timestamp: string }[] }
+  | { type: "text_response"; text: string }
+  | { type: "detection_update"; label: string; confidence: number }
+  | { type: "memory_updated"; fields: string[]; message: string }
+  | { type: "guest_detected"; name: string; photo_url?: string }
+  | { type: "owner_returned" }
   | { type: "error"; code: string; message?: string };
 
 export async function connectObserveSocket(
