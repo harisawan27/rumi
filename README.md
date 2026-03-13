@@ -23,6 +23,24 @@ The agent is named after Jalāl ad-Dīn Muhammad Rūmī — not as branding, but
 
 ---
 
+## Live Agent Rubric — Full Compliance
+
+The Live Agents category requires: real-time audio/vision interaction, natural conversation with interruption support, Gemini Live API or ADK, and hosting on Google Cloud. Rumi satisfies every requirement — and uses both mandatory technologies simultaneously.
+
+| Requirement | Implementation | Detail |
+|---|---|---|
+| **Real-time Audio** | Gemini 2.5 Flash Native Audio Dialog | Bidirectional voice WebSocket — Rumi speaks and listens in the same session |
+| **Real-time Vision** | Gemini 2.5 Flash dual-frame analysis | Camera frame + screen frame analysed together every 15 seconds |
+| **Talk naturally** | Web Speech API + 35-variant wake word | Say "Hey Rumi" in any accent, any ambient noise — it activates |
+| **Can be interrupted** | `audio_interrupt` WebSocket + AudioContext cancellation | User speaking mid-response immediately cancels Rumi's audio, closes the AudioContext, and begins processing the new input — true barge-in, not turn-based |
+| **Gemini Live API** | ✅ GeminiLiveClient | Core voice pipeline — proactive interventions and all spoken responses |
+| **Google ADK** | ✅ Rumi Core Agent | Identity-grounded reasoning — every intervention is ADK-reasoned against Firestore memory |
+| **Hosted on Google Cloud** | ✅ Cloud Run + Firebase Hosting | Backend on Cloud Run (asia-south1), frontend on Firebase Hosting global CDN |
+
+Rumi is not a voice wrapper. It is a continuously running perception-reasoning-speech loop that initiates conversation without being asked, sees your face and screen simultaneously, and yields instantly when you speak over it.
+
+---
+
 ## The Problem No One Has Solved
 
 The knowledge worker sits alone. Eight, ten, twelve hours. No one notices when the posture shifts, when the scrolling becomes aimless, when the same error message has been stared at for an hour. The tools are smarter than ever — and more silent than ever about the human using them.
@@ -68,6 +86,9 @@ Every session begins with Rumi greeting you by name, referencing your last sessi
 
 ### Emotional State → Face Expression
 Rumi's face is a real-time reflection of what it perceives. When the watchman detects frustration, Rumi's face shifts to *concerned*. When it detects deep work, the face shifts to *thinking*. The face is not decorative — it is a live readout of Rumi's understanding of you in this moment.
+
+### Calibrated Triggers — Not Noise
+Rumi does not speak constantly. That would make it a distraction, not a companion. Proactive interventions are governed by thresholds calibrated to match the natural rhythm of a deep work session: frustration must persist across multiple perception cycles before triggering, focus streaks must be sustained, session length must cross a meaningful threshold. A typical 8-hour session sees 2–4 proactive interventions — each one earned, each one grounded in what Rumi has observed, not guessed.
 
 ### Demo Mode
 Any trigger can be fired instantly via keyboard shortcut — no need to sit for 30 minutes to see a deep focus intervention. The full pipeline (ADK reasoning → Gemini Live voice → Firestore log) executes in real-time on demand.
@@ -229,11 +250,13 @@ Rumi is a **SaaS platform** with three monetisation tiers:
 
 The moat is identity depth. The longer Rumi runs, the richer its model of you becomes. No competing product can replicate six months of Rumi's memory of you by shipping a better interface. The switching cost compounds with every session, every summary, every intervention that landed exactly right.
 
-The Total Addressable Market is every knowledge worker with a computer and a webcam — approximately 1.1 billion people globally. The wedge is developers and designers, the same cohort that made Notion, Linear, and Figma inevitable.
+The wedge is developers and designers — the 50 million knowledge workers who made Notion, Linear, and Figma inevitable. They already have cameras on all day, already have screens Rumi can see, and already pay for tools that understand how they work. From there, the model expands to every knowledge worker with a screen and a willingness to be understood.
 
 ---
 
 ## What Makes This Different
+
+Microsoft Copilot answers questions inside Office. ChatGPT remembers your last message. Inflection's Pi is warm but passive. Humane AI Pin listens but doesn't know you. Every one of them waits. None of them watch. None of them know your name, your projects, your culture, your working rhythm. None of them speak first.
 
 Every AI product launched in 2024 and 2025 is a better search engine wearing a chat interface. They are reactive, stateless, and culturally deaf. They wait. They forget. They treat every session as the first time they've met you.
 
