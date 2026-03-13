@@ -17,7 +17,7 @@ const cormorant = Cormorant_Garamond({
 });
 
 export const metadata: Metadata = {
-  title: "Rumi — The Identity Layer",
+  title: "Rumi — Present before you speak",
   description: "The first empathetic, persistent memory layer for physical AI.",
   icons: {
     icon: [

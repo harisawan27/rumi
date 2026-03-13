@@ -77,7 +77,7 @@ export default function SignInPage() {
           >
             Rumi
           </h1>
-          <p className="uppercase-label mb-6">The Identity Layer</p>
+          <p className="uppercase-label mb-6">Present before you speak</p>
 
           {/* Divider with Arabic ornament */}
           <div className="flex items-center gap-3 mb-6">
