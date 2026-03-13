@@ -828,6 +828,8 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 is_followup = bool(msg.get("is_followup", False))
                 followup_context = msg.get("context", [])  # list of {q, a} dicts
                 if text:
+                    import time as _time
+                    _t0 = _time.perf_counter()
                     # Barge-in: if user speaks while we're processing, cancel current response
                     if mgr._is_responding:
                         logger.info("ws_observe: barge-in — cancelling active response for new query")
@@ -839,7 +841,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                         except Exception:
                             pass
                     if True:
-                        async def _respond(t: str = text, img=image_b64, _ws=websocket, _is_fu=is_followup, _ctx=followup_context) -> None:
+                        async def _respond(t: str = text, img=image_b64, _ws=websocket, _is_fu=is_followup, _ctx=followup_context, _req_t0=_t0) -> None:
                             mgr._is_responding = True
                             mgr._suppress_audio = True
                             try:
@@ -895,6 +897,8 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                     logger.info("ws_observe: voice-only response (%d chars)", len(content))
 
                                 # Always speak — voice is first class regardless of canvas decision
+                                _latency_ms = (_time.perf_counter() - _req_t0) * 1000
+                                logger.info("[LATENCY] user_text→speak_start: %.0fms (canvas=%s)", _latency_ms, result["canvas_needed"])
                                 mgr._speak_task = asyncio.create_task(mgr._speak_verbatim(content))
                             except BaseException as exc:
                                 logger.warning("ws_observe: _respond failed: %s", exc)

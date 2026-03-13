@@ -32,7 +32,7 @@ The Live Agents category requires: real-time audio/vision interaction, natural c
 | **Real-time Audio** | Gemini 2.5 Flash Native Audio Dialog | Bidirectional voice WebSocket — Rumi speaks and listens in the same session |
 | **Real-time Vision** | Gemini 2.5 Flash dual-frame analysis | Camera frame + screen frame analysed together every 15 seconds |
 | **Talk naturally** | Web Speech API + 35-variant wake word | Say "Hey Rumi" in any accent, any ambient noise — it activates |
-| **Can be interrupted** | `audio_interrupt` WebSocket + AudioContext cancellation | User speaking while Rumi talks cancels the active audio immediately (AudioContext closed, speech synthesis stopped). Barge-in during API processing also cancels the in-flight response and starts fresh — no dropped input at any stage |
+| **Can be interrupted** | VAD barge-in + `audio_interrupt` WebSocket | A dedicated `SpeechRecognition` listener runs *during* Rumi's speech — any utterance >2 chars triggers immediate audio cancellation (AudioContext closed, speech synthesis stopped) **without** needing the wake word. Barge-in during API processing also cancels the in-flight response and processes the new query fresh — no dropped input at any stage |
 | **Gemini Live API** | ✅ GeminiLiveClient | Core voice pipeline — proactive interventions and all spoken responses |
 | **Google ADK** | ✅ Rumi Core Agent | Identity-grounded reasoning — every intervention is ADK-reasoned against Firestore memory |
 | **Hosted on Google Cloud** | ✅ Cloud Run + Firebase Hosting | Backend on Cloud Run (asia-south1), frontend on Firebase Hosting global CDN |
@@ -182,7 +182,7 @@ This product could not exist on any other stack. That is not a marketing claim. 
 The ambient model requires three simultaneous capabilities that no single platform outside Google currently offers together:
 
 **1. Sub-second bidirectional voice.**
-Gemini Live API's native audio WebSocket delivers voice responses in under 300ms with no streaming workaround. At 400ms+ latency, the ambient illusion breaks — the AI feels like a tool responding, not a presence speaking. Every competing voice API we evaluated required client-side buffering that introduced perceptible delay. Gemini Live is the only API where the response feels like it was already forming before you finished speaking.
+Gemini Live API's native audio WebSocket delivers proactive voice interventions in **~200–400ms** from trigger detection to first spoken word. For query responses (user_text → Gemini Flash → speak): measured end-to-end at **~900–1,500ms** on Cloud Run (asia-south1), logged per-request with `[LATENCY] user_text→speak_start`. At 400ms+ latency, the ambient illusion breaks — the AI feels like a tool responding, not a presence speaking. Every competing voice API we evaluated required client-side buffering that introduced perceptible delay. Gemini Live is the only API where the response feels like it was already forming before you finished speaking.
 
 **2. Multimodal vision at the perception layer.**
 Gemini 2.5 Flash receives a camera frame and a screen frame simultaneously and reasons across both in a single inference call. Describing what a user is doing — *"you're staring at a null pointer exception on line 47 of a file you've had open for 40 minutes"* — requires seeing the face AND the screen at once. No other production-grade vision API handles dual-frame multimodal context at this latency.

@@ -85,6 +85,7 @@ export default function DashboardPage() {
   const lastFollowUpQueryRef = useRef<string>("");
   const lastSentQueryRef = useRef<string>("");   // always-current ref — avoids stale closure in WS handler
   const pendingAttachmentRef = useRef<{ dataUrl: string; name: string } | null>(null);
+  const bargeinRef = useRef<SpeechRecognition | null>(null); // VAD barge-in listener (active while Rumi speaks)
   const [wakeListening, setWakeListening] = useState(false);
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -209,6 +210,8 @@ export default function DashboardPage() {
       wakeWordActiveRef.current = false;
       preListenerRef.current?.abort();
       preListenerRef.current = null;
+      bargeinRef.current?.abort();
+      bargeinRef.current = null;
       if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
     };
   }, [router]);
@@ -492,6 +495,75 @@ export default function DashboardPage() {
   function stopListening() {
     recognitionRef.current?.stop();
   }
+
+  // ── VAD barge-in ─────────────────────────────────────────────────────────
+  // Runs ONLY while Rumi is speaking. Any speech >2 chars immediately interrupts
+  // without requiring the wake word — true VAD barge-in.
+  function stopBargeinListener() {
+    bargeinRef.current?.abort();
+    bargeinRef.current = null;
+  }
+
+  function startBargeinListener() {
+    if (!micEnabledRef.current || bargeinRef.current) return;
+    const SR =
+      (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition })
+        .SpeechRecognition ??
+      (window as unknown as { webkitSpeechRecognition?: typeof window.SpeechRecognition })
+        .webkitSpeechRecognition;
+    if (!SR) return;
+
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    bargeinRef.current = rec;
+
+    rec.onresult = (e: SpeechRecognitionEvent) => {
+      const text = Array.from(e.results)
+        .map(r => r[0].transcript)
+        .join("")
+        .trim();
+      if (text.length > 2) {
+        stopBargeinListener();
+        // Kill scheduled audio output
+        if (playCtxRef.current) {
+          playCtxRef.current.close().catch(() => {});
+          playCtxRef.current = null;
+        }
+        nextPlayTimeRef.current = 0;
+        setSpeaking(false);
+        window.speechSynthesis.cancel();
+        // Notify backend to cancel its speak task
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
+        }
+        // Hand off to main listener to capture new utterance
+        setTimeout(() => startListeningWithRef(), 100);
+      }
+    };
+
+    rec.onend = () => {
+      if (bargeinRef.current === rec) bargeinRef.current = null;
+    };
+
+    rec.onerror = () => {
+      if (bargeinRef.current === rec) bargeinRef.current = null;
+    };
+
+    try { rec.start(); } catch { /* ignore race */ }
+  }
+
+  // Start/stop barge-in listener whenever Rumi's speaking state changes
+  useEffect(() => {
+    if (speaking && micEnabledRef.current) {
+      startBargeinListener();
+    } else {
+      stopBargeinListener();
+    }
+    return () => stopBargeinListener();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speaking]);
 
   function sendToRumi(text: string, image?: string | null) {
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
