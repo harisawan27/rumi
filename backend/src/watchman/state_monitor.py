@@ -57,8 +57,9 @@ class StateMonitor:
         self._focused_streak = 0
         self._idle_streak = 0
         self._websocket = None
-        # ── Face watcher (owner verification) ──────────────────────────────
+        # ── Face watcher (owner verification + known people) ────────────────
         self._owner_photo_url: Optional[str] = None   # set by session_manager at start
+        self._uid: str = ""                            # set via set_uid()
         self._face_check_counter  = 0
         self._face_check_interval = 6    # every 6 cycles = 30 seconds
         self._non_owner_streak    = 0
@@ -66,6 +67,10 @@ class StateMonitor:
         self._guest_active        = False
         self._on_guest_detected   = None  # set via set_guest_callback()
         self._on_owner_returned   = None  # set via set_owner_returned_callback()
+
+    def set_uid(self, uid: str) -> None:
+        """Store uid so face checker can query known people from Firestore."""
+        self._uid = uid
 
     def set_owner_photo(self, url: str) -> None:
         """Called by session_manager after loading identity — enables face verification."""
@@ -267,43 +272,81 @@ class StateMonitor:
                 logger.error("StateMonitor: cycle error: %s", exc)
 
     async def _run_face_check(self) -> None:
-        """Compare current frame against owner photo. Fires guest/owner events via WS."""
+        """Compare current frame against owner, then known people. Fires WS events."""
         import base64
         if not self._current_frame or not self._owner_photo_url:
             return
         try:
             from src.vision.face_matcher import compare_faces
             frame_b64 = base64.b64encode(self._current_frame).decode()
-            result = await compare_faces(self._owner_photo_url, frame_b64)
 
-            if not result.is_owner:
-                self._non_owner_streak += 1
-                if self._non_owner_streak >= self._non_owner_threshold and not self._guest_active:
-                    self._guest_active = True
-                    logger.info("StateMonitor: guest confirmed (confidence=%.2f)", result.confidence)
-                    if self._websocket:
-                        await self._websocket.send_text(json.dumps({
-                            "type": "guest_detected",
-                            "confidence": result.confidence,
-                        }))
-                    # Fire session_manager callback for voice intervention
-                    if self._on_guest_detected:
-                        asyncio.create_task(self._on_guest_detected())
-            else:
+            # ── Step 1: check owner ──────────────────────────────────────────
+            result = await compare_faces(self._owner_photo_url, frame_b64)
+            if result.is_owner:
                 if self._guest_active:
                     logger.info("StateMonitor: owner returned")
                     if self._websocket:
-                        await self._websocket.send_text(json.dumps({
-                            "type": "owner_returned",
-                        }))
-                    # Reset so next guest gets a fresh greeting
-                    if hasattr(self, "_on_owner_returned") and self._on_owner_returned:
+                        await self._websocket.send_text(json.dumps({"type": "owner_returned"}))
+                    if self._on_owner_returned:
                         asyncio.create_task(self._on_owner_returned())
                 self._non_owner_streak = 0
                 self._guest_active = False
+                return
+
+            # ── Step 2: not owner — check known people ───────────────────────
+            self._non_owner_streak += 1
+            if self._uid:
+                try:
+                    known = await asyncio.get_event_loop().run_in_executor(
+                        None, _load_known_people, self._uid
+                    )
+                    for person in known:
+                        photo_url = person.get("photo_url", "")
+                        if not photo_url:
+                            continue
+                        match = await compare_faces(photo_url, frame_b64)
+                        if match.is_owner:   # same threshold — person is recognised
+                            logger.info("StateMonitor: known person — %s (%s)",
+                                        person["name"], person["relationship"])
+                            self._non_owner_streak = 0  # known person ≠ guest
+                            if self._websocket:
+                                await self._websocket.send_text(json.dumps({
+                                    "type": "known_person_detected",
+                                    "name": person["name"],
+                                    "relationship": person["relationship"],
+                                }))
+                            # Update last_seen + interaction_count async
+                            asyncio.get_event_loop().run_in_executor(
+                                None, _bump_known_person, self._uid, person["id"]
+                            )
+                            return
+                except Exception as exc:
+                    logger.debug("StateMonitor: known people check failed: %s", exc)
+
+            # ── Step 3: unknown person — guest detection ─────────────────────
+            if self._non_owner_streak >= self._non_owner_threshold and not self._guest_active:
+                self._guest_active = True
+                logger.info("StateMonitor: guest confirmed (confidence=%.2f)", result.confidence)
+                if self._websocket:
+                    await self._websocket.send_text(json.dumps({
+                        "type": "guest_detected",
+                        "confidence": result.confidence,
+                    }))
+                if self._on_guest_detected:
+                    asyncio.create_task(self._on_guest_detected())
 
         except Exception as exc:
             logger.debug("StateMonitor: face check error: %s", exc)
+
+
+def _load_known_people(uid: str) -> list:
+    from src.memory.known_people import get_known_people
+    return get_known_people(uid)
+
+
+def _bump_known_person(uid: str, person_id: str) -> None:
+    from src.memory.known_people import record_known_person_interaction
+    record_known_person_interaction(uid, person_id)
 
     def stop(self) -> None:
         self._stop_event.set()

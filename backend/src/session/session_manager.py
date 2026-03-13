@@ -359,6 +359,7 @@ class SessionManager:
             deep_focus_tracker=deep_focus,
         )
         monitor.set_websocket(self._websocket)
+        monitor.set_uid(self._uid)
         if self._owner_photo_url:
             monitor.set_owner_photo(self._owner_photo_url)
         monitor.set_guest_callback(self._fire_guest_detected)

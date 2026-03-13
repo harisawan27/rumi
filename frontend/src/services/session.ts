@@ -115,6 +115,7 @@ export type WsMessage =
   | { type: "memory_updated"; fields: string[]; message: string }
   | { type: "guest_detected"; name: string; photo_url?: string }
   | { type: "owner_returned" }
+  | { type: "known_person_detected"; name: string; relationship: string }
   | { type: "error"; code: string; message?: string };
 
 export async function connectObserveSocket(

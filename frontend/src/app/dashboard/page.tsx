@@ -874,6 +874,10 @@ export default function DashboardPage() {
       setRumiEmotion("neutral");
     } else if (msg.type === "owner_returned") {
       setGuestMode(false);
+    } else if (msg.type === "known_person_detected") {
+      const m = msg as { type: string; name: string; relationship: string };
+      setMemoryToast(`${m.name} is here — ${m.relationship}`);
+      setTimeout(() => setMemoryToast(null), 6000);
     } else if (msg.type === "paused") {
       setObservationState("paused");
     } else if (msg.type === "error") {
