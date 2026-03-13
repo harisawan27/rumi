@@ -99,9 +99,6 @@ Rumi does not speak constantly. That would make it a distraction, not a companio
 
 Each trigger fires independently when its threshold is crossed. Rumi speaks because the moment warrants it — not on a timer, not at random.
 
-### Demo Mode
-Any trigger can be fired instantly via keyboard shortcut — no need to sit for 30 minutes to see a deep focus intervention. The full pipeline (ADK reasoning → Gemini Live voice → Firestore log) executes in real-time on demand.
-
 ---
 
 ## Onboarding — Where the Identity Is Born
