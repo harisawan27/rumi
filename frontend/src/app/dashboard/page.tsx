@@ -81,6 +81,7 @@ export default function DashboardPage() {
   const preListenerRef = useRef<SpeechRecognition | null>(null);
   const wakeWordActiveRef = useRef<boolean>(false);
   const micEnabledRef = useRef<boolean>(true);
+  const cameraEnabledRef = useRef<boolean>(true);
   const lastFollowUpQueryRef = useRef<string>("");
   const pendingAttachmentRef = useRef<{ dataUrl: string; name: string } | null>(null);
   const [wakeListening, setWakeListening] = useState(false);
@@ -140,7 +141,7 @@ export default function DashboardPage() {
         const canvasCtx = canvas.getContext("2d");
         const captureFrame = (): Promise<string | null> =>
           new Promise((resolve) => {
-            if (!videoRef.current || !canvasCtx) return resolve(null);
+            if (!videoRef.current || !canvasCtx || !cameraEnabledRef.current) return resolve(null);
             canvas.width = videoRef.current.videoWidth || 640;
             canvas.height = videoRef.current.videoHeight || 480;
             canvasCtx.drawImage(videoRef.current, 0, 0);
@@ -162,9 +163,12 @@ export default function DashboardPage() {
         async function connectWs(sid: string) {
           const newWs = await connectObserveSocket(sid, async (msg) => {
             if (msg.type === "request_frame") {
-              const b64 = await captureFrame();
-              if (b64 && wsRef.current?.readyState === WebSocket.OPEN) {
-                wsRef.current.send(JSON.stringify({ type: "frame", data: b64 }));
+              // Honour camera privacy toggle — never send frames when user disabled camera
+              if (cameraEnabledRef.current) {
+                const b64 = await captureFrame();
+                if (b64 && wsRef.current?.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(JSON.stringify({ type: "frame", data: b64 }));
+                }
               }
               return;
             }
@@ -236,8 +240,9 @@ export default function DashboardPage() {
     prevSpeakingRef.current = speaking;
   }, [speaking]);
 
-  // Keep micEnabledRef in sync for wake word callbacks
+  // Keep refs in sync for closure-safe access
   useEffect(() => { micEnabledRef.current = micEnabled; }, [micEnabled]);
+  useEffect(() => { cameraEnabledRef.current = cameraEnabled; }, [cameraEnabled]);
 
   // Prime the mic with optimal audio constraints once on mount.
   // Chrome reuses the same device config — noise suppression + AGC set here
@@ -451,7 +456,8 @@ export default function DashboardPage() {
         // Auto-attach: if user says "show you" / "what is this" etc., capture camera frame
         const lower = text.toLowerCase();
         const shouldAutoAttach = AUTO_ATTACH_KEYWORDS.some(kw => lower.includes(kw));
-        if (cameraEnabled && captureFrameRef.current && (shouldAutoAttach || !shouldAutoAttach)) {
+        if (shouldAutoAttach && captureFrameRef.current) {
+          // captureFrame returns null when camera is off — sendToRumi handles null gracefully
           captureFrameRef.current().then(image => sendToRumi(text, image));
         } else {
           sendToRumi(text);
@@ -623,7 +629,9 @@ export default function DashboardPage() {
     if (!micEnabled) {
       setMicEnabled(true);
     } else {
-      if (isTalkingRef.current) stopListening();
+      // Kill both listeners immediately — don't wait for useEffect
+      stopWakeWordListener();
+      stopListening();
       setMicEnabled(false);
     }
   }
@@ -835,6 +843,33 @@ export default function DashboardPage() {
           }}>
             {observationState === "active" ? "Observing" : observationState === "degraded" ? "Degraded" : "Paused"}
           </div>
+          {/* Privacy status — persistent badges when cam/mic are off */}
+          {!cameraEnabled && (
+            <button onClick={handleCameraToggle} title="Camera is OFF — Rumi cannot see you. Click to enable." style={{
+              display: "flex", alignItems: "center", gap: 4,
+              padding: "3px 8px", borderRadius: 99, cursor: "pointer",
+              background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.5)",
+            }}>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="1" y1="1" x2="23" y2="23"/>
+                <path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4M2 2l4 4"/>
+              </svg>
+              <span style={{ fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#ef4444", fontWeight: 600 }}>Cam Off</span>
+            </button>
+          )}
+          {!micEnabled && (
+            <button onClick={handleMicDeviceToggle} title="Mic is OFF — Rumi cannot hear you. Click to enable." style={{
+              display: "flex", alignItems: "center", gap: 4,
+              padding: "3px 8px", borderRadius: 99, cursor: "pointer",
+              background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.5)",
+            }}>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="1" y1="1" x2="23" y2="23"/>
+                <path d="M9 9v3a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6M17 16.95A7 7 0 015 12v-2m14 0v2a7 7 0 01-.11 1.23M12 19v3M8 23h8"/>
+              </svg>
+              <span style={{ fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#ef4444", fontWeight: 600 }}>Mic Off</span>
+            </button>
+          )}
           {/* Canvas indicator — shows new split-screen feature is active */}
           <div
             onClick={() => canvasOpen ? handleCanvasDismiss() : setCanvasOpen(true)}
@@ -933,21 +968,38 @@ export default function DashboardPage() {
                   </div>
                   <div className="hud-video-wrap" style={{ borderColor: observationState === "active" ? "var(--teal)" : "var(--border)", boxShadow: observationState === "active" ? "0 0 10px rgba(34,211,238,0.15)" : "none" }}>
                     <video ref={cameraPopupVideoRef} autoPlay muted playsInline
-                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: cameraEnabled ? 1 : 0 }} />
-                    {!cameraEnabled && <div className="hud-cam-off">CAM OFF</div>}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: cameraEnabled ? "block" : "none" }} />
+                    {!cameraEnabled && (
+                      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, background: "rgba(4,8,15,0.92)" }}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round">
+                          <line x1="1" y1="1" x2="23" y2="23"/>
+                          <path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4"/>
+                        </svg>
+                        <span style={{ fontSize: "0.65rem", letterSpacing: "0.15em", textTransform: "uppercase", color: "#ef4444", fontWeight: 700 }}>Camera Off</span>
+                        <span style={{ fontSize: "0.58rem", color: "var(--muted)", textAlign: "center", lineHeight: 1.4, padding: "0 8px" }}>Rumi cannot see you</span>
+                      </div>
+                    )}
                     {observationState === "active" && cameraEnabled && (
                       <div style={{ position: "absolute", top: 6, left: 6, width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 6px rgba(34,211,238,0.9)", animation: "statusPulse 2s ease-in-out infinite" }} />
                     )}
                   </div>
                   <div className="hud-divider" />
                   <div className="hud-controls">
-                    <button onClick={handleCameraToggle} className={`hud-ctrl-btn ${cameraEnabled ? "active-teal" : "active-red"}`} title={cameraEnabled ? "Camera off" : "Camera on"}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M18 10.5V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-4.5l4 4v-11l-4 4z" opacity={cameraEnabled ? 1 : 0.4}/></svg>
-                      <span>{cameraEnabled ? "Cam On" : "Cam Off"}</span>
+                    <button onClick={handleCameraToggle} className={`hud-ctrl-btn ${cameraEnabled ? "active-teal" : "active-red"}`} title={cameraEnabled ? "Disable camera — Rumi will stop seeing you" : "Enable camera"}>
+                      {cameraEnabled ? (
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M18 10.5V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-4.5l4 4v-11l-4 4z"/></svg>
+                      ) : (
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4"/></svg>
+                      )}
+                      <span>{cameraEnabled ? "Cam On" : "Cam Off — not seeing"}</span>
                     </button>
-                    <button onClick={handleMicDeviceToggle} className={`hud-ctrl-btn ${micEnabled ? "active-gold" : "active-red"}`} title={micEnabled ? "Mute mic" : "Unmute mic"}>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z" opacity={micEnabled ? 1 : 0.4}/><path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z" opacity={micEnabled ? 1 : 0.4}/></svg>
-                      <span>{micEnabled ? "Mic On" : "Mic Off"}</span>
+                    <button onClick={handleMicDeviceToggle} className={`hud-ctrl-btn ${micEnabled ? "active-gold" : "active-red"}`} title={micEnabled ? "Disable mic — Rumi will stop listening" : "Enable mic"}>
+                      {micEnabled ? (
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z"/><path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z"/></svg>
+                      ) : (
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6M17 16.95A7 7 0 015 12v-2m14 0v2a7 7 0 01-.11 1.23M12 19v3M8 23h8"/></svg>
+                      )}
+                      <span>{micEnabled ? "Mic On" : "Mic Off — not hearing"}</span>
                     </button>
                   </div>
                 </div>
