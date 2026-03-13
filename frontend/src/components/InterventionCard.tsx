@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 interface Props {
   interactionId: string;
-  trigger: "A" | "B" | "C" | "E";
+  trigger: "A" | "B" | "C" | "E" | "G";
   text: string;
   onRespond: (interactionId: string, response: "accepted" | "dismissed") => void;
 }

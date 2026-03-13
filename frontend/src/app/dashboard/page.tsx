@@ -622,7 +622,7 @@ export default function DashboardPage() {
       if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
       setIsProcessing(false);
       setTranscript("");
-      const m = msg as { type: string; title: string; content: string; content_type?: string };
+      const m = msg as unknown as { type: string; title: string; content: string; content_type?: string };
       const now = new Date();
       const stamp = now.toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const newItem: CanvasContent = {
@@ -639,7 +639,7 @@ export default function DashboardPage() {
       });
       setCanvasOpen(true);
     } else if (msg.type === "detection_update") {
-      const d = msg as { type: string; state: string; confidence: number; cues: string[]; landmarks: Record<string, number> };
+      const d = msg as unknown as { type: string; state: string; confidence: number; cues: string[]; landmarks: Record<string, number> };
       const newEmotions = d.landmarks ?? {};
       setDetection(prev => ({
         state: d.state, confidence: d.confidence, cues: d.cues,
