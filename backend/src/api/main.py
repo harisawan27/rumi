@@ -828,13 +828,17 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 is_followup = bool(msg.get("is_followup", False))
                 followup_context = msg.get("context", [])  # list of {q, a} dicts
                 if text:
-                    # Safety: reset stuck flag if no active speak task
-                    if mgr._is_responding and (mgr._speak_task is None or mgr._speak_task.done()):
-                        logger.warning("ws_observe: _is_responding stuck — resetting")
-                        mgr._is_responding = False
+                    # Barge-in: if user speaks while we're processing, cancel current response
                     if mgr._is_responding:
-                        logger.info("ws_observe: duplicate user_text dropped — already responding")
-                    else:
+                        logger.info("ws_observe: barge-in — cancelling active response for new query")
+                        if mgr._speak_task and not mgr._speak_task.done():
+                            mgr._speak_task.cancel()
+                        mgr._is_responding = False
+                        try:
+                            await websocket.send_text(json.dumps({"type": "audio_interrupt"}))
+                        except Exception:
+                            pass
+                    if True:
                         async def _respond(t: str = text, img=image_b64, _ws=websocket, _is_fu=is_followup, _ctx=followup_context) -> None:
                             mgr._is_responding = True
                             mgr._suppress_audio = True

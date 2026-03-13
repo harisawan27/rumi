@@ -32,7 +32,7 @@ The Live Agents category requires: real-time audio/vision interaction, natural c
 | **Real-time Audio** | Gemini 2.5 Flash Native Audio Dialog | Bidirectional voice WebSocket — Rumi speaks and listens in the same session |
 | **Real-time Vision** | Gemini 2.5 Flash dual-frame analysis | Camera frame + screen frame analysed together every 15 seconds |
 | **Talk naturally** | Web Speech API + 35-variant wake word | Say "Hey Rumi" in any accent, any ambient noise — it activates |
-| **Can be interrupted** | `audio_interrupt` WebSocket + AudioContext cancellation | User speaking mid-response immediately cancels Rumi's audio, closes the AudioContext, and begins processing the new input — true barge-in, not turn-based |
+| **Can be interrupted** | `audio_interrupt` WebSocket + AudioContext cancellation | User speaking while Rumi talks cancels the active audio immediately (AudioContext closed, speech synthesis stopped). Barge-in during API processing also cancels the in-flight response and starts fresh — no dropped input at any stage |
 | **Gemini Live API** | ✅ GeminiLiveClient | Core voice pipeline — proactive interventions and all spoken responses |
 | **Google ADK** | ✅ Rumi Core Agent | Identity-grounded reasoning — every intervention is ADK-reasoned against Firestore memory |
 | **Hosted on Google Cloud** | ✅ Cloud Run + Firebase Hosting | Backend on Cloud Run (asia-south1), frontend on Firebase Hosting global CDN |
@@ -88,7 +88,16 @@ Every session begins with Rumi greeting you by name, referencing your last sessi
 Rumi's face is a real-time reflection of what it perceives. When the watchman detects frustration, Rumi's face shifts to *concerned*. When it detects deep work, the face shifts to *thinking*. The face is not decorative — it is a live readout of Rumi's understanding of you in this moment.
 
 ### Calibrated Triggers — Not Noise
-Rumi does not speak constantly. That would make it a distraction, not a companion. Proactive interventions are governed by thresholds calibrated to match the natural rhythm of a deep work session: frustration must persist across multiple perception cycles before triggering, focus streaks must be sustained, session length must cross a meaningful threshold. A typical 8-hour session sees 2–4 proactive interventions — each one earned, each one grounded in what Rumi has observed, not guessed.
+Rumi does not speak constantly. That would make it a distraction, not a companion. Every proactive intervention is earned — governed by thresholds that match the natural rhythm of deep work:
+
+| Trigger | Fires when |
+|---|---|
+| **Deep focus** | 30 consecutive minutes of sustained, uninterrupted focus — Rumi acknowledges the streak and suggests a break |
+| **Long session** | 90 minutes without a break — Rumi surfaces a rest reminder grounded in your identity and current work |
+| **Frustration** | Frustration signal persists across multiple consecutive perception cycles — not a single frame |
+| **Coding block** | Stuck patterns detected for an extended period — Rumi offers a reframe, not a solution |
+
+Each trigger fires independently when its threshold is crossed. Rumi speaks because the moment warrants it — not on a timer, not at random.
 
 ### Demo Mode
 Any trigger can be fired instantly via keyboard shortcut — no need to sit for 30 minutes to see a deep focus intervention. The full pipeline (ADK reasoning → Gemini Live voice → Firestore log) executes in real-time on demand.
