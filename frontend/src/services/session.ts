@@ -109,6 +109,7 @@ export type WsMessage =
   | { type: "audio_response"; data: string }
   | { type: "transcript"; text: string }
   | { type: "memory_updated"; fields: string[]; message: string }
+  | { type: "audio_interrupt" }
   | { type: "error"; code: string; message?: string };
 
 export async function connectObserveSocket(
