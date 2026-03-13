@@ -1,4 +1,4 @@
-# Rumi — The Identity Layer
+# Rumi — Present before you speak
 
 > *"Out beyond ideas of wrongdoing and rightdoing, there is a field. I'll meet you there."*
 > — Jalāl ad-Dīn Muhammad Rūmī
@@ -31,6 +31,8 @@ Every AI product on the market is reactive and stateless. You ask, it answers. Y
 
 We built the thing beneath that. The layer that gives an AI system memory, empathy, and a persistent model of who you are. The layer that asks — *who is this person, right now, in this moment* — and speaks only from that truth.
 
+The market has optimised furiously for the response. Nobody has built the presence. Until now.
+
 ---
 
 ## What You See
@@ -56,23 +58,19 @@ When you ask Rumi something, it decides in a single Gemini call whether to respo
 | Poems, couplets, one-liners, emotional support | **Voice only** — spoken warmly, never written |
 | Code, step-by-step explanations, research, anything >3 sentences | **Canvas** — structured, readable, persistent |
 
-Every canvas session is a stacked thread of exchanges — your query, Rumi's response, your follow-up, Rumi's follow-up — all in one place. You can ask follow-up questions by voice (the mic icon in the canvas) or text. Rumi receives the full conversation context with each follow-up, so it never loses the thread. You can also **attach images or documents** to any question via the attachment button in the canvas follow-up bar.
-
-Canvas sessions are saved to Firestore and restored exactly as you left them on your next session.
+Every canvas session is a stacked thread of exchanges — your query, Rumi's response, your follow-up, Rumi's follow-up — all in one place. Ask follow-up questions by voice or text. Attach images or documents. Rumi carries the full context forward. Canvas sessions are saved to Firestore and restored exactly as you left them.
 
 ### Screen Awareness
-Rumi sees what you're working on. Click the screen share button in the dashboard to share your screen. Every 15 seconds, Rumi's vision pipeline receives both your camera frame and your screen frame simultaneously — it can comment on your code, your design, your browser tab, your error message. Say *"Hey Rumi, can you see what's on my screen?"* and it will answer from what it actually sees.
-
-Auto-attach triggers: if you say *"show you"*, *"what is this"*, *"look at this"*, or similar keywords, Rumi automatically attaches your current camera frame to the query. You don't have to tell it to look.
+Rumi sees what you're working on. Every 15 seconds, Rumi's vision pipeline receives both your camera frame and your screen frame simultaneously — it can comment on your code, your design, your browser tab, your error message. Say *"Hey Rumi, can you see what's on my screen?"* and it answers from what it actually sees. No setup. No special commands.
 
 ### Startup Greeting With Memory
 Every session begins with Rumi greeting you by name, referencing your last session — what you were working on, how it went, what it remembers about you. This is not a generic "welcome back". It is a continuation of an ongoing relationship.
 
 ### Emotional State → Face Expression
-Rumi's face is a real-time reflection of what it perceives. When the watchman detects frustration, Rumi's face shifts to *concerned*. When it detects deep work, the face shifts to *thinking*. The face is not decorative — it is a live readout of Rumi's current understanding of you.
+Rumi's face is a real-time reflection of what it perceives. When the watchman detects frustration, Rumi's face shifts to *concerned*. When it detects deep work, the face shifts to *thinking*. The face is not decorative — it is a live readout of Rumi's understanding of you in this moment.
 
 ### Demo Mode
-For evaluation and testing, any trigger can be fired instantly via keyboard shortcut — no need to sit for 30 minutes to see a deep focus intervention. The full pipeline (ADK reasoning → Gemini Live voice → Firestore log) executes in real-time on demand.
+Any trigger can be fired instantly via keyboard shortcut — no need to sit for 30 minutes to see a deep focus intervention. The full pipeline (ADK reasoning → Gemini Live voice → Firestore log) executes in real-time on demand.
 
 ---
 
@@ -147,6 +145,25 @@ The profile page allows every field to be updated at any time — Rumi's model o
 
 ---
 
+## Why Gemini Makes This Possible
+
+This product could not exist on any other stack. That is not a marketing claim. It is an architectural fact.
+
+The ambient model requires three simultaneous capabilities that no single platform outside Google currently offers together:
+
+**1. Sub-second bidirectional voice.**
+Gemini Live API's native audio WebSocket delivers voice responses in under 300ms with no streaming workaround. At 400ms+ latency, the ambient illusion breaks — the AI feels like a tool responding, not a presence speaking. Every competing voice API we evaluated required client-side buffering that introduced perceptible delay. Gemini Live is the only API where the response feels like it was already forming before you finished speaking.
+
+**2. Multimodal vision at the perception layer.**
+Gemini 2.5 Flash receives a camera frame and a screen frame simultaneously and reasons across both in a single inference call. Describing what a user is doing — *"you're staring at a null pointer exception on line 47 of a file you've had open for 40 minutes"* — requires seeing the face AND the screen at once. No other production-grade vision API handles dual-frame multimodal context at this latency.
+
+**3. Agent reasoning grounded in persistent identity.**
+Google ADK connects the perception layer directly to Firestore memory, so every intervention is reasoned against a living identity document — not a session context window, not a summarised chat history, but a structured model of who this person is, what they care about, and what they've experienced across every prior session. The ADK's tool-calling architecture is what makes Rumi sound like it knows you rather than like it just met you.
+
+Remove any one of these three. The product stops working. Gemini is not the chosen stack — it is the only stack.
+
+---
+
 ## The Personalisation Platform
 
 Rumi is not configured for a generic user. It is built around the specific person sitting in front of it — their name, their projects, their culture, their language, their working rhythms. This is not a feature. It is the architecture.
@@ -172,16 +189,12 @@ Three independent expression dimensions, each user-controlled:
 
 Zero culture-specific strings exist anywhere in the codebase. Gemini handles the actual words based on the user's declared preferences. The system works identically for a user in Lagos, Jakarta, São Paulo, or Karachi — because it describes *intent*, not vocabulary. One codebase. Every culture on earth.
 
-### Timezone Intelligence
-The browser auto-detects the user's IANA timezone on every session start and silently writes it to Firestore. The backend uses Python's `ZoneInfo` to convert all time references to the user's actual local time — regardless of which GCP region the server is running in. There is no timezone setting in the UI. It simply works.
-
 ### Voice Intelligence
 The wake word system is built for real-world speech, not lab conditions:
-- **35 phonetic variants** of "Hey Rumi" covering accent variation, elision, and mishearing ("lumi", "numi", "ok rumi", "hey roomy", etc.)
-- **Mic warmup** on page load — primes the audio pipeline with optimal constraints before the user ever speaks
-- **Confidence filtering** — skips recognition results the engine is already >90% certain are something else
+- **35 phonetic variants** of "Hey Rumi" covering accent variation, elision, and mishearing
+- **Mic warmup** on page load — primes the audio pipeline before the user ever speaks
+- **Confidence filtering** — skips recognition results the engine is already >90% certain are not a wake word
 - **Adaptive silence detection** — 1800ms window before first final result; drops to 1000ms after, matching the cadence of how Alexa and Siri handle real speech
-- **Voice follow-up in canvas** — follow-up questions can be asked by voice, preserving the live agent identity even in canvas sessions
 
 ---
 
@@ -190,20 +203,17 @@ The wake word system is built for real-world speech, not lab conditions:
 This is not a surveillance product. The privacy model is non-negotiable and enforced at the architecture level, not by policy document.
 
 ### Hardware-Level Controls
-- **Camera off** stops the MediaStream tracks at the OS level (`getTracks().forEach(t => t.stop())`). The `captureFrame()` function returns `null` immediately when camera is off. Backend `request_frame` messages are silently dropped. The last frozen frame in the video element is never read. Rumi **cannot** see you when camera is off.
-- **Mic off** synchronously kills both the main recognition listener and the wake word standby listener — no relying on async state updates. Rumi **cannot** hear you when mic is off.
-- **Auto-attach** (camera frame sent with voice query) only fires when the user says explicit keywords — it never silently attaches frames to regular speech.
-
-### Always-Visible Privacy Status
-The navbar shows persistent **Cam Off** and **Mic Off** badges in red whenever either sensor is disabled — visible at a glance, always, without opening any settings. Clicking a badge re-enables that sensor. The camera preview panel explicitly states "Rumi cannot see you" when off.
+- **Camera off** stops the MediaStream tracks at the OS level. `captureFrame()` returns `null` immediately. Backend `request_frame` messages are silently dropped. The last frozen frame is never read. Rumi **cannot** see you when camera is off.
+- **Mic off** synchronously kills both the main recognition listener and the wake word standby listener — no async state gap. Rumi **cannot** hear you when mic is off.
+- Persistent **Cam Off / Mic Off** badges in the navbar make privacy state visible at all times without opening any settings.
 
 ### Data Minimisation
-- **Video frames** travel from the browser MediaStream directly to Gemini's API. They are never written to disk, never stored in Firestore, never logged anywhere.
-- **Audio** is processed in-memory and discarded after the session ends.
-- **What is stored**: plain-text Interaction Summaries and 2-sentence Session Summaries. No images. No audio. No video. Ever.
-- **On-device perception**: MediaPipe runs entirely on the user's machine. Face landmarks never leave the device. Only the interpreted emotional state (`frustrated: 0.72, focused: 0.91`) is sent to the backend.
+- **Video frames** travel from the browser MediaStream directly to Gemini's API. Never written to disk. Never stored in Firestore. Never logged.
+- **Audio** processed in-memory, discarded at session end.
+- **Stored**: plain-text Interaction Summaries and 2-sentence Session Summaries. No images. No audio. No video. Ever.
+- **On-device**: MediaPipe face landmarks never leave the device. Only the interpreted emotional state is sent to the backend.
 
-This architecture is GDPR-compliant and enterprise-ready by design, not by checkbox.
+GDPR-compliant and enterprise-ready by architecture, not by checkbox.
 
 ---
 
@@ -217,29 +227,25 @@ Rumi is a **SaaS platform** with three monetisation tiers:
 | **Rumi Teams** | Engineering teams, design studios | Per-seat enterprise license |
 | **Rumi API** | Developers building identity-aware agents | Usage-based API access |
 
-The moat is identity depth. The longer Rumi runs, the richer its model of you becomes, the more irreplaceable it is. No competing product can replicate three months of Rumi's memory of you by shipping a better chatbot. The switching cost compounds with every session.
+The moat is identity depth. The longer Rumi runs, the richer its model of you becomes. No competing product can replicate six months of Rumi's memory of you by shipping a better interface. The switching cost compounds with every session, every summary, every intervention that landed exactly right.
 
-The Total Addressable Market is every knowledge worker with a computer and a webcam — approximately 1.1 billion people globally.
+The Total Addressable Market is every knowledge worker with a computer and a webcam — approximately 1.1 billion people globally. The wedge is developers and designers, the same cohort that made Notion, Linear, and Figma inevitable.
 
 ---
 
-## Engineering Workflow
+## What Makes This Different
 
-This product was built using **Spec-Driven Development (SDD)** — the same structured methodology used by engineering organisations that ship at scale. Every feature begins as a `spec.md`, progresses through `plan.md` and `tasks.md`, and every significant decision is recorded as an Architecture Decision Record (ADR). Nothing is built without a spec. Nothing ships without acceptance criteria.
+Every AI product launched in 2024 and 2025 is a better search engine wearing a chat interface. They are reactive, stateless, and culturally deaf. They wait. They forget. They treat every session as the first time they've met you.
 
-```
-specs/001-proactive-loop/
-├── spec.md        # What and why
-├── plan.md        # Architecture decisions
-├── tasks.md       # 54 testable tasks, T001–T054
-└── quickstart.md  # Local + cloud setup
+Rumi is the first AI built around a model of *you specifically* — not a user persona, not a demographic, not a query history. You. Your name, your projects, your culture, your language, your working rhythm, your faith, your fears. A model that grows richer with every session, every frustration caught early, every flow state acknowledged.
 
-history/
-├── prompts/       # Prompt History Records
-└── adr/           # Architecture Decision Records
-```
+The ambient computing wave is coming. The device on every knowledge worker's desk already has a camera, a microphone, and a screen. The infrastructure — Gemini, Firebase, Cloud Run — already exists. The missing piece was an agent architecture that could sit between the human and the machine and build a persistent, empathetic model of the person over time.
 
-This codebase is structured to be handed to a team of ten engineers tomorrow and scaled without rewrites.
+That piece now exists.
+
+The question is not whether this category gets built. It will be built. The question is whether it gets built on Google infrastructure — or whether it gets built somewhere else, and Google spends the next decade watching a competitor own the layer between humans and their computers.
+
+Rumi is already home on Google. Every API call, every byte of memory, every deployment — runs on Google infrastructure by design, not by convenience. This is not a project that needs to be migrated. It needs to be scaled.
 
 ---
 
@@ -250,14 +256,13 @@ This codebase is structured to be handed to a team of ten engineers tomorrow and
 cp .env.example .env
 # Add: GEMINI_API_KEY, FIREBASE credentials, GOOGLE_CLOUD_PROJECT
 
-# 2. Install and run locally
+# 2. Run locally
 docker-compose up --build
 # Backend:  http://localhost:8000/health
 # Frontend: http://localhost:3000
-# Sign up → complete onboarding → Rumi begins observing
 
-# 3. Deploy to GCP (Cloud Run + Firebase Hosting)
-git push origin master   # GitHub Actions handles the rest
+# 3. Deploy to GCP
+git push origin master   # GitHub Actions deploys both services in parallel
 ```
 
 **Requirements:** Node 18+, Python 3.11+, Docker, Google Cloud project with Gemini API + Firebase enabled.
@@ -287,35 +292,17 @@ rumi/
 │   │   │   └── onboarding/ # First-run identity-building flow
 │   │   ├── components/
 │   │   │   ├── RumiFace/        # Puzzle-assembled robot (12 parts, emotional states)
-│   │   │   ├── ArtifactCanvas/  # Conversation threads with follow-up bar
-│   │   │   └── ...
-│   │   ├── services/
-│   │   │   └── session.ts  # WebSocket, REST, auth
-│   │   └── types/
-│   │       └── speech.d.ts # SpeechRecognition type declarations
+│   │   │   └── ArtifactCanvas/  # Conversation threads with follow-up bar
+│   │   └── services/
+│   │       └── session.ts  # WebSocket, REST, auth
 │   └── public/
 │       └── rumi-parts/     # 12 robot body part PNGs
 ├── .github/workflows/
 │   └── deploy.yml          # CI/CD — frontend → Firebase, backend → Cloud Run
-├── specs/                  # SDD artifacts
-├── history/                # PHRs + ADRs
+├── specs/                  # Feature specs, architecture plans, task lists
 ├── docker-compose.yml
 └── .env.example
 ```
-
----
-
-## Why This Wins
-
-Every AI product launched in 2024 and 2025 is a better search engine wearing a chat interface. They are reactive, stateless, and culturally deaf. They speak to you in one language, with one tone, with no memory of who you were yesterday.
-
-Rumi is the first AI built around a model of *you specifically* — not a user persona, not a demographic, not a query history. You. Your name, your projects, your culture, your language, your working rhythm, your faith, your fears. A model that grows with every session.
-
-It sees your screen and your face simultaneously. It decides — intelligently, in a single API call — whether what you said is worth writing down or worth speaking aloud. It greets you by name and remembers your last session. When you disable the camera, it is truly blind. When you disable the mic, it is truly deaf. You are in control, always, and you can see that control reflected in the UI at all times.
-
-The entire stack — Gemini Live API, Google ADK, Firebase, Cloud Run, GitHub Actions — runs natively on Google infrastructure. This is not a product that needs to be ported or migrated. It is already home.
-
-**Second place is not an option.**
 
 ---
 
