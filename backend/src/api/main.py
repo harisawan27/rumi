@@ -476,6 +476,9 @@ FALSE — short, conversational, best experienced by listening:
   • Any answer that fits naturally in 1-2 spoken sentences
 
 When canvas_needed=false: title = empty string, content = plain spoken text (no markdown).
+  CRITICAL: deliver the COMPLETE response in content. Never truncate and say "I'll write the rest",
+  "let me show you", "I'll display", or anything that implies something will appear on screen.
+  The user only hears your voice — there is no screen output. Poems must be recited in full.
 When canvas_needed=true: title = 3-5 word summary, content = well-structured Markdown.
 """
 

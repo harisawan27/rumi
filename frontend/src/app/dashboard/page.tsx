@@ -526,6 +526,7 @@ export default function DashboardPage() {
         .trim();
       if (text.length > 2) {
         stopBargeinListener();
+        stopWakeWordListener(); // release mic fully before main listener grabs it
         // Kill scheduled audio output
         if (playCtxRef.current) {
           playCtxRef.current.close().catch(() => {});
@@ -538,8 +539,8 @@ export default function DashboardPage() {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
         }
-        // Hand off to main listener to capture new utterance
-        setTimeout(() => startListeningWithRef(), 100);
+        // 250ms lets browser fully release mic before main listener grabs it
+        setTimeout(() => startListeningWithRef(), 250);
       }
     };
 
