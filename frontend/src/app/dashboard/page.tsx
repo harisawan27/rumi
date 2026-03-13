@@ -835,6 +835,7 @@ export default function DashboardPage() {
             boxShadow: `0 0 8px ${stateColor}`,
             animation: observationState === "active" ? "statusPulse 2s ease-in-out infinite" : "none",
           }} />
+          <img src="/rumi-logo.svg" alt="Rumi" style={{ width: 22, height: 22, objectFit: "contain", filter: "brightness(0) saturate(100%) invert(75%) sepia(40%) saturate(500%) hue-rotate(5deg) brightness(95%)" }} />
           <span className="font-display text-gold" style={{ fontSize: "1.25rem", fontWeight: 400, letterSpacing: "0.06em" }}>
             Rumi
           </span>

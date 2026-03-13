@@ -53,18 +53,18 @@ export default function SignInPage() {
 
         {/* Top mark */}
         <div className="flex justify-center mb-10">
-          <div className="flex flex-col items-center gap-3">
-            {/* Minimal geometric emblem */}
-            <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="24" cy="24" r="23" stroke="rgba(201,168,76,0.3)" strokeWidth="1" />
-              <circle cx="24" cy="24" r="15" stroke="rgba(201,168,76,0.15)" strokeWidth="0.5" />
-              <circle cx="24" cy="24" r="3.5" fill="#c9a84c" opacity="0.9" />
-              <line x1="24" y1="4" x2="24" y2="14" stroke="#c9a84c" strokeWidth="1" strokeOpacity="0.5" strokeLinecap="round" />
-              <line x1="24" y1="34" x2="24" y2="44" stroke="#c9a84c" strokeWidth="1" strokeOpacity="0.5" strokeLinecap="round" />
-              <line x1="4" y1="24" x2="14" y2="24" stroke="#c9a84c" strokeWidth="1" strokeOpacity="0.5" strokeLinecap="round" />
-              <line x1="34" y1="24" x2="44" y2="24" stroke="#c9a84c" strokeWidth="1" strokeOpacity="0.5" strokeLinecap="round" />
-            </svg>
-            <span className="uppercase-label tracking-[0.35em]">Project Rumi</span>
+          <div className="flex flex-col items-center gap-4">
+            <img
+              src="/rumi-logo.svg"
+              alt="Rumi"
+              style={{
+                width: 64,
+                height: 64,
+                objectFit: "contain",
+                filter: "brightness(0) saturate(100%) invert(75%) sepia(40%) saturate(500%) hue-rotate(5deg) brightness(95%)",
+              }}
+            />
+            <span className="uppercase-label tracking-[0.35em]">Rumi</span>
           </div>
         </div>
 
