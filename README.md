@@ -84,6 +84,18 @@ Rumi sees what you're working on. Every 15 seconds, Rumi's vision pipeline recei
 ### Startup Greeting With Memory
 Every session begins with Rumi greeting you by name, referencing your last session — what you were working on, how it went, what it remembers about you. This is not a generic "welcome back". It is a continuation of an ongoing relationship.
 
+### Owner Awareness — Rumi Knows Who Is Sitting There
+
+Every 30 seconds, Rumi verifies the person in front of the camera against the owner's registered face. This is not face recognition as surveillance — it is presence verification as a trust layer.
+
+**When a guest sits down:** Rumi detects the unfamiliar face, goes silent, and enters guest mode. It stops all proactive interventions. Your work, your memory, your identity — none of it is visible or spoken aloud to someone else.
+
+**When you return:** Rumi detects you, resumes the session, and picks up exactly where it left off.
+
+**Known People:** You can register the faces of people you trust — a colleague, a collaborator, a family member. When Rumi sees them, it knows their name and their relationship to you. It doesn't treat your colleague as a stranger. It adapts.
+
+No other AI assistant in the world knows who is physically sitting in front of it. Every other AI treats the camera as a content input. Rumi treats it as an identity layer — the first question it answers every 30 seconds is not "what is this person doing?" but "is this the person I know?"
+
 ### Emotional State → Face Expression
 Rumi's face is a real-time reflection of what it perceives. When the watchman detects frustration, Rumi's face shifts to *concerned*. When it detects deep work, the face shifts to *thinking*. The face is not decorative — it is a live readout of Rumi's understanding of you in this moment.
 
@@ -262,7 +274,7 @@ The wedge is developers and designers — the 50 million knowledge workers who m
 
 ## What Makes This Different
 
-Microsoft Copilot answers questions inside Office. ChatGPT remembers your last message. Inflection's Pi is warm but passive. Humane AI Pin listens but doesn't know you. Every one of them waits. None of them watch. None of them know your name, your projects, your culture, your working rhythm. None of them speak first.
+Microsoft Copilot answers questions inside Office. ChatGPT remembers your last message. Inflection's Pi is warm but passive. Humane AI Pin listens but doesn't know you. Every one of them waits. None of them watch. None of them know your name, your projects, your culture, your working rhythm. None of them speak first. And not one of them knows who is physically sitting in front of the screen right now.
 
 Every AI product launched in 2024 and 2025 is a better search engine wearing a chat interface. They are reactive, stateless, and culturally deaf. They wait. They forget. They treat every session as the first time they've met you.
 
