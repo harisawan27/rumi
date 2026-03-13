@@ -86,14 +86,20 @@ def _build_language_instruction(ctx: dict) -> str:
 # ADK Tools
 # ---------------------------------------------------------------------------
 
+_current_uid: str = ""   # set by SessionManager before each agent call
+
+
 def get_user_context() -> dict:
     """Get the user's identity, active projects, and language preferences."""
     try:
         from src.memory.firestore_client import get_db
         db = get_db()
-        users = list(db.collection("users").limit(1).stream())
-        if users:
-            data = users[0].to_dict()
+        uid = _current_uid
+        if not uid:
+            return {}
+        doc = db.collection("users").document(uid).get()
+        if doc.exists:
+            data = doc.to_dict()
             if data:
                 return {
                     "name":               data.get("name", ""),
@@ -192,6 +198,8 @@ async def generate_intervention(event_type: str, uid: str, session_id: str) -> s
     Returns the intervention text string.
     Falls back to a hardcoded message if ADK is unavailable.
     """
+    global _current_uid
+    _current_uid = uid   # make uid available to the get_user_context tool
     agent = _get_agent()
     if agent is None:
         return _fallback_intervention(event_type)
