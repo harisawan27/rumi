@@ -492,6 +492,45 @@ async def _flash_with_image(text: str, image_b64: str, system_prompt: str = "") 
     return ""
 
 
+async def _flash_followup(text: str, context: list, image_b64: str | None, system_prompt: str = "") -> str:
+    """Generate a follow-up response with conversation context."""
+    from google import genai as _genai
+    from google.genai import types as _types
+    import base64 as _b64
+
+    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    identity_block = f"{system_prompt}\n\n---\n\n" if system_prompt else ""
+
+    context_block = ""
+    if context:
+        lines = []
+        for ex in context:
+            lines.append(f'Q: {ex.get("q", "")}\nA: {ex.get("a", "")}')
+        context_block = "Previous conversation context:\n" + "\n\n".join(lines) + "\n\n---\n\n"
+
+    text_prompt = (
+        f"{identity_block}"
+        f"{context_block}"
+        f'Follow-up question: "{text}"\n\n'
+        "Continue the conversation as Rumi. Reference previous context where relevant. "
+        "Respond in well-structured Markdown. Be precise and soulful."
+    )
+    parts: list = []
+    if image_b64:
+        parts.append(_types.Part(inline_data=_types.Blob(data=_b64.b64decode(image_b64), mime_type="image/jpeg")))
+    parts.append(_types.Part(text=text_prompt))
+
+    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        try:
+            response = await client.aio.models.generate_content(model=model, contents=parts)
+            result = (response.text or "").strip()
+            if result:
+                return result
+        except Exception as exc:
+            logger.warning("_flash_followup: %s failed: %s", model, exc)
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Canvas history — Firestore persistence (cap 20 per user)
 # ---------------------------------------------------------------------------
@@ -666,9 +705,10 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
             elif msg.get("type") == "user_text":
                 # Web Speech API transcript — Flash generates text (single source of truth),
                 # Live speaks it verbatim, canvas opens 1500ms later (voice-first UX).
-                # Phase 5: optional camera snapshot for notebook mode.
                 text = msg.get("text", "").strip()
                 image_b64 = msg.get("image")  # base64 JPEG or None
+                is_followup = bool(msg.get("is_followup", False))
+                followup_context = msg.get("context", [])  # list of {q, a} dicts
                 if text:
                     # Safety: reset stuck flag if no active speak task
                     if mgr._is_responding and (mgr._speak_task is None or mgr._speak_task.done()):
@@ -677,42 +717,41 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     if mgr._is_responding:
                         logger.info("ws_observe: duplicate user_text dropped — already responding")
                     else:
-                        async def _respond(t: str = text, img=image_b64, _ws=websocket) -> None:
+                        async def _respond(t: str = text, img=image_b64, _ws=websocket, _is_fu=is_followup, _ctx=followup_context) -> None:
                             mgr._is_responding = True
                             mgr._suppress_audio = True
                             try:
-                                # Cancel greeting if still running
                                 gt = mgr._greeting_task
                                 if gt and not gt.done():
                                     gt.cancel()
 
-                                # Clear any stale audio from greeting / previous turn
                                 try:
                                     await asyncio.sleep(0.3)
                                     await _ws.send_text(json.dumps({"type": "audio_interrupt"}))
                                 except Exception:
-                                    pass  # WS hiccup — still try to generate content
+                                    pass
                                 mgr._suppress_audio = False
 
-                                # Flash = single source of truth
-                                # Include screen frame if available — richer context
+                                sys_prompt = mgr._system_prompt or ""
+                                screen_b64: str | None = None
+                                if hasattr(mgr, "_latest_screen_frame") and mgr._latest_screen_frame:
+                                    import base64 as _b64_inner
+                                    screen_b64 = _b64_inner.b64encode(mgr._latest_screen_frame).decode()
+                                effective_img = img or screen_b64
+
                                 content = ""
                                 try:
-                                    sys_prompt = mgr._system_prompt or ""
-                                    screen_b64: str | None = None
-                                    if hasattr(mgr, "_latest_screen_frame") and mgr._latest_screen_frame:
-                                        import base64 as _b64_inner
-                                        screen_b64 = _b64_inner.b64encode(mgr._latest_screen_frame).decode()
-                                    effective_img = img or screen_b64
-                                    content = await (_flash_with_image(t, effective_img, sys_prompt) if effective_img else _flash_text_only(t, sys_prompt))
+                                    if _is_fu and _ctx:
+                                        content = await _flash_followup(t, _ctx, effective_img, sys_prompt)
+                                    elif effective_img:
+                                        content = await _flash_with_image(t, effective_img, sys_prompt)
+                                    else:
+                                        content = await _flash_text_only(t, sys_prompt)
                                 except Exception as exc:
                                     logger.warning("ws_observe: Flash threw: %s", exc)
 
                                 if not content or len(content) <= 30:
-                                    content = (
-                                        "I'm having trouble reaching my thoughts right now. "
-                                        "Please try again in a moment."
-                                    )
+                                    content = "I'm having trouble reaching my thoughts right now. Please try again in a moment."
 
                                 title = _make_title(t)
                                 await _ws.send_text(json.dumps({
@@ -720,9 +759,11 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                     "title": title,
                                     "content": content,
                                     "content_type": "markdown",
+                                    "append": _is_fu,
                                 }))
-                                logger.info("ws_observe: text_response sent (%d chars)", len(content))
-                                asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
+                                logger.info("ws_observe: text_response sent (%d chars, follow_up=%s)", len(content), _is_fu)
+                                if not _is_fu:
+                                    asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
                                 mgr._speak_task = asyncio.create_task(mgr._speak_verbatim(content))
                             except BaseException as exc:
                                 logger.warning("ws_observe: _respond failed: %s", exc)

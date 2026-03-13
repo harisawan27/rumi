@@ -18,7 +18,7 @@ import { ObservationState } from "@/components/ObservationIndicator";
 import InterventionCard from "@/components/InterventionCard";
 import PauseButton from "@/components/PauseButton";
 import RumiFace from "@/components/RumiFace";
-import ArtifactCanvas, { type CanvasContent } from "@/components/ArtifactCanvas";
+import ArtifactCanvas, { type CanvasContent, type CanvasExchange } from "@/components/ArtifactCanvas";
 
 interface ActiveIntervention {
   interactionId: string;
@@ -57,6 +57,7 @@ export default function DashboardPage() {
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [canvasHistory, setCanvasHistory] = useState<CanvasContent[]>([]);
   const [canvasIndex, setCanvasIndex] = useState(0);
+  const [isFollowingUp, setIsFollowingUp] = useState(false);
   const canvasContent = canvasHistory[canvasIndex] ?? null;
 
   // ── Override command state ──────────────────────────────────────────────────
@@ -80,6 +81,8 @@ export default function DashboardPage() {
   const preListenerRef = useRef<SpeechRecognition | null>(null);
   const wakeWordActiveRef = useRef<boolean>(false);
   const micEnabledRef = useRef<boolean>(true);
+  const lastFollowUpQueryRef = useRef<string>("");
+  const pendingAttachmentRef = useRef<{ dataUrl: string; name: string } | null>(null);
   const [wakeListening, setWakeListening] = useState(false);
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -106,10 +109,16 @@ export default function DashboardPage() {
         // Load canvas history via REST immediately — no WS timing dependency
         getCanvasHistory().then(items => {
           if (items.length > 0) {
-            const mapped = items.map(i => ({
-              title: i.title, body: i.content,
-              type: (i.content_type as "text" | "code" | "markdown") ?? "markdown",
-              query: i.query, timestamp: i.timestamp,
+            const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            const mapped: CanvasContent[] = items.map(i => ({
+              title: i.title,
+              timestamp: i.timestamp ?? now,
+              exchanges: [{
+                query: i.query ?? "",
+                response: i.content,
+                type: (i.content_type as "text" | "code" | "markdown") ?? "markdown",
+                timestamp: i.timestamp ?? now,
+              }],
             }));
             setCanvasHistory(mapped);
             setCanvasIndex(mapped.length - 1);
@@ -439,8 +448,10 @@ export default function DashboardPage() {
       const text = transcriptRef.current.trim();
       transcriptRef.current = "";
       if (text) {
-        // Phase 5: capture camera snapshot and attach to query if camera is on
-        if (cameraEnabled && captureFrameRef.current) {
+        // Auto-attach: if user says "show you" / "what is this" etc., capture camera frame
+        const lower = text.toLowerCase();
+        const shouldAutoAttach = AUTO_ATTACH_KEYWORDS.some(kw => lower.includes(kw));
+        if (cameraEnabled && captureFrameRef.current && (shouldAutoAttach || !shouldAutoAttach)) {
           captureFrameRef.current().then(image => sendToRumi(text, image));
         } else {
           sendToRumi(text);
@@ -492,6 +503,35 @@ export default function DashboardPage() {
       setTranscript("");
       setRumiEmotion("neutral");
     }, 20000);
+  }
+
+  // Keywords that trigger auto-attach of camera frame
+  const AUTO_ATTACH_KEYWORDS = ["show you", "showing you", "what is this", "what's this", "attach", "look at this", "can you see this", "see this", "what do you see"];
+
+  function handleFollowUp(text: string, image?: string | null, attachment?: { dataUrl: string; name: string }) {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    lastFollowUpQueryRef.current = text;
+    pendingAttachmentRef.current = attachment ?? null;
+    setIsFollowingUp(true);
+    // Build context from current canvas session (last 3 exchanges)
+    const currentCanvas = canvasHistory[canvasIndex];
+    const contextExchanges = currentCanvas?.exchanges.slice(-3).map(ex => ({
+      q: ex.query,
+      a: ex.response.slice(0, 400),
+    })) ?? [];
+    const payload: Record<string, unknown> = {
+      type: "user_text",
+      text,
+      is_followup: true,
+      context: contextExchanges,
+    };
+    if (image) payload.image = image;
+    if (attachment && !image && attachment.dataUrl.startsWith("data:image")) {
+      payload.image = attachment.dataUrl.split(",")[1];
+    }
+    wsRef.current.send(JSON.stringify(payload));
+    if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+    processingTimeoutRef.current = setTimeout(() => { setIsFollowingUp(false); }, 25000);
   }
 
   async function startScreenShare() {
@@ -667,34 +707,41 @@ export default function DashboardPage() {
       playAudio((msg as { type: string; data: string }).data);
     } else if (msg.type === "canvas_history") {
       const m = msg as { type: string; items: { query: string; title: string; content: string; content_type: string; timestamp: string }[] };
+      const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const items: CanvasContent[] = m.items.map(i => ({
-        title: i.title, body: i.content,
-        type: (i.content_type as "text" | "code" | "markdown") ?? "markdown",
-        query: i.query, timestamp: i.timestamp,
+        title: i.title,
+        timestamp: i.timestamp ?? now,
+        exchanges: [{ query: i.query ?? "", response: i.content, type: (i.content_type as "text" | "code" | "markdown") ?? "markdown", timestamp: i.timestamp ?? now }],
       }));
-      if (items.length > 0) {
-        setCanvasHistory(items);
-        setCanvasIndex(items.length - 1);
-      }
+      if (items.length > 0) { setCanvasHistory(items); setCanvasIndex(items.length - 1); }
     } else if (msg.type === "text_response") {
       if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
       setIsProcessing(false);
+      setIsFollowingUp(false);
       setTranscript("");
-      const m = msg as unknown as { type: string; title: string; content: string; content_type?: string };
-      const now = new Date();
-      const stamp = now.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      const newItem: CanvasContent = {
-        title: m.title,
-        body: m.content,
+      const m = msg as unknown as { type: string; title: string; content: string; content_type?: string; append?: boolean };
+      const stamp = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const exchange: CanvasExchange = {
+        query: transcript || lastFollowUpQueryRef.current || "",
+        response: m.content,
         type: (m.content_type as "text" | "code" | "markdown") ?? "markdown",
-        query: transcript || "",
         timestamp: stamp,
+        attachment: pendingAttachmentRef.current ?? undefined,
       };
-      setCanvasHistory(prev => {
-        const next = [...prev, newItem];
-        setCanvasIndex(next.length - 1);
-        return next;
-      });
+      pendingAttachmentRef.current = null;
+      if (m.append) {
+        // Append to current canvas session
+        setCanvasHistory(prev => {
+          const next = [...prev];
+          const idx = next.length - 1;
+          if (idx >= 0) next[idx] = { ...next[idx], exchanges: [...next[idx].exchanges, exchange] };
+          return next;
+        });
+      } else {
+        // New canvas session
+        const newItem: CanvasContent = { title: m.title, timestamp: stamp, exchanges: [exchange] };
+        setCanvasHistory(prev => { const next = [...prev, newItem]; setCanvasIndex(next.length - 1); return next; });
+      }
       setCanvasOpen(true);
     } else if (msg.type === "detection_update") {
       const d = msg as unknown as { type: string; state: string; confidence: number; cues: string[]; landmarks: Record<string, number> };
@@ -1072,6 +1119,8 @@ export default function DashboardPage() {
             history={canvasHistory}
             historyIndex={canvasIndex}
             onNavigate={setCanvasIndex}
+            onFollowUp={handleFollowUp}
+            isFollowingUp={isFollowingUp}
           />
         </div>
 
