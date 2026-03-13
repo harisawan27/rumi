@@ -1285,8 +1285,8 @@ export default function DashboardPage() {
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes waveBar { from { transform: scaleY(0.4); opacity: 0.6; } to { transform: scaleY(1); opacity: 1; } }
         @keyframes popupIn {
-          from { opacity: 0; transform: translateX(10px); }
-          to   { opacity: 1; transform: translateX(0); }
+          from { opacity: 0; transform: scale(0.96); }
+          to   { opacity: 1; transform: scale(1); }
         }
 
         /* ── Fluid zones ───────────────────────────────────────────────── */
@@ -1448,9 +1448,17 @@ export default function DashboardPage() {
         .hud-ctrl-btn.active-gold { background: rgba(201,168,76,0.1); color: var(--gold); }
         .hud-ctrl-btn.active-red  { background: rgba(239,68,68,0.1);  color: #ef4444; }
 
-        /* HUD positions — fixed on all screens; avoids overflow clipping */
-        .popup-head  { position: fixed; top: 72px;    right: 14px; left: auto; }
-        .popup-chest { position: fixed; bottom: 150px; right: 14px; left: auto; top: auto; }
+        /* HUD positions — mobile: right side, staggered top/bottom */
+        .popup-head  { position: fixed; top: 72px;    right: 14px; left: auto; bottom: auto; }
+        .popup-chest { position: fixed; bottom: 80px; right: 14px; left: auto; top: auto; }
+
+        /* Desktop: opposite corners so they never stack and never cover the robot */
+        @media (min-width: 640px) {
+          .popup-head  { top: 72px;    left: 14px; right: auto; bottom: auto; }
+          .popup-chest { bottom: 80px; right: 14px; left: auto; top: auto; }
+          /* Canvas open: right side is canvas content — shift chest panel to left too */
+          .app-body.canvas-open .popup-chest { left: 14px; right: auto; bottom: 80px; top: auto; }
+        }
 
         /* ── Canvas pull tab ────────────────────────────────────────────── */
         .canvas-pull-tab {
