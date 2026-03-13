@@ -400,6 +400,124 @@ def _make_title(query: str, max_words: int = 5) -> str:
     return " ".join(words[:max_words]).title() + "\u2026"
 
 
+def _extract_smart_json(raw: str) -> dict | None:
+    """Robustly extract the smart-routing JSON from Gemini output."""
+    import re
+    # Strip markdown fences
+    clean = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
+    # Try full parse
+    try:
+        return json.loads(clean)
+    except Exception:
+        pass
+    # Find first {...} block containing canvas_needed
+    match = re.search(r"\{[^{}]*\"canvas_needed\"[^{}]*\}", clean, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            pass
+    return None
+
+
+async def _flash_smart(
+    text: str,
+    image_b64: str | None,
+    system_prompt: str,
+    context: list | None = None,
+    force_canvas: bool = False,
+) -> dict:
+    """Single Gemini call that decides canvas vs voice AND generates content.
+
+    Returns {"canvas_needed": bool, "title": str, "content": str}.
+    force_canvas=True when an attachment or screen frame is present.
+    Falls back to canvas=True with full text on any parse failure.
+    """
+    from google import genai as _genai
+    from google.genai import types as _types
+    import base64 as _b64
+
+    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    identity_block = f"{system_prompt}\n\n---\n\n" if system_prompt else ""
+
+    context_block = ""
+    if context:
+        lines = [f'Q: {ex.get("q","")}\nA: {ex.get("a","")}' for ex in context]
+        context_block = "Conversation context:\n" + "\n\n".join(lines) + "\n\n---\n\n"
+
+    force_note = (
+        "\nNOTE: An image or file is attached — canvas_needed MUST be true.\n"
+        if force_canvas else ""
+    )
+
+    routing_instruction = f"""{force_note}
+You must respond with ONLY valid JSON — no text before or after, no markdown fences:
+{{
+  "canvas_needed": false,
+  "title": "",
+  "content": "your full response here"
+}}
+
+DECISION RULES for canvas_needed:
+TRUE — response benefits from being read/referenced:
+  • Code, technical solutions, debugging steps
+  • Step-by-step instructions (3+ steps)
+  • Research, explanations longer than 3 sentences
+  • Structured comparisons, tables, lists
+  • Math/logic problems solved in writing
+  • User explicitly says: write, explain in detail, summarize, research, solve
+  • Any image or file is attached (auto-true)
+
+FALSE — short, conversational, best experienced by listening:
+  • Poems, couplets, verses, Iqbal/Rumi recitations
+  • Simple one-liner facts (time, weather, quick answers)
+  • Emotional check-ins or casual conversation
+  • Greetings, encouragement, short motivational replies
+  • Any answer that fits naturally in 1-2 spoken sentences
+
+When canvas_needed=false: title = empty string, content = plain spoken text (no markdown).
+When canvas_needed=true: title = 3-5 word summary, content = well-structured Markdown.
+"""
+
+    image_note = (
+        "\nAn image is attached — analyse it and reference it in your answer.\n"
+        if image_b64 else ""
+    )
+    full_prompt = (
+        f"{identity_block}"
+        f"{context_block}"
+        f'User query: "{text}"\n'
+        f"{image_note}"
+        f"{routing_instruction}"
+    )
+
+    parts: list = []
+    if image_b64:
+        parts.append(_types.Part(inline_data=_types.Blob(data=_b64.b64decode(image_b64), mime_type="image/jpeg")))
+    parts.append(_types.Part(text=full_prompt))
+
+    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        try:
+            response = await client.aio.models.generate_content(model=model, contents=parts)
+            raw = (response.text or "").strip()
+            data = _extract_smart_json(raw)
+            if data and "content" in data:
+                canvas = bool(data.get("canvas_needed", True))
+                if force_canvas:
+                    canvas = True
+                logger.info("_flash_smart: canvas=%s model=%s chars=%d", canvas, model, len(data["content"]))
+                return {
+                    "canvas_needed": canvas,
+                    "title": data.get("title", "") or _make_title(text),
+                    "content": data["content"],
+                }
+        except Exception as exc:
+            logger.warning("_flash_smart: %s failed: %s", model, exc)
+
+    # Fallback — treat as canvas with empty content (triggers error message)
+    return {"canvas_needed": True, "title": _make_title(text), "content": ""}
+
+
 async def _flash_text_only(text: str, system_prompt: str = "") -> str:
     """Call Gemini Flash for a text-only response. Returns markdown string.
     Tries gemini-2.5-flash first, falls back to gemini-2.0-flash on failure.
@@ -737,33 +855,42 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                 if hasattr(mgr, "_latest_screen_frame") and mgr._latest_screen_frame:
                                     import base64 as _b64_inner
                                     screen_b64 = _b64_inner.b64encode(mgr._latest_screen_frame).decode()
+                                # Attachment/screen → force canvas; plain query → let Gemini decide
                                 effective_img = img or screen_b64
+                                force_canvas = bool(img)  # explicit attachment = always canvas
 
-                                content = ""
+                                result = {"canvas_needed": True, "title": _make_title(t), "content": ""}
                                 try:
-                                    if _is_fu and _ctx:
-                                        content = await _flash_followup(t, _ctx, effective_img, sys_prompt)
-                                    elif effective_img:
-                                        content = await _flash_with_image(t, effective_img, sys_prompt)
-                                    else:
-                                        content = await _flash_text_only(t, sys_prompt)
+                                    result = await _flash_smart(
+                                        t, effective_img, sys_prompt,
+                                        context=_ctx if _is_fu else None,
+                                        force_canvas=force_canvas,
+                                    )
                                 except Exception as exc:
-                                    logger.warning("ws_observe: Flash threw: %s", exc)
+                                    logger.warning("ws_observe: _flash_smart threw: %s", exc)
 
-                                if not content or len(content) <= 30:
+                                content = result["content"]
+                                if not content or len(content) <= 10:
                                     content = "I'm having trouble reaching my thoughts right now. Please try again in a moment."
+                                    result["canvas_needed"] = False  # speak the error
 
-                                title = _make_title(t)
-                                await _ws.send_text(json.dumps({
-                                    "type": "text_response",
-                                    "title": title,
-                                    "content": content,
-                                    "content_type": "markdown",
-                                    "append": _is_fu,
-                                }))
-                                logger.info("ws_observe: text_response sent (%d chars, follow_up=%s)", len(content), _is_fu)
-                                if not _is_fu:
-                                    asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
+                                # Send to canvas only when warranted
+                                if result["canvas_needed"]:
+                                    title = result["title"] or _make_title(t)
+                                    await _ws.send_text(json.dumps({
+                                        "type": "text_response",
+                                        "title": title,
+                                        "content": content,
+                                        "content_type": "markdown",
+                                        "append": _is_fu,
+                                    }))
+                                    logger.info("ws_observe: canvas response (%d chars, followup=%s)", len(content), _is_fu)
+                                    if not _is_fu:
+                                        asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
+                                else:
+                                    logger.info("ws_observe: voice-only response (%d chars)", len(content))
+
+                                # Always speak — voice is first class regardless of canvas decision
                                 mgr._speak_task = asyncio.create_task(mgr._speak_verbatim(content))
                             except BaseException as exc:
                                 logger.warning("ws_observe: _respond failed: %s", exc)
