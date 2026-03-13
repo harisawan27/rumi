@@ -45,6 +45,59 @@ class VisionClient:
         api_key = os.getenv("GEMINI_API_KEY")
         self._client = genai.Client(api_key=api_key)
 
+    async def analyse_frame_with_screen(self, camera_bytes: bytes, screen_bytes: bytes) -> dict:
+        """Analyse camera frame + screen frame together for richer context.
+
+        Returns same dict shape as analyse_frame, plus 'screen_context' key.
+        Falls back to camera-only on error.
+        """
+        camera_part = types.Part.from_bytes(data=camera_bytes, mime_type="image/jpeg")
+        screen_part = types.Part.from_bytes(data=screen_bytes, mime_type="image/jpeg")
+        prompt = (
+            "You are analysing TWO frames simultaneously:\n"
+            "Frame 1 (CAMERA): the person's face and posture at their desk.\n"
+            "Frame 2 (SCREEN): what they are currently working on.\n\n"
+            "Return ONLY valid JSON — no markdown, no explanation:\n"
+            "{\n"
+            '  "state": "focused|frustrated|coding_block|idle|neutral",\n'
+            '  "confidence": 0.0,\n'
+            '  "cues": [],\n'
+            '  "screen_context": "one sentence describing what is on their screen",\n'
+            '  "emotions": {"happy": 0.0, "neutral": 0.0, "angry": 0.0, "sad": 0.0, "disgust": 0.0, "fear": 0.0, "surprise": 0.0}\n'
+            "}\n\n"
+            "State definitions:\n"
+            "- focused: actively typing, reading code/docs, leaning in, engaged eyes\n"
+            "- frustrated: brow furrowed, head in hands, visible tension\n"
+            "- coding_block: staring at screen without typing, appears stuck\n"
+            "- idle: person not visible or desk is empty\n"
+            "- neutral: present but no clear signal\n\n"
+            "screen_context: briefly describe what app/file/content is visible on screen."
+        )
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=VISION_MODEL,
+                contents=[types.Content(parts=[camera_part, screen_part, types.Part.from_text(prompt)])],
+            )
+            text = response.text.strip()
+            if text.startswith("```"):
+                text = "\n".join(text.split("\n")[1:])
+                if text.endswith("```"):
+                    text = text[:-3].strip()
+            data = json.loads(text)
+            data.setdefault("state", "neutral")
+            data.setdefault("confidence", 0.5)
+            data.setdefault("cues", [])
+            data.setdefault("emotions", {})
+            data.setdefault("screen_context", "")
+            logger.info(
+                "VisionClient(+screen): state=%s screen=%s",
+                data["state"], data.get("screen_context", "")[:60],
+            )
+            return data
+        except Exception as exc:
+            logger.warning("VisionClient.analyse_frame_with_screen failed: %s — falling back to camera only", exc)
+            return await self.analyse_frame(camera_bytes)
+
     async def analyse_frame(self, frame_bytes: bytes) -> dict:
         """Send a JPEG frame for Gemini-powered state analysis.
 

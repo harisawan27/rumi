@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   verifyAuth,
@@ -48,6 +48,10 @@ export default function DashboardPage() {
   const [detection, setDetection] = useState<{ state: string; confidence: number; cues: string[]; emotions: Record<string, number> } | null>(null);
   const [showCameraPopup, setShowCameraPopup] = useState(false);
   const [showEmotionPopup, setShowEmotionPopup] = useState(false);
+  const [screenActive, setScreenActive] = useState(false);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const screenCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // ── Canvas state ────────────────────────────────────────────────────────────
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -490,6 +494,60 @@ export default function DashboardPage() {
     }, 20000);
   }
 
+  async function startScreenShare() {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      screenStreamRef.current = stream;
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+      screenVideoRef.current = video;
+      screenCanvasRef.current = document.createElement("canvas");
+      setScreenActive(true);
+      stream.getVideoTracks()[0].onended = () => {
+        setScreenActive(false);
+        screenStreamRef.current = null;
+        screenVideoRef.current = null;
+      };
+    } catch { /* user cancelled */ }
+  }
+
+  function stopScreenShare() {
+    screenStreamRef.current?.getTracks().forEach(t => t.stop());
+    screenStreamRef.current = null;
+    screenVideoRef.current = null;
+    setScreenActive(false);
+  }
+
+  function captureScreenFrame(): string | null {
+    const video = screenVideoRef.current;
+    const canvas = screenCanvasRef.current;
+    if (!video || !canvas || !screenActive) return null;
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0);
+    return canvas.toDataURL("image/jpeg", 0.5).split(",")[1];
+  }
+
+  // Send screen frame to backend every 15s when screen sharing is active
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    if (!screenActive) return;
+    const send = () => {
+      const frame = captureScreenFrame();
+      if (frame && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "screen_frame", data: frame }));
+      }
+    };
+    send(); // send immediately on share start
+    const interval = setInterval(send, 15000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenActive]);
+
   function handleMicToggle() {
     if (speaking || !micEnabled) return;
     if (isTalkingRef.current) {
@@ -640,6 +698,18 @@ export default function DashboardPage() {
       setCanvasOpen(true);
     } else if (msg.type === "detection_update") {
       const d = msg as unknown as { type: string; state: string; confidence: number; cues: string[]; landmarks: Record<string, number> };
+      // Map detection state → Rumi face emotion (only when Rumi is not speaking)
+      if (!speaking) {
+        const stateToEmotion: Record<string, "neutral" | "concerned" | "happy" | "thinking"> = {
+          frustrated: "concerned",
+          coding_block: "thinking",
+          focused: "neutral",
+          idle: "neutral",
+          neutral: "neutral",
+        };
+        const mapped = stateToEmotion[d.state];
+        if (mapped) setRumiEmotion(mapped);
+      }
       const newEmotions = d.landmarks ?? {};
       setDetection(prev => ({
         state: d.state, confidence: d.confidence, cues: d.cues,
@@ -935,6 +1005,26 @@ export default function DashboardPage() {
                 <p style={{ margin: 0, fontSize: "0.72rem", color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)" }}>
                   {isTalking ? "Tap or Space to send" : isProcessing ? "Sending to Rumi…" : speaking ? "Rumi is speaking" : "Tap to speak"}
                 </p>
+                {/* Screen share button */}
+                {!isTalking && !isProcessing && !speaking && (
+                  <button
+                    onClick={screenActive ? stopScreenShare : startScreenShare}
+                    title={screenActive ? "Stop screen sharing" : "Share screen with Rumi"}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 5,
+                      background: screenActive ? "rgba(34,211,238,0.12)" : "rgba(34,211,238,0.06)",
+                      border: `1px solid ${screenActive ? "rgba(34,211,238,0.5)" : "rgba(34,211,238,0.18)"}`,
+                      borderRadius: 99, padding: "5px 14px", cursor: "pointer",
+                      color: screenActive ? "var(--teal)" : "var(--muted)", transition: "all 0.15s",
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+                    </svg>
+                    <span style={{ fontSize: "0.72rem" }}>{screenActive ? "Sharing screen" : "Share screen"}</span>
+                    {screenActive && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", animation: "pulseRing 1.5s infinite" }} />}
+                  </button>
+                )}
                 {/* Type button — shown when idle */}
                 {!isTalking && !isProcessing && !speaking && (
                   <button

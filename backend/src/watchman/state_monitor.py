@@ -53,6 +53,7 @@ class StateMonitor:
         self._stop_event = asyncio.Event()
         self._last_result: Optional[StateResult] = None
         self._current_frame: Optional[bytes] = None
+        self._screen_frame: Optional[bytes] = None
         self._focused_streak = 0
         self._idle_streak = 0
         self._websocket = None
@@ -83,8 +84,12 @@ class StateMonitor:
         self._websocket = ws
 
     def update_frame(self, frame_bytes: bytes) -> None:
-        """Called by WS handler on every incoming frame from the frontend."""
+        """Called by WS handler on every incoming camera frame from the frontend."""
         self._current_frame = frame_bytes
+
+    def update_screen_frame(self, frame_bytes: bytes) -> None:
+        """Called by WS handler when frontend sends a screen capture frame."""
+        self._screen_frame = frame_bytes
 
     async def _request_frame(self) -> None:
         """Ask the frontend for a fresh JPEG snapshot."""
@@ -128,7 +133,10 @@ class StateMonitor:
         if self._vision_cycle_counter >= VISION_CYCLE_INTERVAL:
             self._vision_cycle_counter = 0
             try:
-                data = await self._vision.analyse_frame(self._current_frame)
+                if self._screen_frame:
+                    data = await self._vision.analyse_frame_with_screen(self._current_frame, self._screen_frame)
+                else:
+                    data = await self._vision.analyse_frame(self._current_frame)
                 result = StateResult(
                     state=data.get("state", "neutral"),
                     confidence=float(data.get("confidence", 0.5)),

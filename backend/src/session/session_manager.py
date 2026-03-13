@@ -44,6 +44,8 @@ class SessionManager:
         self._owner_photo_url: str = ""
         # Prevent firing guest intervention multiple times per guest visit
         self._guest_intervention_fired: bool = False
+        # Latest screen frame from frontend (updated via screen_frame WS message)
+        self._latest_screen_frame: Optional[bytes] = None
 
     # -----------------------------------------------------------------------
     # Session lifecycle
@@ -146,10 +148,12 @@ class SessionManager:
             async with self._gemini_lock:
                 await self.ensure_gemini_connected()
                 await self._gemini.query(
-                    "You have just started a new observation session with the user. "
-                    "Greet them warmly and briefly (1–2 sentences max). "
-                    "Use their name and mention one of their active projects naturally. "
-                    "Be the Sufi-Engineer you are — precise, warm, human."
+                    f"You have just started a new observation session with {self._owner_name}. "
+                    "Greet them by name in ONE sentence. "
+                    "Check your session memory: if you have prior session summaries, naturally reference "
+                    "what they were working on last time (e.g. 'Welcome back — last time you were deep in X, ready to continue?'). "
+                    "If this is their first session, welcome them warmly. "
+                    "No preamble. Speak directly. 1 sentence only."
                 )
         except asyncio.CancelledError:
             logger.info("SessionManager: greeting cancelled — user spoke first")

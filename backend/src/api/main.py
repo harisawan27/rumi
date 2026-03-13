@@ -627,6 +627,12 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 # Update StateMonitor with latest frame for VisionClient analysis
                 if hasattr(mgr, "_state_monitor") and mgr._state_monitor:
                     mgr._state_monitor.update_frame(frame_bytes)
+            elif msg.get("type") == "screen_frame":
+                import base64
+                screen_bytes = base64.b64decode(msg["data"])
+                if hasattr(mgr, "_state_monitor") and mgr._state_monitor:
+                    mgr._state_monitor.update_screen_frame(screen_bytes)
+                mgr._latest_screen_frame = screen_bytes
             elif msg.get("type") == "intervention_response":
                 # Update interaction response in Firestore
                 from src.memory.firestore_client import get_db
@@ -689,10 +695,16 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                 mgr._suppress_audio = False
 
                                 # Flash = single source of truth
+                                # Include screen frame if available — richer context
                                 content = ""
                                 try:
                                     sys_prompt = mgr._system_prompt or ""
-                                    content = await (_flash_with_image(t, img, sys_prompt) if img else _flash_text_only(t, sys_prompt))
+                                    screen_b64: str | None = None
+                                    if hasattr(mgr, "_latest_screen_frame") and mgr._latest_screen_frame:
+                                        import base64 as _b64_inner
+                                        screen_b64 = _b64_inner.b64encode(mgr._latest_screen_frame).decode()
+                                    effective_img = img or screen_b64
+                                    content = await (_flash_with_image(t, effective_img, sys_prompt) if effective_img else _flash_text_only(t, sys_prompt))
                                 except Exception as exc:
                                     logger.warning("ws_observe: Flash threw: %s", exc)
 
