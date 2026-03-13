@@ -137,7 +137,7 @@ The profile page allows every field to be updated at any time — Rumi's model o
 │  FRONTEND  (Next.js — Firebase Hosting)                         │
 │                                                                  │
 │  Onboarding → Dashboard → Profile                               │
-│  RumiFace — puzzle-assembled robot (12 parts, emotional states) │
+│  RumiFace — animated robot face with emotional states           │
 │  ArtifactCanvas — conversation threads, follow-up bar,          │
 │                   attachment support, voice follow-up           │
 │  Wake word listener (35 phonetic variants, adaptive silence)    │
@@ -332,12 +332,12 @@ rumi/
 │   │   │   ├── profile/    # Identity + language preferences
 │   │   │   └── onboarding/ # First-run identity-building flow
 │   │   ├── components/
-│   │   │   ├── RumiFace/        # Puzzle-assembled robot (12 parts, emotional states)
+│   │   │   ├── RumiFace/        # Animated robot face with emotional states
 │   │   │   └── ArtifactCanvas/  # Conversation threads with follow-up bar
 │   │   └── services/
 │   │       └── session.ts  # WebSocket, REST, auth
 │   └── public/
-│       └── rumi-parts/     # 12 robot body part PNGs
+│       └── rumi-logo.svg   # Brand logo + favicon assets
 ├── .github/workflows/
 │   └── deploy.yml          # CI/CD — frontend → Firebase, backend → Cloud Run
 ├── specs/                  # Feature specs, architecture plans, task lists
