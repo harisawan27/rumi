@@ -238,10 +238,20 @@ export default function DashboardPage() {
     }
   }, [showCameraPopup, liveStream]);
 
-  // Reset emotion when Rumi finishes speaking
+  // Reset emotion + open conversation window when Rumi finishes speaking
   useEffect(() => {
-    if (prevSpeakingRef.current && !speaking) setRumiEmotion("neutral");
+    if (prevSpeakingRef.current && !speaking) {
+      setRumiEmotion("neutral");
+      // Conversation window — skip wake word, listen immediately for follow-up
+      if (micEnabledRef.current && !isTalkingRef.current) {
+        stopWakeWordListener();
+        setTimeout(() => {
+          if (micEnabledRef.current && !isTalkingRef.current) startListeningWithRef();
+        }, 300);
+      }
+    }
     prevSpeakingRef.current = speaking;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speaking]);
 
   // Keep refs in sync for closure-safe access
