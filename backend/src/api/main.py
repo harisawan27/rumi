@@ -483,7 +483,11 @@ When canvas_needed=true: title = 3-5 word summary, content = well-structured Mar
 """
 
     image_note = (
-        "\nAn image is attached — analyse it and reference it in your answer.\n"
+        "\nA camera frame from the user's own webcam is attached. "
+        "This camera belongs to the person whose identity is described above. "
+        "If asked who is in front of the camera or who you see, identify them as the owner by name — "
+        "you are their personal AI companion running on their own device. "
+        "Only express uncertainty if the face is clearly a different person.\n"
         if image_b64 else ""
     )
     full_prompt = (

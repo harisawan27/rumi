@@ -597,7 +597,16 @@ export default function DashboardPage() {
   }
 
   // Keywords that trigger auto-attach of camera frame
-  const AUTO_ATTACH_KEYWORDS = ["show you", "showing you", "what is this", "what's this", "attach", "look at this", "can you see this", "see this", "what do you see"];
+  const AUTO_ATTACH_KEYWORDS = [
+    // Pointing at something
+    "show you", "showing you", "what is this", "what's this", "attach",
+    "look at this", "can you see this", "see this", "what do you see",
+    // Identity / face questions
+    "who is in front", "who do you see", "who am i", "can you see me",
+    "do you see me", "who is this", "look at me", "see me",
+    // Camera awareness
+    "what do i look", "how do i look", "am i on camera",
+  ];
 
   function handleFollowUp(text: string, image?: string | null, attachment?: { dataUrl: string; name: string }) {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
