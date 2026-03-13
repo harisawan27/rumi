@@ -83,6 +83,7 @@ export default function DashboardPage() {
   const micEnabledRef = useRef<boolean>(true);
   const cameraEnabledRef = useRef<boolean>(true);
   const lastFollowUpQueryRef = useRef<string>("");
+  const lastSentQueryRef = useRef<string>("");   // always-current ref — avoids stale closure in WS handler
   const pendingAttachmentRef = useRef<{ dataUrl: string; name: string } | null>(null);
   const [wakeListening, setWakeListening] = useState(false);
 
@@ -500,6 +501,7 @@ export default function DashboardPage() {
     }
     setIsProcessing(true);
     setTranscript(text);
+    lastSentQueryRef.current = text;
     const payload: Record<string, string> = { type: "user_text", text };
     if (image) payload.image = image;
     wsRef.current.send(JSON.stringify(payload));
@@ -517,6 +519,7 @@ export default function DashboardPage() {
   function handleFollowUp(text: string, image?: string | null, attachment?: { dataUrl: string; name: string }) {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     lastFollowUpQueryRef.current = text;
+    lastSentQueryRef.current = text;
     pendingAttachmentRef.current = attachment ?? null;
     setIsFollowingUp(true);
     // Build context from current canvas session (last 3 exchanges)
@@ -730,7 +733,7 @@ export default function DashboardPage() {
       const m = msg as unknown as { type: string; title: string; content: string; content_type?: string; append?: boolean };
       const stamp = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const exchange: CanvasExchange = {
-        query: transcript || lastFollowUpQueryRef.current || "",
+        query: lastSentQueryRef.current || "",
         response: m.content,
         type: (m.content_type as "text" | "code" | "markdown") ?? "markdown",
         timestamp: stamp,
