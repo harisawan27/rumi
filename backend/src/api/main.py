@@ -427,13 +427,10 @@ async def _flash_smart(
     context: list | None = None,
     force_canvas: bool = False,
 ) -> dict:
-    """Gemini call with enforced JSON schema — routing + generation in one shot.
-
-    Uses response_mime_type='application/json' + response_schema so Gemini is
-    structurally forced into {canvas_needed, title, content}. It cannot write
-    "I'll put it on the canvas" anywhere because there is no free-text field.
+    """Route query to canvas or voice, then generate content.
 
     Returns {"canvas_needed": bool, "title": str, "content": str}.
+    Poetry/face queries are handled by dedicated callers before this is reached.
     force_canvas=True when an explicit file/image attachment is present.
     """
     from google import genai as _genai
@@ -441,69 +438,67 @@ async def _flash_smart(
     import base64 as _b64
 
     client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    identity_block = f"{system_prompt}\n\n---\n\n" if system_prompt else ""
 
     context_block = ""
     if context:
         lines = [f'Q: {ex.get("q","")}\nA: {ex.get("a","")}' for ex in context]
-        context_block = "Recent conversation:\n" + "\n\n".join(lines) + "\n\n"
+        context_block = "Conversation context:\n" + "\n\n".join(lines) + "\n\n---\n\n"
+
+    force_note = (
+        "\nNOTE: An image or file is attached — canvas_needed MUST be true.\n"
+        if force_canvas else ""
+    )
+
+    routing_instruction = f"""{force_note}
+You must respond with ONLY valid JSON — no text before or after, no markdown fences:
+{{
+  "canvas_needed": false,
+  "title": "",
+  "content": "your full response here"
+}}
+
+DECISION RULES for canvas_needed:
+TRUE — response must be read, not just heard:
+  • Code, technical solutions, debugging steps
+  • Step-by-step instructions (3+ steps)
+  • Structured comparisons, tables, lists
+  • Math/logic problems solved in writing
+  • User explicitly says: write, show, display, summarize in writing, research, solve
+  • Any image or file is attached (auto-true)
+
+FALSE — experienced by listening. This includes:
+  • Casual conversation, gossip, emotional support, opinions
+  • Greetings, encouragement, check-ins
+  • Simple facts (sports results, time, weather, quick questions)
+  • Anything the user asks you to "tell", "say", "read", or "recite"
+
+When canvas_needed=false:
+  - title = empty string
+  - content = your full spoken response, plain text, NO markdown
+  - NO length limit. Speak as long as the topic deserves naturally.
+  - NEVER reference canvas, writing, displaying, or showing anything on screen.
+  - NEVER say "I'll write it", "let me display", "check the canvas", or similar.
+  - The user ONLY hears your voice. Deliver everything verbally, completely.
+
+When canvas_needed=true:
+  - title = 3-5 word summary
+  - content = well-structured Markdown
+"""
 
     image_note = (
-        "A camera frame from the user's webcam is attached. "
-        "This is their own device — the person in frame is almost certainly the owner described above.\n\n"
+        "\nA camera frame from the user's own webcam is attached. "
+        "This camera belongs to the person whose identity is described above. "
+        "If asked who is in front of the camera or who you see, identify them as the owner by name. "
+        "Only express uncertainty if the face is clearly a different person.\n"
         if image_b64 else ""
     )
-
-    routing_rules = (
-        "canvas_needed MUST be true (file/image attached).\n"
-        if force_canvas else
-        """\
-Decide canvas_needed using exactly these rules — nothing else:
-
-canvas_needed = TRUE only when the response genuinely needs to be READ, not heard:
-  - Code or technical solution with syntax
-  - Step-by-step instructions (3 or more distinct steps)
-  - Structured comparison, table, or list
-  - Mathematical working or diagram
-  - User explicitly says: write, show, display, research, summarise in writing
-
-canvas_needed = FALSE for everything else — the response is SPOKEN:
-  - Poetry, couplets, ghazals, verses — always spoken, always complete
-  - Casual conversation, opinions, emotional support
-  - Simple facts, greetings, encouragement
-  - Anything asked to be "told", "said", "read aloud", or "recited"
-"""
-    )
-
-    voice_rules = """\
-
-Populate content correctly based on canvas_needed:
-  If FALSE → content is your full spoken reply, plain text, natural length.
-             No markdown. No length limit — a couplet gets the full couplet,
-             a story gets a paragraph. NEVER mention the canvas, screen, or writing.
-  If TRUE  → content is well-structured Markdown. title is a 3-5 word summary.
-"""
-
     full_prompt = (
-        f"{system_prompt}\n\n---\n\n"
+        f"{identity_block}"
         f"{context_block}"
+        f'User query: "{text}"\n'
         f"{image_note}"
-        f'User: "{text}"\n\n'
-        f"{routing_rules}"
-        f"{voice_rules}"
-    )
-
-    # JSON schema — enforced at the API level, Gemini cannot deviate
-    config = _types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema={
-            "type": "object",
-            "properties": {
-                "canvas_needed": {"type": "boolean"},
-                "title":         {"type": "string"},
-                "content":       {"type": "string"},
-            },
-            "required": ["canvas_needed", "title", "content"],
-        },
+        f"{routing_instruction}"
     )
 
     parts: list = []
@@ -513,9 +508,7 @@ Populate content correctly based on canvas_needed:
 
     for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
         try:
-            response = await client.aio.models.generate_content(
-                model=model, contents=parts, config=config,
-            )
+            response = await client.aio.models.generate_content(model=model, contents=parts)
             raw = (response.text or "").strip()
             data = _extract_smart_json(raw)
             if data and "content" in data:
@@ -531,7 +524,6 @@ Populate content correctly based on canvas_needed:
         except Exception as exc:
             logger.warning("_flash_smart: %s failed: %s", model, exc)
 
-    # Fallback — speak the error, don't open canvas with empty content
     return {"canvas_needed": False, "title": "", "content": ""}
 
 
@@ -540,6 +532,13 @@ _FACE_QUERY_KEYWORDS = [
     "who is in front", "who do you see", "who am i", "can you see me",
     "do you see me", "who is this", "look at me", "see me",
     "how do i look", "am i on camera", "what do i look",
+]
+
+# Keywords that bypass _flash_smart and go straight to voice recitation
+_POETRY_KEYWORDS = [
+    "couplet", "sher", "ghazal", "nazm", "poem", "poetry", "verse",
+    "ghalib", "iqbal", "faiz", "mir taqi", "recite", "sunao",
+    "suna", "padhao", "likho sher", "ek sher", "ruba", "rubaiyat",
 ]
 
 
@@ -596,6 +595,36 @@ async def _identify_face(text: str, image_b64: str, system_prompt: str) -> str:
             logger.warning("_identify_face: %s failed: %s", model, exc)
     return ""
 
+
+async def _recite_poem(text: str, system_prompt: str) -> str:
+    """Dedicated poetry/couplet recitation — always voice, never canvas.
+    Called directly so _flash_smart's routing logic never touches poetry.
+    """
+    from google import genai as _genai
+    from google.genai import types as _types
+
+    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    prompt = (
+        f"{system_prompt}\n\n---\n\n"
+        f'The user asked: "{text}"\n\n'
+        "Recite the requested poem, couplet, or verse in full. "
+        "Deliver it as a companion speaking aloud — complete, unhurried, natural. "
+        "Plain text only, no markdown, no asterisks. "
+        "A brief warm line before or after is fine. "
+        "Do NOT mention canvas, screen, writing, or displaying anything."
+    )
+    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        try:
+            response = await client.aio.models.generate_content(
+                model=model, contents=[_types.Part(text=prompt)],
+            )
+            result = (response.text or "").strip()
+            if result:
+                logger.info("_recite_poem: %s returned %d chars", model, len(result))
+                return result
+        except Exception as exc:
+            logger.warning("_recite_poem: %s failed: %s", model, exc)
+    return ""
 
 
 async def _flash_text_only(text: str, system_prompt: str = "") -> str:
@@ -957,6 +986,8 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
 
                                 # Face identification — dedicated path (image + face keyword)
                                 is_face = effective_img and any(kw in t_lower for kw in _FACE_QUERY_KEYWORDS)
+                                # Poetry — dedicated voice path, never routed through _flash_smart
+                                is_poetry = not force_canvas and any(kw in t_lower for kw in _POETRY_KEYWORDS)
 
                                 if is_face:
                                     try:
@@ -965,6 +996,13 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                             result = {"canvas_needed": False, "title": "", "content": face_content}
                                     except Exception as exc:
                                         logger.warning("ws_observe: _identify_face threw: %s", exc)
+                                elif is_poetry:
+                                    try:
+                                        poem_content = await _recite_poem(t, sys_prompt)
+                                        if poem_content:
+                                            result = {"canvas_needed": False, "title": "", "content": poem_content}
+                                    except Exception as exc:
+                                        logger.warning("ws_observe: _recite_poem threw: %s", exc)
                                 else:
                                     try:
                                         result = await _flash_smart(
