@@ -86,7 +86,7 @@ export default function DashboardPage() {
   const lastSentQueryRef = useRef<string>("");   // always-current ref — avoids stale closure in WS handler
   const pendingAttachmentRef = useRef<{ dataUrl: string; name: string } | null>(null);
   const bargeinRef = useRef<SpeechRecognition | null>(null); // VAD barge-in listener (active while Rumi speaks)
-  const suppressAudioUntilRef = useRef<number>(0); // epoch ms — drop audio_response before this time
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]); // all playing sources — stopped on interrupt
   const [wakeListening, setWakeListening] = useState(false);
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -538,14 +538,8 @@ export default function DashboardPage() {
       if (text.length > 2) {
         stopBargeinListener();
         stopWakeWordListener(); // release mic fully before main listener grabs it
-        // Kill scheduled audio output
-        if (playCtxRef.current) {
-          playCtxRef.current.close().catch(() => {});
-          playCtxRef.current = null;
-        }
-        nextPlayTimeRef.current = 0;
-        suppressAudioUntilRef.current = Date.now() + 500; // drop stale chunks arriving after barge-in
-        setSpeaking(false);
+        // Stop all audio immediately (synchronous) — no context close
+        stopAllAudio();
         window.speechSynthesis.cancel();
         // Notify backend to cancel its speak task
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -756,6 +750,17 @@ export default function DashboardPage() {
     setCanvasOpen(true);
   }
 
+  // ── Audio interrupt helper ────────────────────────────────────────────────
+  // Stops all currently playing audio sources immediately (synchronous).
+  // Does NOT close the AudioContext — closing is async and the context keeps
+  // playing during the close, which was causing two voices simultaneously.
+  function stopAllAudio() {
+    activeSourcesRef.current.forEach(s => { try { s.stop(0); } catch { /* already stopped */ } });
+    activeSourcesRef.current = [];
+    nextPlayTimeRef.current = 0;
+    setSpeaking(false);
+  }
+
   // ── Audio playback ────────────────────────────────────────────────────────
   async function playAudio(b64: string) {
     try {
@@ -781,9 +786,12 @@ export default function DashboardPage() {
       source.start(startAt);
       nextPlayTimeRef.current = startAt + buffer.duration;
 
+      // Track this source so stopAllAudio() can stop it immediately on interrupt
+      activeSourcesRef.current.push(source);
       setSpeaking(true);
       source.onended = () => {
-        if (ctx.currentTime >= nextPlayTimeRef.current - 0.05) setSpeaking(false);
+        activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+        if (activeSourcesRef.current.length === 0) setSpeaking(false);
       };
     } catch (e) {
       console.error("playAudio error:", e);
@@ -799,20 +807,15 @@ export default function DashboardPage() {
       const emotionMap: Record<string, typeof rumiEmotion> = { A: "concerned", B: "thinking", C: "concerned", E: "happy", G: "neutral" };
       setRumiEmotion(emotionMap[m.trigger] ?? "neutral");
     } else if (msg.type === "audio_interrupt") {
-      // Clear all scheduled audio — stops greeting tail before new response starts
-      if (playCtxRef.current) {
-        playCtxRef.current.close().catch(() => {});
-        playCtxRef.current = null;
-      }
-      nextPlayTimeRef.current = 0;
-      setSpeaking(false);
+      // Stop all playing audio immediately (synchronous source.stop — no async close).
+      // Closing AudioContext was the bug: close() is async so old audio kept playing
+      // while new audio started on a fresh context → two voices simultaneously.
+      stopAllAudio();
       window.speechSynthesis.cancel();
-      // Suppress any audio_response messages already in the WS queue (stale chunks
-      // sent before backend suppression kicked in — otherwise they play on a new ctx
-      // created by playAudio, causing double-speak with the real new response).
-      suppressAudioUntilRef.current = Date.now() + 500;
     } else if (msg.type === "audio_response") {
-      if (Date.now() < suppressAudioUntilRef.current) return; // stale chunk — drop it
+      // No frontend suppress window — the backend's inline _receive_loop check
+      // already kills stale audio before it reaches us. A frontend window
+      // (previously 500ms) was blocking the VALID new response from playing.
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
       playAudio((msg as { type: string; data: string }).data);
     } else if (msg.type === "canvas_history") {

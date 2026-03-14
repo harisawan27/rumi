@@ -590,9 +590,10 @@ class SessionManager:
             await self._gemini.send_text(text)
             self._reset_gemini_idle_timer()
 
-            # 300ms drain: old audio arrives at _receive_loop suppressed (inline check).
-            # By the time we open the gate, only new-turn audio is arriving.
-            await asyncio.sleep(0.3)
+            # 200ms drain: old audio arrives at _receive_loop suppressed (inline check).
+            # Gemini stops sending old audio within ~100ms of receiving new text.
+            # By 200ms only new-turn audio is arriving.
+            await asyncio.sleep(0.2)
 
             # Open gate — but only if we're still the current generation.
             # If a newer voice_query was created in the meantime, don't touch state.
