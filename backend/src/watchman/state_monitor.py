@@ -61,9 +61,9 @@ class StateMonitor:
         self._owner_photo_url: Optional[str] = None   # set by session_manager at start
         self._uid: str = ""                            # set via set_uid()
         self._face_check_counter  = 0
-        self._face_check_interval = 6    # every 6 cycles = 30 seconds
+        self._face_check_interval = 2    # every 2 cycles = 10 seconds
         self._non_owner_streak    = 0
-        self._non_owner_threshold = 3    # 3 consecutive mismatches → guest confirmed
+        self._non_owner_threshold = 1    # 1 mismatch → guest immediately
         self._guest_active        = False
         self._on_guest_detected   = None  # set via set_guest_callback()
         self._on_owner_returned   = None  # set via set_owner_returned_callback()
@@ -271,6 +271,9 @@ class StateMonitor:
             except Exception as exc:
                 logger.error("StateMonitor: cycle error: %s", exc)
 
+    def stop(self) -> None:
+        self._stop_event.set()
+
     async def _run_face_check(self) -> None:
         """Compare current frame against owner, then known people. Fires WS events."""
         import base64
@@ -347,6 +350,3 @@ def _load_known_people(uid: str) -> list:
 def _bump_known_person(uid: str, person_id: str) -> None:
     from src.memory.known_people import record_known_person_interaction
     record_known_person_interaction(uid, person_id)
-
-    def stop(self) -> None:
-        self._stop_event.set()
