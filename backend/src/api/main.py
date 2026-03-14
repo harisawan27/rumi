@@ -420,6 +420,23 @@ def _extract_smart_json(raw: str) -> dict | None:
     return None
 
 
+_CANVAS_REF_PATTERNS = [
+    r"[Ii](?:'ve| have) (?:written|put|placed|shared|displayed|noted) (?:it|this|the \w+(?:\s+\w+)?) (?:on|in|onto) the canvas[^.]*\.",
+    r"[Pp]lease (?:check|see|look at) the canvas[^.]*\.",
+    r"[Cc]heck (?:the )?canvas[^.]*\.",
+    r"[Ii](?:'ll| will) (?:write|put|display|show) (?:it|this|that) (?:on|in) the canvas[^.]*\.",
+    r"(?:on|in) the canvas for you[^.]*\.",
+    r"[Ii] have (?:a )?technical (?:issue|difficulty|limitation)[^.]*canvas[^.]*\.",
+]
+
+def _sanitize_voice(content: str) -> str:
+    """Strip canvas-referencing phrases from content that will be spoken aloud."""
+    import re
+    for pattern in _CANVAS_REF_PATTERNS:
+        content = re.sub(pattern, "", content)
+    return content.strip()
+
+
 async def _flash_smart(
     text: str,
     image_b64: str | None,
@@ -471,15 +488,17 @@ FALSE — experienced by listening. This includes:
   • Casual conversation, gossip, emotional support, opinions
   • Greetings, encouragement, check-ins
   • Simple facts (sports results, time, weather, quick questions)
-  • Anything the user asks you to "tell", "say", "read", or "recite"
+  • Anything the user asks to "tell", "say", "read", or "recite"
+  • Real-time questions you can't answer (live scores, today's news) — just say
+    you don't have live data verbally. Never route uncertainty to canvas.
 
 When canvas_needed=false:
   - title = empty string
   - content = your full spoken response, plain text, NO markdown
   - NO length limit. Speak as long as the topic deserves naturally.
-  - NEVER reference canvas, writing, displaying, or showing anything on screen.
-  - NEVER say "I'll write it", "let me display", "check the canvas", or similar.
-  - The user ONLY hears your voice. Deliver everything verbally, completely.
+  - If you don't know something, say so out loud simply — do NOT mention canvas.
+  - NEVER say "I'll write it", "check the canvas", "I've displayed", or similar.
+  - The user ONLY hears your voice. Everything must be delivered verbally.
 
 When canvas_needed=true:
   - title = 3-5 word summary
@@ -929,6 +948,12 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     await mgr.gemini.activity_end()
                 else:
                     logger.warning("audio_end received but Gemini not connected — reply lost")
+            elif msg.get("type") == "audio_interrupt":
+                # Frontend-initiated barge-in — cancel speak task immediately
+                if mgr._speak_task and not mgr._speak_task.done():
+                    mgr._speak_task.cancel()
+                mgr._is_responding = False
+                logger.info("ws_observe: audio_interrupt from frontend — speak task cancelled")
             elif msg.get("type") == "user_text":
                 # Web Speech API transcript — Flash generates text (single source of truth),
                 # Live speaks it verbatim, canvas opens 1500ms later (voice-first UX).
@@ -1014,6 +1039,9 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                         logger.warning("ws_observe: _flash_smart threw: %s", exc)
 
                                 content = result["content"]
+                                # Sanitize voice content — strip any canvas references Gemini slipped in
+                                if not result["canvas_needed"]:
+                                    content = _sanitize_voice(content)
                                 if not content or len(content) <= 10:
                                     content = "I'm having trouble reaching my thoughts right now. Please try again in a moment."
                                     result["canvas_needed"] = False  # speak the error
