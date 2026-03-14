@@ -990,84 +990,84 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                     pass
                                 mgr._suppress_audio = False
 
-                                # Privacy gate — guest gets a stripped prompt, no owner data
-                                state_mon = getattr(mgr, "_state_monitor", None)
-                                _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
-
-                                sys_prompt = (
-                                    _GUEST_SYSTEM_PROMPT if _is_guest
-                                    else (mgr._system_prompt or "")
-                                )
+                                t_lower = t.lower()
                                 screen_b64: str | None = None
                                 if hasattr(mgr, "_latest_screen_frame") and mgr._latest_screen_frame:
                                     import base64 as _b64_inner
                                     screen_b64 = _b64_inner.b64encode(mgr._latest_screen_frame).decode()
-                                # Attachment/screen → force canvas; plain query → let Gemini decide
                                 effective_img = img or screen_b64
-                                force_canvas = bool(img)  # explicit attachment = always canvas
+                                force_canvas = bool(img)
 
-                                result = {"canvas_needed": False, "title": "", "content": ""}
-                                t_lower = t.lower()
+                                # Canvas is only triggered when user explicitly wants structured content
+                                # OR an image/file is attached. Everything else → Gemini Live direct.
+                                _CANVAS_TRIGGER_KEYWORDS = [
+                                    "write code", "code for", "show me code", "write a function",
+                                    "write a script", "step by step", "steps to", "step-by-step",
+                                    "explain with code", "show on canvas", "write it down",
+                                    "write this down", "put it on canvas", "show me in writing",
+                                ]
+                                wants_canvas = force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
 
-                                # Face identification — dedicated path (image + face keyword)
+                                # Face identification — always needs image analysis
                                 is_face = effective_img and any(kw in t_lower for kw in _FACE_QUERY_KEYWORDS)
-                                # Poetry — dedicated voice path, never routed through _flash_smart
-                                is_poetry = not force_canvas and any(kw in t_lower for kw in _POETRY_KEYWORDS)
+
+                                _latency_ms = (_time.perf_counter() - _req_t0) * 1000
+                                logger.info("[LATENCY] user_text→route: %.0fms (canvas=%s face=%s)", _latency_ms, wants_canvas, is_face)
 
                                 if is_face:
+                                    # Face ID: uses _identify_face (Flash with image), then Live to speak
+                                    state_mon = getattr(mgr, "_state_monitor", None)
+                                    _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
+                                    sys_prompt = _GUEST_SYSTEM_PROMPT if _is_guest else (mgr._system_prompt or "")
                                     try:
                                         face_content = await _identify_face(t, effective_img, sys_prompt)
-                                        if face_content:
-                                            result = {"canvas_needed": False, "title": "", "content": face_content}
                                     except Exception as exc:
                                         logger.warning("ws_observe: _identify_face threw: %s", exc)
-                                elif is_poetry:
-                                    try:
-                                        poem_content = await _recite_poem(t, sys_prompt)
-                                        if poem_content:
-                                            result = {"canvas_needed": False, "title": "", "content": poem_content}
-                                    except Exception as exc:
-                                        logger.warning("ws_observe: _recite_poem threw: %s", exc)
-                                else:
+                                        face_content = ""
+                                    if face_content:
+                                        mgr._speak_task = asyncio.create_task(
+                                            mgr._speak_verbatim(face_content, canvas=False)
+                                        )
+                                    else:
+                                        mgr._speak_task = asyncio.create_task(mgr.voice_query(t))
+
+                                elif wants_canvas:
+                                    # Canvas path: Flash generates structured content, Live speaks brief ack
+                                    state_mon = getattr(mgr, "_state_monitor", None)
+                                    _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
+                                    sys_prompt = _GUEST_SYSTEM_PROMPT if _is_guest else (mgr._system_prompt or "")
                                     try:
                                         result = await _flash_smart(
                                             t, effective_img, sys_prompt,
                                             context=_ctx if _is_fu else None,
-                                            force_canvas=force_canvas,
+                                            force_canvas=True,
                                         )
                                     except Exception as exc:
                                         logger.warning("ws_observe: _flash_smart threw: %s", exc)
+                                        result = {"canvas_needed": False, "title": "", "content": ""}
+                                    content = result.get("content", "")
+                                    if content and len(content) > 10:
+                                        title = result.get("title", "") or _make_title(t)
+                                        await _ws.send_text(json.dumps({
+                                            "type": "text_response",
+                                            "title": title,
+                                            "content": content,
+                                            "content_type": "markdown",
+                                            "append": _is_fu,
+                                        }))
+                                        if not _is_fu:
+                                            asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
+                                        mgr._speak_task = asyncio.create_task(
+                                            mgr._speak_verbatim(content, canvas=True)
+                                        )
+                                    else:
+                                        # Flash failed — fall back to Live voice
+                                        mgr._speak_task = asyncio.create_task(mgr.voice_query(t))
 
-                                content = result["content"]
-                                # Sanitize voice content — strip any canvas references Gemini slipped in
-                                if not result["canvas_needed"]:
-                                    content = _sanitize_voice(content)
-                                if not content or len(content) <= 10:
-                                    content = "I'm having trouble reaching my thoughts right now. Please try again in a moment."
-                                    result["canvas_needed"] = False  # speak the error
-
-                                # Send to canvas only when warranted
-                                if result["canvas_needed"]:
-                                    title = result["title"] or _make_title(t)
-                                    await _ws.send_text(json.dumps({
-                                        "type": "text_response",
-                                        "title": title,
-                                        "content": content,
-                                        "content_type": "markdown",
-                                        "append": _is_fu,
-                                    }))
-                                    logger.info("ws_observe: canvas response (%d chars, followup=%s)", len(content), _is_fu)
-                                    if not _is_fu:
-                                        asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
                                 else:
-                                    logger.info("ws_observe: voice-only response (%d chars)", len(content))
-
-                                # Always speak — voice is first class regardless of canvas decision
-                                _latency_ms = (_time.perf_counter() - _req_t0) * 1000
-                                logger.info("[LATENCY] user_text→speak_start: %.0fms (canvas=%s)", _latency_ms, result["canvas_needed"])
-                                mgr._speak_task = asyncio.create_task(
-                                    mgr._speak_verbatim(content, canvas=result["canvas_needed"])
-                                )
+                                    # All other queries — Gemini Live handles directly, naturally
+                                    # This is the main path: poems, sports, casual, opinions, facts
+                                    mgr._speak_task = asyncio.create_task(mgr.voice_query(t))
                             except BaseException as exc:
                                 logger.warning("ws_observe: _respond failed: %s", exc)
                             finally:
