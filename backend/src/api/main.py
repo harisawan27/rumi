@@ -964,118 +964,92 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 if text:
                     import time as _time
                     _t0 = _time.perf_counter()
-                    # Barge-in: if user speaks while we're processing, cancel current response
-                    if mgr._is_responding:
-                        logger.info("ws_observe: barge-in — cancelling active response for new query")
-                        if mgr._speak_task and not mgr._speak_task.done():
-                            mgr._speak_task.cancel()
-                        mgr._is_responding = False
-                        try:
-                            await websocket.send_text(json.dumps({"type": "audio_interrupt"}))
-                        except Exception:
-                            pass
-                    if True:
-                        async def _respond(t: str = text, img=image_b64, _ws=websocket, _is_fu=is_followup, _ctx=followup_context, _req_t0=_t0) -> None:
-                            mgr._is_responding = True
-                            mgr._suppress_audio = True
+
+                    # Cancel any active speak task — works for both barge-in and normal flow
+                    if mgr._speak_task and not mgr._speak_task.done():
+                        logger.info("ws_observe: cancelling active speak task for new query")
+                        mgr._speak_task.cancel()
+
+                    # Tell frontend to clear its audio buffer
+                    try:
+                        await websocket.send_text(json.dumps({"type": "audio_interrupt"}))
+                    except Exception:
+                        pass
+
+                    # Cancel greeting if still running
+                    gt = mgr._greeting_task
+                    if gt and not gt.done():
+                        gt.cancel()
+
+                    t_lower = text.lower()
+                    screen_b64: str | None = None
+                    if hasattr(mgr, "_latest_screen_frame") and mgr._latest_screen_frame:
+                        import base64 as _b64_inline
+                        screen_b64 = _b64_inline.b64encode(mgr._latest_screen_frame).decode()
+                    effective_img = image_b64 or screen_b64
+                    force_canvas = bool(image_b64)
+
+                    _CANVAS_TRIGGER_KEYWORDS = [
+                        "write code", "code for", "show me code", "write a function",
+                        "write a script", "step by step", "steps to", "step-by-step",
+                        "explain with code", "show on canvas", "write it down",
+                        "write this down", "put it on canvas", "show me in writing",
+                    ]
+                    wants_canvas = force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
+                    is_face = effective_img and any(kw in t_lower for kw in _FACE_QUERY_KEYWORDS)
+
+                    logger.info("[LATENCY] user_text received: %.0fms (canvas=%s face=%s)",
+                                (_time.perf_counter() - _t0) * 1000, wants_canvas, is_face)
+
+                    if is_face:
+                        # Face ID path — Flash analyses image, Live delivers verbally
+                        state_mon = getattr(mgr, "_state_monitor", None)
+                        _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
+                        sys_prompt = _GUEST_SYSTEM_PROMPT if _is_guest else (mgr._system_prompt or "")
+                        async def _face_respond(t=text, img=effective_img, sp=sys_prompt) -> None:
                             try:
-                                gt = mgr._greeting_task
-                                if gt and not gt.done():
-                                    gt.cancel()
-
-                                try:
-                                    await asyncio.sleep(0.3)
-                                    await _ws.send_text(json.dumps({"type": "audio_interrupt"}))
-                                except Exception:
-                                    pass
-                                # suppress_audio stays True — voice_query will set it False
-                                # after draining stale audio from any previous response
-
-                                t_lower = t.lower()
-                                screen_b64: str | None = None
-                                if hasattr(mgr, "_latest_screen_frame") and mgr._latest_screen_frame:
-                                    import base64 as _b64_inner
-                                    screen_b64 = _b64_inner.b64encode(mgr._latest_screen_frame).decode()
-                                effective_img = img or screen_b64
-                                force_canvas = bool(img)
-
-                                # Canvas is only triggered when user explicitly wants structured content
-                                # OR an image/file is attached. Everything else → Gemini Live direct.
-                                _CANVAS_TRIGGER_KEYWORDS = [
-                                    "write code", "code for", "show me code", "write a function",
-                                    "write a script", "step by step", "steps to", "step-by-step",
-                                    "explain with code", "show on canvas", "write it down",
-                                    "write this down", "put it on canvas", "show me in writing",
-                                ]
-                                wants_canvas = force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
-
-                                # Face identification — always needs image analysis
-                                is_face = effective_img and any(kw in t_lower for kw in _FACE_QUERY_KEYWORDS)
-
-                                _latency_ms = (_time.perf_counter() - _req_t0) * 1000
-                                logger.info("[LATENCY] user_text→route: %.0fms (canvas=%s face=%s)", _latency_ms, wants_canvas, is_face)
-
-                                if is_face:
-                                    # Face ID: uses _identify_face (Flash with image), then Live to speak
-                                    state_mon = getattr(mgr, "_state_monitor", None)
-                                    _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
-                                    sys_prompt = _GUEST_SYSTEM_PROMPT if _is_guest else (mgr._system_prompt or "")
-                                    try:
-                                        face_content = await _identify_face(t, effective_img, sys_prompt)
-                                    except Exception as exc:
-                                        logger.warning("ws_observe: _identify_face threw: %s", exc)
-                                        face_content = ""
-                                    if face_content:
-                                        mgr._speak_task = asyncio.create_task(
-                                            mgr._speak_verbatim(face_content, canvas=False)
-                                        )
-                                    else:
-                                        mgr._speak_task = asyncio.create_task(mgr.voice_query(t))
-
-                                elif wants_canvas:
-                                    # Canvas path: Flash generates structured content, Live speaks brief ack
-                                    state_mon = getattr(mgr, "_state_monitor", None)
-                                    _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
-                                    sys_prompt = _GUEST_SYSTEM_PROMPT if _is_guest else (mgr._system_prompt or "")
-                                    try:
-                                        result = await _flash_smart(
-                                            t, effective_img, sys_prompt,
-                                            context=_ctx if _is_fu else None,
-                                            force_canvas=True,
-                                        )
-                                    except Exception as exc:
-                                        logger.warning("ws_observe: _flash_smart threw: %s", exc)
-                                        result = {"canvas_needed": False, "title": "", "content": ""}
-                                    content = result.get("content", "")
-                                    if content and len(content) > 10:
-                                        title = result.get("title", "") or _make_title(t)
-                                        await _ws.send_text(json.dumps({
-                                            "type": "text_response",
-                                            "title": title,
-                                            "content": content,
-                                            "content_type": "markdown",
-                                            "append": _is_fu,
-                                        }))
-                                        if not _is_fu:
-                                            asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
-                                        mgr._speak_task = asyncio.create_task(
-                                            mgr._speak_verbatim(content, canvas=True)
-                                        )
-                                    else:
-                                        # Flash failed — fall back to Live voice
-                                        mgr._speak_task = asyncio.create_task(mgr.voice_query(t))
-
+                                fc = await _identify_face(t, img, sp)
+                                if fc:
+                                    await mgr._speak_verbatim(fc, canvas=False)
                                 else:
-                                    # All other queries — Gemini Live handles directly, naturally
-                                    # This is the main path: poems, sports, casual, opinions, facts
-                                    mgr._speak_task = asyncio.create_task(mgr.voice_query(t))
-                            except BaseException as exc:
-                                logger.warning("ws_observe: _respond failed: %s", exc)
-                            finally:
-                                mgr._is_responding = False
-                                mgr._suppress_audio = False
+                                    await mgr.voice_query(t)
+                            except asyncio.CancelledError:
+                                pass
+                            except Exception as exc:
+                                logger.warning("_face_respond failed: %s", exc)
+                        mgr._speak_task = asyncio.create_task(_face_respond())
 
-                        asyncio.create_task(_respond())
+                    elif wants_canvas:
+                        # Canvas path — Flash generates content, Live speaks brief ack
+                        state_mon = getattr(mgr, "_state_monitor", None)
+                        _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
+                        sys_prompt = _GUEST_SYSTEM_PROMPT if _is_guest else (mgr._system_prompt or "")
+                        async def _canvas_respond(t=text, img=effective_img, sp=sys_prompt,
+                                                  _ws=websocket, _fu=is_followup) -> None:
+                            try:
+                                result = await _flash_smart(t, img, sp, force_canvas=True)
+                                content = result.get("content", "")
+                                if content and len(content) > 10:
+                                    title = result.get("title", "") or _make_title(t)
+                                    await _ws.send_text(json.dumps({
+                                        "type": "text_response", "title": title,
+                                        "content": content, "content_type": "markdown",
+                                        "append": _fu,
+                                    }))
+                                    if not _fu:
+                                        asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
+                                    await mgr._speak_verbatim(content, canvas=True)
+                                else:
+                                    await mgr.voice_query(t)
+                            except asyncio.CancelledError:
+                                pass
+                            except Exception as exc:
+                                logger.warning("_canvas_respond failed: %s", exc)
+                        mgr._speak_task = asyncio.create_task(_canvas_respond())
+
+                    else:
+                        # Main path — Gemini Live handles everything natively
+                        mgr._speak_task = asyncio.create_task(mgr.voice_query(text))
     except WebSocketDisconnect:
         pass
     finally:

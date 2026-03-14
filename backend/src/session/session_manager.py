@@ -555,24 +555,37 @@ class SessionManager:
             self._suppress_audio = False
 
     async def voice_query(self, text: str) -> None:
-        """Send user query directly to Gemini Live — natural voice response, no Flash routing.
-        Uses send_text (fire-and-return) so the lock is held only during the send, not
-        the full response. Audio arrives via _on_audio callback asynchronously.
-        Stale audio from any previous interrupted turn is suppressed at the start.
+        """Natural voice conversation via Gemini Live — mirrors Gemini Live Chat flow.
+
+        No _gemini_lock on the send path — Live API handles concurrent sends natively.
+        Sending new text while model is generating automatically interrupts it.
+
+        Task stays alive (sleep) so it can be cancelled externally to suppress
+        stale audio mid-response (barge-in interruption).
         """
         try:
-            # Suppress stale audio from any still-arriving previous response
+            # Reconnect only if needed — lock just for the connect, not the send
+            if not (self._gemini and self._gemini.is_connected):
+                async with self._gemini_lock:
+                    await self.ensure_gemini_connected()
+
+            # Suppress stale audio arriving from any interrupted previous response
             self._suppress_audio = True
-            async with self._gemini_lock:
-                await self.ensure_gemini_connected()
-                await asyncio.sleep(0.1)   # drain stale audio callbacks
-                self._suppress_audio = False
-                await self._gemini.send_text(text)
-                self._reset_gemini_idle_timer()
-            # Lock released — audio flows via _on_audio callback
+            await asyncio.sleep(0.15)   # 150ms drain window
+
+            # Open gate and send — Live API interrupts any ongoing generation
+            self._suppress_audio = False
+            await self._gemini.send_text(text)
+            self._reset_gemini_idle_timer()
+
+            # Stay alive so cancellation (barge-in) can suppress our own audio
+            await asyncio.sleep(30)
+
         except asyncio.CancelledError:
-            self._suppress_audio = True   # suppress partial response on interrupt
-            logger.info("SessionManager: voice_query cancelled")
+            # Barge-in: immediately suppress our partial response audio
+            self._suppress_audio = True
+            logger.info("SessionManager: voice_query interrupted by barge-in")
+
         except Exception as exc:
             logger.warning("SessionManager: voice_query failed: %s", exc)
             self._suppress_audio = False
