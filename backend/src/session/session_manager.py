@@ -30,8 +30,12 @@ class SessionManager:
         self._gemini_lock: asyncio.Lock = asyncio.Lock()
         # Greeting task ref — cancelled immediately when user speaks
         self._greeting_task: Optional[asyncio.Task] = None
-        # When True, _forward_audio drops bytes (suppresses stale greeting audio)
+        # When True, _forward_audio drops bytes AND _receive_loop skips task creation
         self._suppress_audio: bool = False
+        # Generation counter — incremented on every voice_query call.
+        # CancelledError handlers check this before touching _suppress_audio so a
+        # stale cancelled task can't close the gate on a newer active response.
+        self._voice_gen: int = 0
         # Prevent double-greeting (connect_gemini + resume both call _send_greeting)
         self._has_greeted: bool = False
         # True while a user query response is in progress — blocks duplicate responses
@@ -103,6 +107,9 @@ class SessionManager:
             api_key = os.environ["GEMINI_API_KEY"]
             self._gemini = GeminiLiveClient(api_key=api_key)
             self._gemini.set_audio_callback(self._forward_audio)
+            # Inline suppress check — evaluated at the moment each audio chunk
+            # arrives in _receive_loop, preventing stale audio task creation.
+            self._gemini.set_suppress_check(lambda: self._suppress_audio)
             await self._gemini.connect(self._system_prompt)
             logger.info("SessionManager: Gemini Live session opened (on-demand)")
         finally:
@@ -556,40 +563,56 @@ class SessionManager:
             self._suppress_audio = False
 
     async def voice_query(self, text: str) -> None:
-        """Natural voice conversation via Gemini Live — mirrors Gemini Live Chat flow.
+        """Natural voice conversation via Gemini Live.
 
-        No _gemini_lock on the send path — Live API handles concurrent sends natively.
-        Sending new text while model is generating automatically interrupts it.
+        Generation counter (_voice_gen) prevents a stale CancelledError from a
+        previous task from closing the audio gate on the current active response —
+        which was the cause of responses not completing.
 
-        Task stays alive (sleep) so it can be cancelled externally to suppress
-        stale audio mid-response (barge-in interruption).
+        Timing:
+          _suppress_audio is already True when this task starts (set synchronously
+          by the ws_observe handler before create_task). We:
+          1. Send text (Gemini interrupts old generation immediately on the server).
+          2. Keep suppress=True for 300ms (drain window — old audio still in transit
+             is caught by the inline _receive_loop check and never forwarded).
+          3. Open gate. New audio plays cleanly.
         """
+        self._voice_gen += 1
+        my_gen = self._voice_gen
+
         try:
             # Reconnect only if needed — lock just for the connect, not the send
             if not (self._gemini and self._gemini.is_connected):
                 async with self._gemini_lock:
                     await self.ensure_gemini_connected()
-
-            # Suppress stale audio arriving from any interrupted previous response
-            self._suppress_audio = True
-            await asyncio.sleep(0.15)   # 150ms drain window
-
-            # Open gate and send — Live API interrupts any ongoing generation
-            self._suppress_audio = False
+            # _suppress_audio is already True — set by ws_observe before create_task.
+            # Send text NOW while still suppressed: Gemini interrupts old generation.
             await self._gemini.send_text(text)
             self._reset_gemini_idle_timer()
 
-            # Stay alive so cancellation (barge-in) can suppress our own audio
+            # 300ms drain: old audio arrives at _receive_loop suppressed (inline check).
+            # By the time we open the gate, only new-turn audio is arriving.
+            await asyncio.sleep(0.3)
+
+            # Open gate — but only if we're still the current generation.
+            # If a newer voice_query was created in the meantime, don't touch state.
+            if self._voice_gen == my_gen:
+                self._suppress_audio = False
+
+            # Stay alive so barge-in CancelledError can suppress our audio.
             await asyncio.sleep(30)
 
         except asyncio.CancelledError:
-            # Barge-in: immediately suppress our partial response audio
-            self._suppress_audio = True
-            logger.info("SessionManager: voice_query interrupted by barge-in")
+            # Only suppress if we're still the active generation.
+            # If a newer task already opened the gate, don't close it.
+            if self._voice_gen == my_gen:
+                self._suppress_audio = True
+            logger.info("SessionManager: voice_query cancelled (gen=%d)", my_gen)
 
         except Exception as exc:
             logger.warning("SessionManager: voice_query failed: %s", exc)
-            self._suppress_audio = False
+            if self._voice_gen == my_gen:
+                self._suppress_audio = False
 
     async def _speak(self, text: str) -> None:
         """Ensure Gemini Live is open, then speak the text aloud.

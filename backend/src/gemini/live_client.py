@@ -46,6 +46,11 @@ class GeminiLiveClient:
         self._response_queue: asyncio.Queue = asyncio.Queue()
         self._receive_task: Optional[asyncio.Task] = None
         self._on_audio: Optional[Callable] = None
+        # Suppress check — called INLINE at receive time, not at task-run time.
+        # This is the key to preventing stale audio from slipping through:
+        # the check happens in the same event-loop turn that the audio arrives,
+        # before any asyncio.create_task delay.
+        self._suppress_check: Optional[Callable[[], bool]] = None
 
     async def connect(self, system_prompt: str) -> None:
         self._system_prompt = system_prompt
@@ -71,13 +76,13 @@ class GeminiLiveClient:
         """Single loop that drains ALL responses from Gemini.
 
         Text responses go into the queue for query() to consume.
-        Audio responses call self._on_audio directly.
+        Audio responses: checked against _suppress_check INLINE (same event-loop
+        turn they arrive) before creating a forwarding task — this prevents stale
+        audio chunks from being forwarded after suppression is set.
         """
         try:
             async for response in self._session.receive():
                 # ── Text / transcript ─────────────────────────────────────
-                # Native audio models send audio only; transcript may come
-                # via server_content.output_transcription or not at all.
                 text = response.text or ""
                 if not text and response.server_content:
                     sc = response.server_content
@@ -87,7 +92,6 @@ class GeminiLiveClient:
                     await self._response_queue.put(("text", text))
 
                 # ── Audio ─────────────────────────────────────────────────
-                # Try shorthand first, then walk parts for inline_data
                 audio_bytes = response.data or None
                 if not audio_bytes and response.server_content:
                     sc = response.server_content
@@ -100,10 +104,17 @@ class GeminiLiveClient:
                                     break
 
                 if audio_bytes and self._on_audio:
-                    logger.info("GeminiLiveClient: forwarding %d audio bytes", len(audio_bytes))
-                    asyncio.create_task(self._on_audio(audio_bytes))
-                elif not audio_bytes and response.server_content:
-                    logger.info("GeminiLiveClient: server_content received, no audio detected")
+                    # KEY FIX: check suppress INLINE at receive time.
+                    # If we used asyncio.create_task unconditionally, the task
+                    # would run later when _suppress_audio may have changed.
+                    # Checking here (synchronous, same event-loop turn) is atomic.
+                    if self._suppress_check and self._suppress_check():
+                        logger.debug(
+                            "GeminiLiveClient: audio suppressed at receive (%d bytes)",
+                            len(audio_bytes),
+                        )
+                    else:
+                        asyncio.create_task(self._on_audio(audio_bytes))
 
                 # ── Turn complete ─────────────────────────────────────────
                 if (
@@ -119,6 +130,12 @@ class GeminiLiveClient:
 
     def set_audio_callback(self, callback: Callable) -> None:
         self._on_audio = callback
+
+    def set_suppress_check(self, check: Callable[[], bool]) -> None:
+        """Register a callable that returns True when audio should be suppressed.
+        Called inline in _receive_loop at the moment each audio chunk arrives.
+        """
+        self._suppress_check = check
 
     async def disconnect(self) -> None:
         if self._receive_task:
