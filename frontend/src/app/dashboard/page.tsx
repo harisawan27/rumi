@@ -86,6 +86,7 @@ export default function DashboardPage() {
   const lastSentQueryRef = useRef<string>("");   // always-current ref — avoids stale closure in WS handler
   const pendingAttachmentRef = useRef<{ dataUrl: string; name: string } | null>(null);
   const bargeinRef = useRef<SpeechRecognition | null>(null); // VAD barge-in listener (active while Rumi speaks)
+  const suppressAudioUntilRef = useRef<number>(0); // epoch ms — drop audio_response before this time
   const [wakeListening, setWakeListening] = useState(false);
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -543,6 +544,7 @@ export default function DashboardPage() {
           playCtxRef.current = null;
         }
         nextPlayTimeRef.current = 0;
+        suppressAudioUntilRef.current = Date.now() + 500; // drop stale chunks arriving after barge-in
         setSpeaking(false);
         window.speechSynthesis.cancel();
         // Notify backend to cancel its speak task
@@ -805,7 +807,12 @@ export default function DashboardPage() {
       nextPlayTimeRef.current = 0;
       setSpeaking(false);
       window.speechSynthesis.cancel();
+      // Suppress any audio_response messages already in the WS queue (stale chunks
+      // sent before backend suppression kicked in — otherwise they play on a new ctx
+      // created by playAudio, causing double-speak with the real new response).
+      suppressAudioUntilRef.current = Date.now() + 500;
     } else if (msg.type === "audio_response") {
+      if (Date.now() < suppressAudioUntilRef.current) return; // stale chunk — drop it
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
       playAudio((msg as { type: string; data: string }).data);
     } else if (msg.type === "canvas_history") {

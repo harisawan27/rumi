@@ -547,11 +547,12 @@ class SessionManager:
                 self._reset_gemini_idle_timer()
                 self._suppress_audio = True
             await asyncio.sleep(0.5)
+            self._suppress_audio = False  # clean exit — open for next proactive speak
         except asyncio.CancelledError:
+            # Do NOT reset _suppress_audio — voice_query manages it from here
             logger.info("SessionManager: speak_verbatim cancelled")
         except Exception as exc:
             logger.warning("SessionManager: speak_verbatim failed: %s", exc)
-        finally:
             self._suppress_audio = False
 
     async def voice_query(self, text: str) -> None:

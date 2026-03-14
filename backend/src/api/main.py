@@ -965,6 +965,12 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     import time as _time
                     _t0 = _time.perf_counter()
 
+                    # Suppress audio SYNCHRONOUSLY before any await — catches all in-flight
+                    # _on_audio tasks that were queued before this handler wakes up.
+                    # If this isn't set here, old audio tasks run during the first yield
+                    # and forward stale audio to the frontend before suppression kicks in.
+                    mgr._suppress_audio = True
+
                     # Cancel any active speak task — works for both barge-in and normal flow
                     if mgr._speak_task and not mgr._speak_task.done():
                         logger.info("ws_observe: cancelling active speak task for new query")
