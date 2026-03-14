@@ -517,23 +517,28 @@ class SessionManager:
             await self._gemini.disconnect()
         logger.info("SessionManager: context refreshed live (new language/tone will apply immediately)")
 
-    async def _speak_verbatim(self, text: str) -> None:
-        """Speak a brief natural acknowledgment of the canvas content via Gemini Live.
+    async def _speak_verbatim(self, text: str, canvas: bool = False) -> None:
+        """Deliver a response via Gemini Live.
 
-        We do NOT ask Gemini to read the full text verbatim — that creates multi-turn
-        audio overlap. Instead we ask for a 1–2 sentence warm spoken intro so the user
-        knows what's on the canvas. The canvas itself is for deep reading.
+        canvas=True  → brief warm acknowledgment ("I've put it on the canvas, take a look")
+        canvas=False → speak the full content directly as the companion's reply
         """
-        # Take up to first 120 words as context hint — enough for a good intro
-        words = text.split()
-        snippet = " ".join(words[:120])
-        prompt = (
-            "You've just displayed detailed content on the user's canvas screen. "
-            f"The content begins: \"{snippet}\"\n\n"
-            "Speak a warm, natural 1–2 sentence response — briefly acknowledge what "
-            "you've prepared and invite them to read it. "
-            "Do NOT read the full text. Just a quick, human acknowledgment."
-        )
+        if canvas:
+            words = text.split()
+            snippet = " ".join(words[:120])
+            prompt = (
+                "You've just displayed detailed content on the user's canvas screen. "
+                f"The content begins: \"{snippet}\"\n\n"
+                "Speak a warm, natural 1–2 sentence response — briefly acknowledge what "
+                "you've prepared and invite them to read it. Do NOT read the full text."
+            )
+        else:
+            # Voice-only: speak the content itself. Send it as the reply to deliver.
+            prompt = (
+                "Deliver this response to the user naturally, as their companion speaking aloud. "
+                "Speak it completely and warmly — do not summarise, do not cut short:\n\n"
+                f"{text}"
+            )
         try:
             async with self._gemini_lock:
                 await self.ensure_gemini_connected()
@@ -541,7 +546,7 @@ class SessionManager:
                 await self._gemini.query(prompt)
                 self._reset_gemini_idle_timer()
                 self._suppress_audio = True
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             logger.info("SessionManager: speak_verbatim cancelled")
         except Exception as exc:

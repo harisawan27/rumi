@@ -1065,7 +1065,9 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                 # Always speak — voice is first class regardless of canvas decision
                                 _latency_ms = (_time.perf_counter() - _req_t0) * 1000
                                 logger.info("[LATENCY] user_text→speak_start: %.0fms (canvas=%s)", _latency_ms, result["canvas_needed"])
-                                mgr._speak_task = asyncio.create_task(mgr._speak_verbatim(content))
+                                mgr._speak_task = asyncio.create_task(
+                                    mgr._speak_verbatim(content, canvas=result["canvas_needed"])
+                                )
                             except BaseException as exc:
                                 logger.warning("ws_observe: _respond failed: %s", exc)
                             finally:
