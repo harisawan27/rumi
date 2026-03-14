@@ -988,7 +988,8 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                     await _ws.send_text(json.dumps({"type": "audio_interrupt"}))
                                 except Exception:
                                     pass
-                                mgr._suppress_audio = False
+                                # suppress_audio stays True — voice_query will set it False
+                                # after draining stale audio from any previous response
 
                                 t_lower = t.lower()
                                 screen_b64: str | None = None

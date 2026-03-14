@@ -556,19 +556,25 @@ class SessionManager:
 
     async def voice_query(self, text: str) -> None:
         """Send user query directly to Gemini Live — natural voice response, no Flash routing.
-        Gemini Live already has the system prompt so it knows the user and their context.
+        Uses send_text (fire-and-return) so the lock is held only during the send, not
+        the full response. Audio arrives via _on_audio callback asynchronously.
+        Stale audio from any previous interrupted turn is suppressed at the start.
         """
         try:
+            # Suppress stale audio from any still-arriving previous response
+            self._suppress_audio = True
             async with self._gemini_lock:
                 await self.ensure_gemini_connected()
+                await asyncio.sleep(0.1)   # drain stale audio callbacks
                 self._suppress_audio = False
-                await self._gemini.query(text)
+                await self._gemini.send_text(text)
                 self._reset_gemini_idle_timer()
+            # Lock released — audio flows via _on_audio callback
         except asyncio.CancelledError:
+            self._suppress_audio = True   # suppress partial response on interrupt
             logger.info("SessionManager: voice_query cancelled")
         except Exception as exc:
             logger.warning("SessionManager: voice_query failed: %s", exc)
-        finally:
             self._suppress_audio = False
 
     async def _speak(self, text: str) -> None:
