@@ -88,6 +88,7 @@ export default function DashboardPage() {
   const bargeinRef = useRef<SpeechRecognition | null>(null); // VAD barge-in listener (active while Rumi speaks)
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]); // all playing sources — stopped on interrupt
   const speakingRef = useRef<boolean>(false); // closure-safe speaking state for rec.onend
+  const speakingOffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // debounce speaking=false
   const [wakeListening, setWakeListening] = useState(false);
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -537,6 +538,7 @@ export default function DashboardPage() {
     bargeinRef.current = rec;
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
+      if (!speakingRef.current) return; // Rumi already finished — ignore echo tail
       const text = Array.from(e.results)
         .map(r => r[0].transcript)
         .join("")
@@ -761,6 +763,7 @@ export default function DashboardPage() {
   // Does NOT close the AudioContext — closing is async and the context keeps
   // playing during the close, which was causing two voices simultaneously.
   function stopAllAudio() {
+    if (speakingOffTimerRef.current) { clearTimeout(speakingOffTimerRef.current); speakingOffTimerRef.current = null; }
     activeSourcesRef.current.forEach(s => { try { s.stop(0); } catch { /* already stopped */ } });
     activeSourcesRef.current = [];
     nextPlayTimeRef.current = 0;
@@ -794,10 +797,21 @@ export default function DashboardPage() {
 
       // Track this source so stopAllAudio() can stop it immediately on interrupt
       activeSourcesRef.current.push(source);
+      // Cancel any pending speaking-off timer — new chunk arrived, still speaking
+      if (speakingOffTimerRef.current) { clearTimeout(speakingOffTimerRef.current); speakingOffTimerRef.current = null; }
       setSpeaking(true);
       source.onended = () => {
         activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
-        if (activeSourcesRef.current.length === 0) setSpeaking(false);
+        if (activeSourcesRef.current.length === 0) {
+          // Debounce: wait 600ms before declaring speaking done.
+          // More audio chunks may still be in transit from backend — this prevents
+          // premature setSpeaking(false) during inter-chunk gaps, which would open
+          // the conversation window early and disrupt the AudioContext.
+          speakingOffTimerRef.current = setTimeout(() => {
+            speakingOffTimerRef.current = null;
+            if (activeSourcesRef.current.length === 0) setSpeaking(false);
+          }, 600);
+        }
       };
     } catch (e) {
       console.error("playAudio error:", e);
