@@ -530,6 +530,8 @@ class SessionManager:
         canvas=True  → brief warm acknowledgment ("I've put it on the canvas, take a look")
         canvas=False → speak the full content directly as the companion's reply
         """
+        # Block watchman for the lifetime of this verbatim response, just like voice_query.
+        self._is_responding = True
         if canvas:
             words = text.split()
             snippet = " ".join(words[:120])
@@ -552,15 +554,22 @@ class SessionManager:
                 self._suppress_audio = False
                 await self._gemini.query(prompt)
                 self._reset_gemini_idle_timer()
-                self._suppress_audio = True
+            # NOTE: do NOT suppress immediately after query() — audio tasks created during
+            # query() are still queued and need to run. Suppressing here truncates the
+            # tail of every response. Instead, yield for 500ms so those tasks execute.
             await asyncio.sleep(0.5)
-            self._suppress_audio = False  # clean exit — open for next proactive speak
+            # Gate stays open — next voice_query or _speak will manage it from here
         except asyncio.CancelledError:
-            # Do NOT reset _suppress_audio — voice_query manages it from here
+            # Do NOT reset _suppress_audio — voice_query manages it from here.
+            # Do NOT reset _is_responding — voice_query sets it True immediately.
             logger.info("SessionManager: speak_verbatim cancelled")
         except Exception as exc:
             logger.warning("SessionManager: speak_verbatim failed: %s", exc)
             self._suppress_audio = False
+            self._is_responding = False
+        else:
+            # Normal completion — release the block so watchman can speak again
+            self._is_responding = False
 
     async def voice_query(self, text: str) -> None:
         """Natural voice conversation via Gemini Live.

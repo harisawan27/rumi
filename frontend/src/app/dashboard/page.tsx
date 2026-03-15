@@ -87,6 +87,7 @@ export default function DashboardPage() {
   const pendingAttachmentRef = useRef<{ dataUrl: string; name: string } | null>(null);
   const bargeinRef = useRef<SpeechRecognition | null>(null); // VAD barge-in listener (active while Rumi speaks)
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]); // all playing sources — stopped on interrupt
+  const speakingRef = useRef<boolean>(false); // closure-safe speaking state for rec.onend
   const [wakeListening, setWakeListening] = useState(false);
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -238,6 +239,9 @@ export default function DashboardPage() {
       cameraPopupVideoRef.current.play().catch(() => {});
     }
   }, [showCameraPopup, liveStream]);
+
+  // Keep speakingRef in sync for closure-safe access in rec.onend
+  useEffect(() => { speakingRef.current = speaking; }, [speaking]);
 
   // Reset emotion + open conversation window when Rumi finishes speaking
   useEffect(() => {
@@ -481,9 +485,11 @@ export default function DashboardPage() {
         setTranscript("");
         setRumiEmotion("neutral");
       }
-      // Resume wake word standby after main listener finishes
+      // Resume wake word standby after main listener finishes —
+      // but NOT while Rumi is speaking (the speaking useEffect will start
+      // the main listener directly when speaking stops, without a wake word).
       setTimeout(() => {
-        if (micEnabledRef.current && !isTalkingRef.current) startWakeWordListener();
+        if (micEnabledRef.current && !isTalkingRef.current && !speakingRef.current) startWakeWordListener();
       }, 400);
     };
 
@@ -517,6 +523,9 @@ export default function DashboardPage() {
 
   function startBargeinListener() {
     if (!micEnabledRef.current || bargeinRef.current) return;
+    // Chrome allows only one active SpeechRecognition per tab — kill wake word first
+    // or it will get aborted mid-capture when barge-in tries to start.
+    stopWakeWordListener();
     const SR =
       (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition })
         .SpeechRecognition ??
