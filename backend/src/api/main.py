@@ -1031,8 +1031,9 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                 (_time.perf_counter() - _t0) * 1000, wants_canvas, is_face, is_save_person)
 
                     if is_save_person:
-                        # Extract name + relationship via Flash, save frame, speak confirmation
-                        async def _save_person_respond(t=text) -> None:
+                        # Extract + save in background — fire and forget so voice path stays clean.
+                        # voice_query handles the verbal response naturally (Gemini knows what to say).
+                        async def _bg_save_person(t=text) -> None:
                             try:
                                 import json as _json
                                 import os as _os
@@ -1045,8 +1046,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                     '{"name": "FirstName", "relationship": "friend/brother/etc"}'
                                 )
                                 resp = await _client.aio.models.generate_content(
-                                    model="gemini-2.0-flash",
-                                    contents=extract_prompt,
+                                    model="gemini-2.0-flash", contents=extract_prompt,
                                 )
                                 raw = (resp.text or "").strip()
                                 if raw.startswith("```"):
@@ -1058,16 +1058,13 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                 name = parsed.get("name", "").strip()
                                 rel  = parsed.get("relationship", "").strip()
                                 if name and rel:
-                                    confirmation = await mgr.save_person_from_voice(name, rel)
-                                    await mgr.voice_query(confirmation)
-                                else:
-                                    await mgr.voice_query(t)
-                            except asyncio.CancelledError:
-                                pass
+                                    await mgr.save_person_from_voice(name, rel)
+                                    logger.info("bg_save_person: saved %s (%s)", name, rel)
                             except Exception as exc:
-                                logger.warning("_save_person_respond failed: %s", exc)
-                                await mgr.voice_query(t)
-                        mgr._speak_task = asyncio.create_task(_save_person_respond())
+                                logger.warning("bg_save_person failed: %s", exc)
+                        asyncio.create_task(_bg_save_person())
+                        # Fall through to normal voice_query — single audio path, no double-speak risk
+                        mgr._speak_task = asyncio.create_task(mgr.voice_query(text))
 
                     elif is_face:
                         # Face ID path — Flash analyses image, Live delivers verbally
