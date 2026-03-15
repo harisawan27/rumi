@@ -949,13 +949,14 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 else:
                     logger.warning("audio_end received but Gemini not connected — reply lost")
             elif msg.get("type") == "audio_interrupt":
-                # Frontend-initiated barge-in — suppress immediately (synchronous)
-                # then cancel the speak task. Do NOT touch _is_responding here:
-                # the cancelled task's finally block resets it via gen-guard, and
-                # voice_query (from the incoming user_text) will set it True immediately.
-                # Setting it False here opens a window where watchman fires between
-                # the barge-in and the next user_text arriving (~1.25s gap).
+                # Frontend-initiated barge-in. All three are SYNCHRONOUS.
+                # Critically: _voice_gen += 1 here prevents the cancelled voice_query's
+                # finally block from resetting _is_responding=False. Without this,
+                # the gen-guard fires True (old gen still matches) → _is_responding=False
+                # → watchman fires in the 1-2s gap before user_text arrives → double speak.
                 mgr._suppress_audio = True
+                mgr._is_responding = True
+                mgr._voice_gen += 1
                 if mgr._speak_task and not mgr._speak_task.done():
                     mgr._speak_task.cancel()
                 logger.info("ws_observe: audio_interrupt from frontend — suppressed + cancelled")

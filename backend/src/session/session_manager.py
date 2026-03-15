@@ -595,13 +595,14 @@ class SessionManager:
         self._is_responding = True
 
         try:
-            # Reconnect only if needed — lock just for the connect, not the send
-            if not (self._gemini and self._gemini.is_connected):
-                async with self._gemini_lock:
+            # Hold the lock for connect + send so _speak() can never fire a concurrent
+            # Gemini call between our suppress and our text arriving at Gemini.
+            async with self._gemini_lock:
+                if not (self._gemini and self._gemini.is_connected):
                     await self.ensure_gemini_connected()
-            # _suppress_audio is already True — set by ws_observe before create_task.
-            # Send text NOW while still suppressed: Gemini interrupts old generation.
-            await self._gemini.send_text(text)
+                # _suppress_audio already True (set by ws_observe). Send while suppressed:
+                # Gemini receives this and immediately stops any prior generation.
+                await self._gemini.send_text(text)
             self._reset_gemini_idle_timer()
 
             # 200ms drain: old audio arrives at _receive_loop suppressed (inline check).
@@ -640,7 +641,15 @@ class SessionManager:
         if self._is_responding:
             logger.info("SessionManager: _speak skipped — user response in progress")
             return
+        if self._speak_task and not self._speak_task.done():
+            logger.info("SessionManager: _speak skipped — speak_task still active")
+            return
         async with self._gemini_lock:
+            # Double-check after acquiring lock — voice_query holds this lock during send_text,
+            # so if we had to wait for it, the user may have started speaking by now.
+            if self._is_responding or (self._speak_task and not self._speak_task.done()):
+                logger.info("SessionManager: _speak aborted inside lock — response started")
+                return
             try:
                 await self.ensure_gemini_connected()
                 await self._gemini.query(f"Say this warmly to the user: {text}")
