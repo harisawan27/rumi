@@ -390,8 +390,8 @@ class SessionManager:
 
         intervention_text = await generate_intervention("frustrated", self._uid, self._session_id)
 
-        # Also have Gemini Live speak it aloud
-        asyncio.create_task(self._speak(intervention_text))
+        # Voice disabled — intervention shown as card only.
+        # Proactive _speak() races with voice_query on the shared Gemini session.
 
         interaction_id = log_interaction(
             uid=self._uid,
@@ -409,8 +409,6 @@ class SessionManager:
 
         intervention_text = await generate_intervention("coding_block", self._uid, self._session_id)
 
-        asyncio.create_task(self._speak(intervention_text))
-
         interaction_id = log_interaction(
             uid=self._uid,
             session_id=self._session_id,
@@ -426,7 +424,6 @@ class SessionManager:
         from src.memory.interaction_log import log_interaction
 
         intervention_text = await generate_intervention("long_session", self._uid, self._session_id)
-        asyncio.create_task(self._speak(intervention_text))
 
         interaction_id = log_interaction(
             uid=self._uid,
@@ -443,7 +440,6 @@ class SessionManager:
         from src.memory.interaction_log import log_interaction
 
         intervention_text = await generate_intervention("deep_focus", self._uid, self._session_id)
-        asyncio.create_task(self._speak(intervention_text))
 
         interaction_id = log_interaction(
             uid=self._uid,
@@ -455,12 +451,8 @@ class SessionManager:
         logger.info("SessionManager: Trigger E fired — interaction %s", interaction_id)
 
     async def _soft_frustration_checkin(self) -> None:
-        """10-second early check-in — gentle voice only, no intervention card."""
-        await self._speak(
-            "I notice you might be feeling a bit tense or stuck. "
-            "What's going on? I'm here if you want to talk it through."
-        )
-        logger.info("SessionManager: soft frustration check-in fired")
+        """Soft frustration check-in — disabled to prevent race with voice_query."""
+        logger.info("SessionManager: soft frustration check-in skipped (voice disabled)")
 
     async def _fire_guest_detected(self) -> None:
         """Speak a warm guest greeting and send an intervention card.
@@ -482,8 +474,8 @@ class SessionManager:
             f"Are you a friend or family member? I'm happy to help while they're away."
         )
 
-        # Speak it aloud — uses companion language naturally via system prompt
-        asyncio.create_task(self._speak(text))
+        # Voice disabled — intervention shown as card only.
+        # Proactive _speak() races with voice_query on the shared Gemini session.
 
         # Send intervention card to frontend
         interaction_id = log_interaction(
