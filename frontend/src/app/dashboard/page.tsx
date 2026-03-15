@@ -88,7 +88,7 @@ export default function DashboardPage() {
   const bargeinRef = useRef<SpeechRecognition | null>(null); // VAD barge-in listener (active while Rumi speaks)
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]); // all playing sources — stopped on interrupt
   const speakingRef = useRef<boolean>(false); // closure-safe speaking state for rec.onend
-  const speakingOffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // debounce speaking=false
+
   const [wakeListening, setWakeListening] = useState(false);
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -538,7 +538,7 @@ export default function DashboardPage() {
     bargeinRef.current = rec;
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
-      if (!speakingRef.current) return; // Rumi already finished — ignore echo tail
+      if (activeSourcesRef.current.length === 0) return; // no audio playing — echo of last word, ignore
       const text = Array.from(e.results)
         .map(r => r[0].transcript)
         .join("")
@@ -693,6 +693,21 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenActive]);
 
+  function handleCancel() {
+    stopAllAudio();
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
+    }
+    setIsProcessing(false);
+    recognitionRef.current?.stop();
+    isTalkingRef.current = false;
+    setIsTalking(false);
+    setTranscript("");
+    setTimeout(() => {
+      if (micEnabledRef.current && !isTalkingRef.current) startWakeWordListener();
+    }, 400);
+  }
+
   function handleMicToggle() {
     if (speaking || !micEnabled) return;
     if (isTalkingRef.current) {
@@ -763,7 +778,6 @@ export default function DashboardPage() {
   // Does NOT close the AudioContext — closing is async and the context keeps
   // playing during the close, which was causing two voices simultaneously.
   function stopAllAudio() {
-    if (speakingOffTimerRef.current) { clearTimeout(speakingOffTimerRef.current); speakingOffTimerRef.current = null; }
     activeSourcesRef.current.forEach(s => { try { s.stop(0); } catch { /* already stopped */ } });
     activeSourcesRef.current = [];
     nextPlayTimeRef.current = 0;
@@ -797,21 +811,10 @@ export default function DashboardPage() {
 
       // Track this source so stopAllAudio() can stop it immediately on interrupt
       activeSourcesRef.current.push(source);
-      // Cancel any pending speaking-off timer — new chunk arrived, still speaking
-      if (speakingOffTimerRef.current) { clearTimeout(speakingOffTimerRef.current); speakingOffTimerRef.current = null; }
       setSpeaking(true);
       source.onended = () => {
         activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
-        if (activeSourcesRef.current.length === 0) {
-          // Debounce: wait 600ms before declaring speaking done.
-          // More audio chunks may still be in transit from backend — this prevents
-          // premature setSpeaking(false) during inter-chunk gaps, which would open
-          // the conversation window early and disrupt the AudioContext.
-          speakingOffTimerRef.current = setTimeout(() => {
-            speakingOffTimerRef.current = null;
-            if (activeSourcesRef.current.length === 0) setSpeaking(false);
-          }, 600);
-        }
+        if (activeSourcesRef.current.length === 0) setSpeaking(false);
       };
     } catch (e) {
       console.error("playAudio error:", e);
@@ -1234,6 +1237,18 @@ export default function DashboardPage() {
                 <p style={{ margin: 0, fontSize: "0.72rem", color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)" }}>
                   {isTalking ? "Tap or Space to send" : isProcessing ? "Sending to Rumi…" : speaking ? "Rumi is speaking" : "Tap to speak"}
                 </p>
+                {(isProcessing || speaking) && (
+                  <button
+                    onClick={handleCancel}
+                    style={{
+                      marginTop: 2, background: "transparent", border: "1px solid rgba(201,168,76,0.25)",
+                      borderRadius: 99, padding: "3px 14px", cursor: "pointer",
+                      color: "var(--muted)", fontSize: "0.68rem", letterSpacing: "0.04em",
+                    }}
+                  >
+                    ✕ Cancel
+                  </button>
+                )}
                 {/* Screen share button */}
                 {!isTalking && !isProcessing && !speaking && (
                   <button
