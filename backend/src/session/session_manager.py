@@ -563,6 +563,19 @@ class SessionManager:
             # Normal completion — release the block so watchman can speak again
             self._is_responding = False
 
+    def _camera_context(self) -> str:
+        """Return a one-line camera state string to inject into every voice query."""
+        monitor = getattr(self, "_state_monitor", None)
+        if not monitor:
+            return ""
+        if not getattr(monitor, "_current_frame", None):
+            return f"[CAMERA: no frame received yet — camera may be starting up]"
+        if getattr(monitor, "_guest_active", False):
+            return f"[CAMERA: an unrecognised person (guest) is currently in front of the camera — NOT {self._owner_name}]"
+        if getattr(monitor, "_non_owner_streak", 1) == 0:
+            return f"[CAMERA: {self._owner_name} (the owner) is currently in front of the camera]"
+        return f"[CAMERA: no face clearly identified right now — {self._owner_name} may have stepped away from the camera]"
+
     async def voice_query(self, text: str) -> None:
         """Natural voice conversation via Gemini Live.
 
@@ -594,7 +607,9 @@ class SessionManager:
                     await self.ensure_gemini_connected()
                 # _suppress_audio already True (set by ws_observe). Send while suppressed:
                 # Gemini receives this and immediately stops any prior generation.
-                await self._gemini.send_text(text)
+                ctx = self._camera_context()
+                payload = f"{ctx}\n{text}" if ctx else text
+                await self._gemini.send_text(payload)
             self._reset_gemini_idle_timer()
 
             # 200ms drain: old audio arrives at _receive_loop suppressed (inline check).
