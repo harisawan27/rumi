@@ -67,6 +67,8 @@ class StateMonitor:
         self._guest_active        = False
         self._on_guest_detected   = None  # set via set_guest_callback()
         self._on_owner_returned   = None  # set via set_owner_returned_callback()
+        # Current face label — "owner" | "known:Name:relationship" | "guest" | "nobody"
+        self._last_face_label: str = "nobody"
 
     def set_uid(self, uid: str) -> None:
         """Store uid so face checker can query known people from Firestore."""
@@ -294,6 +296,7 @@ class StateMonitor:
                         asyncio.create_task(self._on_owner_returned())
                 self._non_owner_streak = 0
                 self._guest_active = False
+                self._last_face_label = "owner"
                 return
 
             # ── Step 2: not owner — check known people ───────────────────────
@@ -312,6 +315,7 @@ class StateMonitor:
                             logger.info("StateMonitor: known person — %s (%s)",
                                         person["name"], person["relationship"])
                             self._non_owner_streak = 0  # known person ≠ guest
+                            self._last_face_label = f"known:{person['name']}:{person['relationship']}"
                             if self._websocket:
                                 await self._websocket.send_text(json.dumps({
                                     "type": "known_person_detected",
@@ -329,6 +333,7 @@ class StateMonitor:
             # ── Step 3: unknown person — guest detection ─────────────────────
             if self._non_owner_streak >= self._non_owner_threshold and not self._guest_active:
                 self._guest_active = True
+                self._last_face_label = "guest"
                 logger.info("StateMonitor: guest confirmed (confidence=%.2f)", result.confidence)
                 if self._websocket:
                     await self._websocket.send_text(json.dumps({

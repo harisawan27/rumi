@@ -43,11 +43,15 @@ async def compare_faces(
         return FaceMatchResult(is_owner=True, confidence=1.0, reason="no_reference")
 
     try:
-        # Download owner reference photo
-        async with httpx.AsyncClient(timeout=8) as client:
-            ref_resp = await client.get(owner_photo_url)
-            ref_resp.raise_for_status()
-            ref_b64 = base64.b64encode(ref_resp.content).decode()
+        # Load owner reference photo — supports data URIs and remote URLs
+        if owner_photo_url.startswith("data:"):
+            # data:image/jpeg;base64,<b64> — decode locally, no HTTP needed
+            ref_b64 = owner_photo_url.split(",", 1)[1]
+        else:
+            async with httpx.AsyncClient(timeout=8) as client:
+                ref_resp = await client.get(owner_photo_url)
+                ref_resp.raise_for_status()
+                ref_b64 = base64.b64encode(ref_resp.content).decode()
 
         prompt = (
             "You are a face verification system. "

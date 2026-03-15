@@ -563,18 +563,53 @@ class SessionManager:
             # Normal completion — release the block so watchman can speak again
             self._is_responding = False
 
+    async def save_person_from_voice(self, name: str, relationship: str) -> str:
+        """Capture current camera frame and save as a known person in Firestore.
+
+        Returns a confirmation string to include in the voice reply.
+        The frame is stored as a base64 data URI so compare_faces can use it
+        without needing Firebase Storage.
+        """
+        from src.memory.known_people import add_known_person
+        monitor = getattr(self, "_state_monitor", None)
+        frame = getattr(monitor, "_current_frame", None) if monitor else None
+
+        photo_url = ""
+        if frame:
+            import base64
+            b64 = base64.b64encode(frame).decode()
+            photo_url = f"data:image/jpeg;base64,{b64}"
+
+        person_id = await asyncio.get_event_loop().run_in_executor(
+            None,
+            add_known_person,
+            self._uid,
+            {
+                "name": name,
+                "relationship": relationship,
+                "photo_url": photo_url,
+                "added_by": "rumi_introduction",
+            },
+        )
+        logger.info("SessionManager: saved known person %s (%s) id=%s", name, relationship, person_id)
+        return f"I've remembered {name} as your {relationship}. Next time I see them I'll greet them by name."
+
     def _camera_context(self) -> str:
         """Return a one-line camera state string to inject into every voice query."""
         monitor = getattr(self, "_state_monitor", None)
         if not monitor:
             return ""
         if not getattr(monitor, "_current_frame", None):
-            return f"[CAMERA: no frame received yet — camera may be starting up]"
-        if getattr(monitor, "_guest_active", False):
-            return f"[CAMERA: an unrecognised person (guest) is currently in front of the camera — NOT {self._owner_name}]"
-        if getattr(monitor, "_non_owner_streak", 1) == 0:
-            return f"[CAMERA: {self._owner_name} (the owner) is currently in front of the camera]"
-        return f"[CAMERA: no face clearly identified right now — {self._owner_name} may have stepped away from the camera]"
+            return "[CAMERA: no frame received yet — camera may be starting up]"
+        label = getattr(monitor, "_last_face_label", "nobody")
+        if label == "owner":
+            return f"[CAMERA: {self._owner_name} (the owner) is in front of the camera]"
+        if label.startswith("known:"):
+            _, name, rel = label.split(":", 2)
+            return f"[CAMERA: {name} ({rel} of {self._owner_name}) is in front of the camera]"
+        if label == "guest":
+            return f"[CAMERA: an unrecognised guest is in front of the camera — NOT {self._owner_name}]"
+        return f"[CAMERA: no face detected — {self._owner_name} may have stepped away]"
 
     async def voice_query(self, text: str) -> None:
         """Natural voice conversation via Gemini Live.

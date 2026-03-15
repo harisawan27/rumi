@@ -1020,10 +1020,56 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     wants_canvas = force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
                     is_face = effective_img and any(kw in t_lower for kw in _FACE_QUERY_KEYWORDS)
 
-                    logger.info("[LATENCY] user_text received: %.0fms (canvas=%s face=%s)",
-                                (_time.perf_counter() - _t0) * 1000, wants_canvas, is_face)
+                    _SAVE_PERSON_KEYWORDS = [
+                        "remember this person", "save this person", "remember him as",
+                        "remember her as", "save him as", "save her as", "this is my",
+                        "add this person", "remember them as", "save them as",
+                    ]
+                    is_save_person = any(kw in t_lower for kw in _SAVE_PERSON_KEYWORDS)
 
-                    if is_face:
+                    logger.info("[LATENCY] user_text received: %.0fms (canvas=%s face=%s save=%s)",
+                                (_time.perf_counter() - _t0) * 1000, wants_canvas, is_face, is_save_person)
+
+                    if is_save_person:
+                        # Extract name + relationship via Flash, save frame, speak confirmation
+                        async def _save_person_respond(t=text) -> None:
+                            try:
+                                import json as _json
+                                import os as _os
+                                from google import genai as _gc
+                                _client = _gc.Client(api_key=_os.getenv("GEMINI_API_KEY"))
+                                extract_prompt = (
+                                    f"The user said: \"{t}\"\n"
+                                    "Extract the person's name and their relationship to the user.\n"
+                                    "Reply ONLY with valid JSON, no markdown:\n"
+                                    '{"name": "FirstName", "relationship": "friend/brother/etc"}'
+                                )
+                                resp = await _client.aio.models.generate_content(
+                                    model="gemini-2.0-flash",
+                                    contents=extract_prompt,
+                                )
+                                raw = (resp.text or "").strip()
+                                if raw.startswith("```"):
+                                    raw = raw.split("```")[1]
+                                    if raw.startswith("json"):
+                                        raw = raw[4:]
+                                    raw = raw.strip()
+                                parsed = _json.loads(raw)
+                                name = parsed.get("name", "").strip()
+                                rel  = parsed.get("relationship", "").strip()
+                                if name and rel:
+                                    confirmation = await mgr.save_person_from_voice(name, rel)
+                                    await mgr.voice_query(confirmation)
+                                else:
+                                    await mgr.voice_query(t)
+                            except asyncio.CancelledError:
+                                pass
+                            except Exception as exc:
+                                logger.warning("_save_person_respond failed: %s", exc)
+                                await mgr.voice_query(t)
+                        mgr._speak_task = asyncio.create_task(_save_person_respond())
+
+                    elif is_face:
                         # Face ID path — Flash analyses image, Live delivers verbally
                         state_mon = getattr(mgr, "_state_monitor", None)
                         _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
