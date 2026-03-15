@@ -373,9 +373,6 @@ export default function DashboardPage() {
       // Accept even low-confidence hits — better to false-positive than miss a far-field call.
       let fullText = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        const confidence = e.results[i][0].confidence;
-        // Skip only if confidence is explicitly high AND the word isn't there — keep low-conf
-        if (confidence > 0.9) continue; // very confident it's something else — skip
         fullText += e.results[i][0].transcript.toLowerCase() + " ";
       }
       // Also always check interim results for speed
