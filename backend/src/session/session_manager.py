@@ -12,6 +12,36 @@ from src.memory.firestore_client import get_db
 logger = logging.getLogger(__name__)
 
 
+def _upload_frame_to_storage(uid: str, frame: bytes) -> str:
+    """Upload a JPEG frame to Firebase Storage and return the public download URL.
+
+    Falls back to a base64 data URI if FIREBASE_STORAGE_BUCKET is not configured
+    (e.g. local dev). Runs synchronously — call via run_in_executor.
+    """
+    import base64
+    import os
+    bucket_name = os.getenv("FIREBASE_STORAGE_BUCKET")
+    if not bucket_name:
+        b64 = base64.b64encode(frame).decode()
+        return f"data:image/jpeg;base64,{b64}"
+
+    try:
+        from firebase_admin import storage as _fb_storage
+        from src.memory.firestore_client import get_db  # ensures firebase_admin is initialized
+        get_db()
+        bucket = _fb_storage.bucket()
+        import time
+        path = f"known-people/{uid}/{int(time.time() * 1000)}.jpg"
+        blob = bucket.blob(path)
+        blob.upload_from_string(frame, content_type="image/jpeg")
+        blob.make_public()
+        return blob.public_url
+    except Exception as exc:
+        logger.warning("_upload_frame_to_storage: Storage upload failed (%s) — using data URI", exc)
+        b64 = base64.b64encode(frame).decode()
+        return f"data:image/jpeg;base64,{b64}"
+
+
 class SessionManager:
     """Manages the lifecycle of a single Rumi observation session."""
 
@@ -566,9 +596,9 @@ class SessionManager:
     async def save_person_from_voice(self, name: str, relationship: str) -> str:
         """Capture current camera frame and save as a known person in Firestore.
 
-        Returns a confirmation string to include in the voice reply.
-        The frame is stored as a base64 data URI so compare_faces can use it
-        without needing Firebase Storage.
+        Uploads the frame to Firebase Storage (same bucket as the frontend uses)
+        and stores the download URL in Firestore. Falls back to a base64 data URI
+        if FIREBASE_STORAGE_BUCKET is not set (local dev without Storage).
         """
         from src.memory.known_people import add_known_person
         monitor = getattr(self, "_state_monitor", None)
@@ -576,9 +606,9 @@ class SessionManager:
 
         photo_url = ""
         if frame:
-            import base64
-            b64 = base64.b64encode(frame).decode()
-            photo_url = f"data:image/jpeg;base64,{b64}"
+            photo_url = await asyncio.get_event_loop().run_in_executor(
+                None, _upload_frame_to_storage, self._uid, frame
+            )
 
         person_id = await asyncio.get_event_loop().run_in_executor(
             None,
@@ -591,7 +621,8 @@ class SessionManager:
                 "added_by": "rumi_introduction",
             },
         )
-        logger.info("SessionManager: saved known person %s (%s) id=%s", name, relationship, person_id)
+        logger.info("SessionManager: saved known person %s (%s) id=%s photo=%s",
+                    name, relationship, person_id, "storage" if photo_url.startswith("http") else "data_uri")
         return f"I've remembered {name} as your {relationship}. Next time I see them I'll greet them by name."
 
     def _camera_context(self) -> str:
