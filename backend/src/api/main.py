@@ -970,18 +970,28 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     import time as _time
                     _t0 = _time.perf_counter()
 
-                    # Suppress audio SYNCHRONOUSLY before any await — catches all in-flight
-                    # _on_audio tasks that were queued before this handler wakes up.
-                    # If this isn't set here, old audio tasks run during the first yield
-                    # and forward stale audio to the frontend before suppression kicks in.
+                    # All three lines are SYNCHRONOUS — before any yield.
+                    #
+                    # _suppress_audio=True: catches all in-flight audio tasks.
+                    # _is_responding=True:  blocks watchman's _speak() immediately.
+                    # _voice_gen += 1:      THE KEY FIX — by claiming the next gen slot
+                    #   here, the old voice_query's finally sees (_voice_gen != my_gen)
+                    #   and skips its _is_responding=False reset. Without this, the old
+                    #   task's finally fires during the `await websocket.send_text` below
+                    #   and resets _is_responding=False, letting watchman fire between
+                    #   the old task ending and the new one starting → two Gemini calls.
                     mgr._suppress_audio = True
+                    mgr._is_responding = True
+                    mgr._voice_gen += 1
 
                     # Cancel any active speak task — works for both barge-in and normal flow
                     if mgr._speak_task and not mgr._speak_task.done():
                         logger.info("ws_observe: cancelling active speak task for new query")
                         mgr._speak_task.cancel()
 
-                    # Tell frontend to clear its audio buffer
+                    # Tell frontend to clear its audio buffer (this await yields the event
+                    # loop — the old voice_query's CancelledError fires here, but its
+                    # gen-guard now sees a mismatch and skips _is_responding=False).
                     try:
                         await websocket.send_text(json.dumps({"type": "audio_interrupt"}))
                     except Exception:
