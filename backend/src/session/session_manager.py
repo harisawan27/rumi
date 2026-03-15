@@ -579,6 +579,11 @@ class SessionManager:
         """
         self._voice_gen += 1
         my_gen = self._voice_gen
+        # Block watchman's _speak() for the lifetime of this user query.
+        # _is_responding was never set after _respond() was removed — that was
+        # the root cause of watchman speaking concurrently with voice_query,
+        # producing two simultaneous Gemini generations on the second query.
+        self._is_responding = True
 
         try:
             # Reconnect only if needed — lock just for the connect, not the send
@@ -596,7 +601,6 @@ class SessionManager:
             await asyncio.sleep(0.2)
 
             # Open gate — but only if we're still the current generation.
-            # If a newer voice_query was created in the meantime, don't touch state.
             if self._voice_gen == my_gen:
                 self._suppress_audio = False
 
@@ -604,8 +608,6 @@ class SessionManager:
             await asyncio.sleep(30)
 
         except asyncio.CancelledError:
-            # Only suppress if we're still the active generation.
-            # If a newer task already opened the gate, don't close it.
             if self._voice_gen == my_gen:
                 self._suppress_audio = True
             logger.info("SessionManager: voice_query cancelled (gen=%d)", my_gen)
@@ -614,6 +616,12 @@ class SessionManager:
             logger.warning("SessionManager: voice_query failed: %s", exc)
             if self._voice_gen == my_gen:
                 self._suppress_audio = False
+
+        finally:
+            # Release the block only if we're still the active generation.
+            # A newer voice_query has already set _is_responding = True for itself.
+            if self._voice_gen == my_gen:
+                self._is_responding = False
 
     async def _speak(self, text: str) -> None:
         """Ensure Gemini Live is open, then speak the text aloud.
