@@ -86,17 +86,11 @@ export default function DashboardPage() {
   const lastFollowUpQueryRef = useRef<string>("");
   const lastSentQueryRef = useRef<string>("");   // always-current ref — avoids stale closure in WS handler
   const pendingAttachmentRef = useRef<{ dataUrl: string; name: string } | null>(null);
-  const bargeinRef = useRef<SpeechRecognition | null>(null); // legacy — kept for cleanup compat
+  const bargeinRef = useRef<SpeechRecognition | null>(null); // VAD barge-in listener (active while Rumi speaks)
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]); // all playing sources — stopped on interrupt
   const speakingRef = useRef<boolean>(false); // closure-safe speaking state for rec.onend
   const audioGenRef = useRef<number>(0);                        // incremented on stopAllAudio to cancel pending chunks
   const audioChainRef = useRef<Promise<void>>(Promise.resolve()); // sequential scheduling chain — prevents chunk racing
-  const vadStreamRef = useRef<MediaStream | null>(null);         // getUserMedia stream for VAD barge-in
-  const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null); // polling interval
-  const vadContextRef = useRef<AudioContext | null>(null);       // AudioContext for AnalyserNode
-  const nativeCtxRef = useRef<AudioContext | null>(null);
-  const nativeStreamRef = useRef<MediaStream | null>(null);
-  const nativeProcessorRef = useRef<ScriptProcessorNode | null>(null);
 
   const [wakeListening, setWakeListening] = useState(false);
 
@@ -224,17 +218,6 @@ export default function DashboardPage() {
       preListenerRef.current = null;
       bargeinRef.current?.abort();
       bargeinRef.current = null;
-      if (vadIntervalRef.current) { clearInterval(vadIntervalRef.current); vadIntervalRef.current = null; }
-      vadContextRef.current?.close().catch(() => {});
-      vadContextRef.current = null;
-      vadStreamRef.current?.getTracks().forEach(t => t.stop());
-      vadStreamRef.current = null;
-      nativeProcessorRef.current?.disconnect();
-      nativeProcessorRef.current = null;
-      nativeCtxRef.current?.close().catch(() => {});
-      nativeCtxRef.current = null;
-      nativeStreamRef.current?.getTracks().forEach(t => t.stop());
-      nativeStreamRef.current = null;
       if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
     };
   }, [router]);
@@ -272,7 +255,7 @@ export default function DashboardPage() {
       if (micEnabledRef.current && !isTalkingRef.current) {
         stopWakeWordListener();
         setTimeout(() => {
-          if (micEnabledRef.current && !isTalkingRef.current) startNativeAudio();
+          if (micEnabledRef.current && !isTalkingRef.current) startListeningWithRef();
         }, 300);
       }
     }
@@ -412,7 +395,7 @@ export default function DashboardPage() {
         preListenerRef.current = null;
         setWakeListening(false);
         // Brief pause lets mic hardware fully release before main listener grabs it
-        setTimeout(() => startNativeAudio(), 180);
+        setTimeout(() => startListeningWithRef(), 180);
       }
     };
 
@@ -538,153 +521,72 @@ export default function DashboardPage() {
     recognitionRef.current?.stop();
   }
 
-  // ── VAD barge-in (AudioContext + echo-cancelled getUserMedia) ────────────
-  // SpeechRecognition has no echo cancellation — it picks up Rumi's own speaker
-  // output and self-interrupts. This VAD uses getUserMedia with echoCancellation:true
-  // (OS-level AEC removes speaker output) + RMS polling to detect genuine user speech.
+  // ── VAD barge-in ─────────────────────────────────────────────────────────
+  // Runs ONLY while Rumi is speaking. Any speech >2 chars immediately interrupts
+  // without requiring the wake word — true VAD barge-in.
   function stopBargeinListener() {
-    if (vadIntervalRef.current) { clearInterval(vadIntervalRef.current); vadIntervalRef.current = null; }
-    vadContextRef.current?.close().catch(() => {});
-    vadContextRef.current = null;
-    vadStreamRef.current?.getTracks().forEach(t => t.stop());
-    vadStreamRef.current = null;
+    bargeinRef.current?.abort();
+    bargeinRef.current = null;
   }
 
-  function stopNativeAudio() {
-    nativeProcessorRef.current?.disconnect();
-    nativeProcessorRef.current = null;
-    nativeCtxRef.current?.close().catch(() => {});
-    nativeCtxRef.current = null;
-    nativeStreamRef.current?.getTracks().forEach(t => t.stop());
-    nativeStreamRef.current = null;
-  }
-
-  async function startNativeAudio() {
-    if (!micEnabledRef.current) return;
-    if (nativeStreamRef.current) return; // already running
-
-    // Barge-in: if Rumi is speaking, stop her first
-    if (speakingRef.current) {
-      stopAllAudio();
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
-      }
-      setSpeaking(false);
-      speakingRef.current = false;
-    }
-
-    stopBargeinListener();
+  function startBargeinListener() {
+    if (!micEnabledRef.current || bargeinRef.current) return;
+    // Chrome allows only one active SpeechRecognition per tab — kill wake word first
+    // or it will get aborted mid-capture when barge-in tries to start.
     stopWakeWordListener();
+    const SR =
+      (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition })
+        .SpeechRecognition ??
+      (window as unknown as { webkitSpeechRecognition?: typeof window.SpeechRecognition })
+        .webkitSpeechRecognition;
+    if (!SR) return;
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
-      });
-      nativeStreamRef.current = stream;
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    bargeinRef.current = rec;
 
-      const ctx = new AudioContext({ sampleRate: 16000 });
-      nativeCtxRef.current = ctx;
-      await ctx.resume(); // required — context starts suspended after async getUserMedia
-      const inputRate = ctx.sampleRate;
-
-      const source = ctx.createMediaStreamSource(stream);
-      // eslint-disable-next-line @typescript-eslint/no-deprecated
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
-      nativeProcessorRef.current = processor;
-
-      setTranscript("");
-      transcriptRef.current = "";
-
-      // Pre-warm Gemini connection (no ActivityStart — Gemini auto-VAD handles turns)
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "talk_start" }));
-      }
-
-      // Gate: don't send anything until voice is detected.
-      // Once speech starts, stream everything (including the following silence)
-      // so Gemini's auto-VAD can detect the end of turn and respond.
-      let sending = false;
-      let silenceAfterSpeech = 0;
-      const SPEECH_THRESHOLD = 20;
-
-      processor.onaudioprocess = (e: AudioProcessingEvent) => {
-        const float32 = e.inputBuffer.getChannelData(0);
-
-        // RMS
-        let sum = 0;
-        for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
-        const rms = Math.sqrt(sum / float32.length) * 100;
-
-        // Before speech detected — monitor but don't send
-        if (!sending) {
-          if (rms > SPEECH_THRESHOLD) {
-            sending = true;
-            setIsTalking(true);
-            isTalkingRef.current = true;
-            setRumiEmotion("thinking");
-          } else {
-            return; // silent — discard, don't send to Gemini
-          }
-        }
-
-        // After speech started — update UI on silence
-        if (rms <= SPEECH_THRESHOLD) {
-          silenceAfterSpeech++;
-          if (silenceAfterSpeech === 10) { // ~2.5s of silence → show "processing"
-            setIsTalking(false);
-            isTalkingRef.current = false;
-            setIsProcessing(true);
-          }
-        } else {
-          silenceAfterSpeech = 0;
-        }
-
-        // Resample if browser didn't honour 16kHz request
-        let samples = float32;
-        if (inputRate !== 16000) {
-          const ratio = inputRate / 16000;
-          const outLen = Math.floor(float32.length / ratio);
-          const resampled = new Float32Array(outLen);
-          for (let i = 0; i < outLen; i++) resampled[i] = float32[Math.floor(i * ratio)];
-          samples = resampled;
-        }
-
-        // Float32 → Int16 PCM
-        const int16 = new Int16Array(samples.length);
-        for (let i = 0; i < samples.length; i++) {
-          int16[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768));
-        }
-
-        // Base64 encode (chunked to avoid stack overflow on large buffers)
-        const bytes = new Uint8Array(int16.buffer);
-        let b64 = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) {
-          b64 += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        }
-        b64 = btoa(b64);
-
+    rec.onresult = (e: SpeechRecognitionEvent) => {
+      if (activeSourcesRef.current.length === 0) return; // no audio playing — echo of last word, ignore
+      const text = Array.from(e.results)
+        .map(r => r[0].transcript)
+        .join("")
+        .trim();
+      // Require 15+ chars — wind/fan produces short spurious transcripts.
+      // Real interruptions ("actually stop", "wait no", "hey rumi") are longer.
+      if (text.length >= 15) {
+        stopBargeinListener();
+        stopWakeWordListener(); // release mic fully before main listener grabs it
+        // Stop all audio immediately (synchronous) — no context close
+        stopAllAudio();
+        window.speechSynthesis.cancel();
+        // Notify backend to cancel its speak task
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: "audio", data: b64 }));
+          wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
         }
-      };
+        // 250ms lets browser fully release mic before main listener grabs it
+        setTimeout(() => startListeningWithRef(), 250);
+      }
+    };
 
-      source.connect(processor);
-      processor.connect(ctx.destination); // required to keep processor alive
-    } catch (err) {
-      console.error("startNativeAudio failed:", err);
-      setError("Microphone access denied — please allow mic access and reload.");
-      setIsTalking(false);
-      isTalkingRef.current = false;
-      stopNativeAudio();
-    }
+    rec.onend = () => {
+      if (bargeinRef.current === rec) bargeinRef.current = null;
+    };
+
+    rec.onerror = () => {
+      if (bargeinRef.current === rec) bargeinRef.current = null;
+    };
+
+    try { rec.start(); } catch { /* ignore race */ }
   }
 
-  // Barge-in disabled (legacy SpeechRecognition approach) — now handled natively
-  // by Gemini's server-side VAD. startNativeAudio() handles barge-in on mic press.
-  function startBargeinListener() { /* no-op — Gemini handles it server-side */ }
-
-  // Stop barge-in VAD is still used for cleanup
+  // Start/stop barge-in listener whenever Rumi's speaking state changes
+  // 2s delay before enabling barge-in — protects the opening of every response
+  // from being instantly cancelled by ambient noise or mic pickup of Rumi's voice.
   useEffect(() => {
+    // Barge-in disabled — mic picks up Rumi's own speaker output and self-interrupts.
+    // Standard voice demo flow: Rumi speaks fully, user waits, then responds.
     if (!speaking) stopBargeinListener();
     return () => stopBargeinListener();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -805,7 +707,6 @@ export default function DashboardPage() {
 
   function handleCancel() {
     stopAllAudio();
-    stopNativeAudio();
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
     }
@@ -820,22 +721,13 @@ export default function DashboardPage() {
   }
 
   function handleMicToggle() {
-    if (!micEnabled) return;
-    if (speaking) {
-      // Barge-in: user pressed mic while Rumi is speaking
-      startNativeAudio(); // startNativeAudio handles stopping audio first
-      return;
-    }
+    if (speaking || !micEnabled) return;
     if (isTalkingRef.current) {
-      stopNativeAudio();
-      setIsTalking(false);
-      isTalkingRef.current = false;
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "audio_end" }));
-      }
-      setIsProcessing(true);
+      stopListening();
     } else {
-      startNativeAudio();
+      // Stop wake word standby before starting main listener
+      stopWakeWordListener();
+      startListeningWithRef();
     }
   }
 
@@ -863,10 +755,9 @@ export default function DashboardPage() {
     if (!micEnabled) {
       setMicEnabled(true);
     } else {
-      // Kill all listeners immediately — don't wait for useEffect
+      // Kill both listeners immediately — don't wait for useEffect
       stopWakeWordListener();
       stopListening();
-      stopNativeAudio();
       setMicEnabled(false);
     }
   }
@@ -976,14 +867,10 @@ export default function DashboardPage() {
       // while new audio started on a fresh context → two voices simultaneously.
       stopAllAudio();
       window.speechSynthesis.cancel();
-    } else if (msg.type === "transcript") {
-      setTranscript((msg as { type: string; text: string }).text);
-      transcriptRef.current = (msg as { type: string; text: string }).text;
     } else if (msg.type === "audio_response") {
       // No frontend suppress window — the backend's inline _receive_loop check
       // already kills stale audio before it reaches us. A frontend window
       // (previously 500ms) was blocking the VALID new response from playing.
-      setIsProcessing(false);
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
       playAudio((msg as { type: string; data: string }).data);
     } else if (msg.type === "canvas_history") {
