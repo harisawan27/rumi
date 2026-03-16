@@ -585,6 +585,9 @@ export default function DashboardPage() {
       // Request 16kHz — Gemini Live requires PCM at 16000 Hz
       const ctx = new AudioContext({ sampleRate: 16000 });
       nativeCtxRef.current = ctx;
+      // resume() is required — AudioContext starts suspended after async getUserMedia
+      // breaks the user-gesture chain; ScriptProcessorNode won't fire otherwise.
+      await ctx.resume();
       const inputRate = ctx.sampleRate; // actual rate (browser may give 44100/48000)
 
       const source = ctx.createMediaStreamSource(stream);
