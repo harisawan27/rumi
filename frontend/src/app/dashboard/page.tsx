@@ -94,6 +94,9 @@ export default function DashboardPage() {
   const vadStreamRef = useRef<MediaStream | null>(null);         // getUserMedia stream for VAD barge-in
   const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null); // polling interval
   const vadContextRef = useRef<AudioContext | null>(null);       // AudioContext for AnalyserNode
+  const nativeCtxRef = useRef<AudioContext | null>(null);
+  const nativeStreamRef = useRef<MediaStream | null>(null);
+  const nativeProcessorRef = useRef<ScriptProcessorNode | null>(null);
 
   const [wakeListening, setWakeListening] = useState(false);
 
@@ -226,6 +229,12 @@ export default function DashboardPage() {
       vadContextRef.current = null;
       vadStreamRef.current?.getTracks().forEach(t => t.stop());
       vadStreamRef.current = null;
+      nativeProcessorRef.current?.disconnect();
+      nativeProcessorRef.current = null;
+      nativeCtxRef.current?.close().catch(() => {});
+      nativeCtxRef.current = null;
+      nativeStreamRef.current?.getTracks().forEach(t => t.stop());
+      nativeStreamRef.current = null;
       if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
     };
   }, [router]);
@@ -263,7 +272,7 @@ export default function DashboardPage() {
       if (micEnabledRef.current && !isTalkingRef.current) {
         stopWakeWordListener();
         setTimeout(() => {
-          if (micEnabledRef.current && !isTalkingRef.current) startListeningWithRef();
+          if (micEnabledRef.current && !isTalkingRef.current) startNativeAudio();
         }, 300);
       }
     }
@@ -403,7 +412,7 @@ export default function DashboardPage() {
         preListenerRef.current = null;
         setWakeListening(false);
         // Brief pause lets mic hardware fully release before main listener grabs it
-        setTimeout(() => startListeningWithRef(), 180);
+        setTimeout(() => startNativeAudio(), 180);
       }
     };
 
@@ -541,61 +550,138 @@ export default function DashboardPage() {
     vadStreamRef.current = null;
   }
 
-  async function startBargeinListener() {
-    if (!micEnabledRef.current || vadStreamRef.current) return;
+  function stopNativeAudio() {
+    nativeProcessorRef.current?.disconnect();
+    nativeProcessorRef.current = null;
+    nativeCtxRef.current?.close().catch(() => {});
+    nativeCtxRef.current = null;
+    nativeStreamRef.current?.getTracks().forEach(t => t.stop());
+    nativeStreamRef.current = null;
+  }
+
+  async function startNativeAudio() {
+    if (!micEnabledRef.current) return;
+    if (nativeStreamRef.current) return; // already running
+
+    // Barge-in: if Rumi is speaking, stop her first
+    if (speakingRef.current) {
+      stopAllAudio();
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
+      }
+      setSpeaking(false);
+      speakingRef.current = false;
+    }
+
+    stopBargeinListener();
+    stopWakeWordListener();
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
       });
-      if (!speakingRef.current) { stream.getTracks().forEach(t => t.stop()); return; } // speaking ended while awaiting
-      vadStreamRef.current = stream;
-      const ctx = new AudioContext();
-      vadContextRef.current = ctx;
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
-      source.connect(analyser);
-      const buf = new Uint8Array(analyser.fftSize);
-      let speechFrames = 0;
-      const THRESHOLD = 22;   // RMS 0-100; speech ≈ 30-60, echo-cancelled speaker ≈ 0-10
-      const FRAMES_TO_FIRE = 4; // 4 × 100ms = 400ms sustained → interrupt
+      nativeStreamRef.current = stream;
 
-      vadIntervalRef.current = setInterval(() => {
-        if (!speakingRef.current) { stopBargeinListener(); return; }
-        analyser.getByteTimeDomainData(buf);
+      // Request 16kHz — Gemini Live requires PCM at 16000 Hz
+      const ctx = new AudioContext({ sampleRate: 16000 });
+      nativeCtxRef.current = ctx;
+      const inputRate = ctx.sampleRate; // actual rate (browser may give 44100/48000)
+
+      const source = ctx.createMediaStreamSource(stream);
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      nativeProcessorRef.current = processor;
+
+      setIsTalking(true);
+      isTalkingRef.current = true;
+      setTranscript("");
+      transcriptRef.current = "";
+      setRumiEmotion("thinking");
+
+      // Signal backend: user started speaking
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "talk_start" }));
+      }
+
+      let silenceFrames = 0;
+      const SILENCE_THRESHOLD = 6; // RMS 0-100 below this = silence
+      const SILENCE_FRAMES_TARGET = Math.ceil((1800 / 1000) / (4096 / inputRate)); // ~1.8s
+
+      processor.onaudioprocess = (e: AudioProcessingEvent) => {
+        const float32 = e.inputBuffer.getChannelData(0);
+
+        // RMS for silence detection
         let sum = 0;
-        for (let i = 0; i < buf.length; i++) { const s = (buf[i] - 128) / 128; sum += s * s; }
-        const rms = Math.sqrt(sum / buf.length) * 100;
-        if (rms > THRESHOLD) {
-          speechFrames++;
-          if (speechFrames >= FRAMES_TO_FIRE) {
-            speechFrames = 0;
-            stopBargeinListener();
-            stopAllAudio();
+        for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
+        const rms = Math.sqrt(sum / float32.length) * 100;
+
+        if (rms < SILENCE_THRESHOLD) {
+          silenceFrames++;
+          if (silenceFrames >= SILENCE_FRAMES_TARGET) {
+            // Silence: stop recording, signal end of speech
+            stopNativeAudio();
+            setIsTalking(false);
+            isTalkingRef.current = false;
             if (wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
+              wsRef.current.send(JSON.stringify({ type: "audio_end" }));
             }
-            setTimeout(() => startListeningWithRef(), 250);
+            setIsProcessing(true);
+            setRumiEmotion("thinking");
+            return;
           }
         } else {
-          speechFrames = 0;
+          silenceFrames = 0;
         }
-      }, 100);
-    } catch (e) {
-      console.warn("VAD barge-in unavailable:", e);
+
+        // Resample if browser didn't honor 16kHz request
+        let samples = float32;
+        if (inputRate !== 16000) {
+          const ratio = inputRate / 16000;
+          const outLen = Math.floor(float32.length / ratio);
+          const resampled = new Float32Array(outLen);
+          for (let i = 0; i < outLen; i++) resampled[i] = float32[Math.floor(i * ratio)];
+          samples = resampled;
+        }
+
+        // Float32 → Int16 PCM
+        const int16 = new Int16Array(samples.length);
+        for (let i = 0; i < samples.length; i++) {
+          int16[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768));
+        }
+
+        // Base64 encode (chunked to avoid stack overflow)
+        const bytes = new Uint8Array(int16.buffer);
+        let b64 = "";
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          b64 += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        b64 = btoa(b64);
+
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "audio", data: b64 }));
+        }
+      };
+
+      source.connect(processor);
+      processor.connect(ctx.destination); // required to keep processor alive
+    } catch (err) {
+      console.error("startNativeAudio failed:", err);
+      setError("Microphone access denied — please allow mic access and reload.");
+      setIsTalking(false);
+      isTalkingRef.current = false;
+      stopNativeAudio();
     }
   }
 
-  // Arm VAD 1.5s after Rumi starts speaking — protects response opening from
-  // instant cancellation; stop it as soon as Rumi finishes.
+  // Barge-in disabled (legacy SpeechRecognition approach) — now handled natively
+  // by Gemini's server-side VAD. startNativeAudio() handles barge-in on mic press.
+  function startBargeinListener() { /* no-op — Gemini handles it server-side */ }
+
+  // Stop barge-in VAD is still used for cleanup
   useEffect(() => {
-    if (speaking) {
-      const t = setTimeout(() => startBargeinListener(), 1500);
-      return () => { clearTimeout(t); stopBargeinListener(); };
-    } else {
-      stopBargeinListener();
-      return () => {};
-    }
+    if (!speaking) stopBargeinListener();
+    return () => stopBargeinListener();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speaking]);
 
@@ -714,6 +800,7 @@ export default function DashboardPage() {
 
   function handleCancel() {
     stopAllAudio();
+    stopNativeAudio();
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
     }
@@ -728,13 +815,22 @@ export default function DashboardPage() {
   }
 
   function handleMicToggle() {
-    if (speaking || !micEnabled) return;
+    if (!micEnabled) return;
+    if (speaking) {
+      // Barge-in: user pressed mic while Rumi is speaking
+      startNativeAudio(); // startNativeAudio handles stopping audio first
+      return;
+    }
     if (isTalkingRef.current) {
-      stopListening();
+      stopNativeAudio();
+      setIsTalking(false);
+      isTalkingRef.current = false;
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "audio_end" }));
+      }
+      setIsProcessing(true);
     } else {
-      // Stop wake word standby before starting main listener
-      stopWakeWordListener();
-      startListeningWithRef();
+      startNativeAudio();
     }
   }
 
@@ -762,9 +858,10 @@ export default function DashboardPage() {
     if (!micEnabled) {
       setMicEnabled(true);
     } else {
-      // Kill both listeners immediately — don't wait for useEffect
+      // Kill all listeners immediately — don't wait for useEffect
       stopWakeWordListener();
       stopListening();
+      stopNativeAudio();
       setMicEnabled(false);
     }
   }
@@ -874,10 +971,14 @@ export default function DashboardPage() {
       // while new audio started on a fresh context → two voices simultaneously.
       stopAllAudio();
       window.speechSynthesis.cancel();
+    } else if (msg.type === "transcript") {
+      setTranscript((msg as { type: string; text: string }).text);
+      transcriptRef.current = (msg as { type: string; text: string }).text;
     } else if (msg.type === "audio_response") {
       // No frontend suppress window — the backend's inline _receive_loop check
       // already kills stale audio before it reaches us. A frontend window
       // (previously 500ms) was blocking the VALID new response from playing.
+      setIsProcessing(false);
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
       playAudio((msg as { type: string; data: string }).data);
     } else if (msg.type === "canvas_history") {

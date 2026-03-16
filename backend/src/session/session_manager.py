@@ -140,6 +140,7 @@ class SessionManager:
             # Inline suppress check — evaluated at the moment each audio chunk
             # arrives in _receive_loop, preventing stale audio task creation.
             self._gemini.set_suppress_check(lambda: self._suppress_audio)
+            self._gemini.set_interrupted_callback(self._handle_gemini_interrupted)
             await self._gemini.connect(self._system_prompt)
             logger.info("SessionManager: Gemini Live session opened (on-demand)")
         finally:
@@ -216,6 +217,21 @@ class SessionManager:
             self._reset_gemini_idle_timer()  # keep alive while response is streaming
         except Exception as exc:
             logger.warning("SessionManager: audio forward failed: %s", exc)
+
+    async def _handle_gemini_interrupted(self) -> None:
+        """Called when Gemini's server-side VAD detects user barge-in during response."""
+        import json
+        self._suppress_audio = True
+        self._is_responding = False
+        self._voice_gen += 1
+        if self._speak_task and not self._speak_task.done():
+            self._speak_task.cancel()
+        if self._websocket:
+            try:
+                await self._websocket.send_text(json.dumps({"type": "audio_interrupt"}))
+            except Exception:
+                pass
+        logger.info("SessionManager: Gemini interrupted signal — barge-in handled")
 
     async def pause_session(self) -> None:
         self._status = "paused"

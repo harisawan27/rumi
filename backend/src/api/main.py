@@ -989,6 +989,27 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 await mgr.ensure_gemini_connected()
                 if mgr.gemini and mgr.gemini.is_connected:
                     await mgr.gemini.activity_start()
+                    # Wire input transcript callback — captures websocket in closure.
+                    # Set every connect so it survives reconnects.
+                    async def _on_user_transcript(text: str, _ws=websocket) -> None:
+                        try:
+                            await _ws.send_text(json.dumps({"type": "transcript", "text": text}))
+                        except Exception:
+                            pass
+                        t_lower = text.lower()
+                        _CANVAS_TRIGGER_KEYWORDS_LOCAL = [
+                            "write code", "code for", "show me code", "write a function",
+                            "write a script", "step by step", "steps to",
+                            "explain with code", "essay", "article", "blog post",
+                            "write about", "write me a", "write an", "write a report",
+                            "write a letter", "write a summary", "summarize", "summarise",
+                            "research on", "report on", "explain in detail",
+                            "detailed explanation", "show on canvas", "write it down",
+                            "write this down", "put it on canvas", "show me in writing",
+                        ]
+                        if any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS_LOCAL):
+                            asyncio.create_task(_flash_canvas_task(text, None, _ws))
+                    mgr.gemini.set_input_transcript_callback(_on_user_transcript)
             elif msg.get("type") == "audio":
                 import base64
                 pcm_bytes = base64.b64decode(msg["data"])
