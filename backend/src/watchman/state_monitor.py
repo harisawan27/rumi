@@ -308,7 +308,14 @@ class StateMonitor:
                 self._last_face_label = "owner"
                 return
 
-            # ── Step 2: not owner — check known people ───────────────────────
+            # ── Step 2: not owner — if no face visible, reset streak and mark nobody
+            if not result.face_detected:
+                self._non_owner_streak = 0
+                self._last_face_label = "nobody"
+                logger.debug("StateMonitor: no face in frame — streak reset, not triggering guest")
+                return
+
+            # Face is present but not owner — check known people
             self._non_owner_streak += 1
             if self._uid:
                 try:

@@ -25,6 +25,7 @@ class FaceMatchResult:
     is_owner: bool
     confidence: float   # 0.0 – 1.0
     reason: str
+    face_detected: bool = True  # False when no face visible in the live frame
 
 
 _OWNER_THRESHOLD = 0.65   # below this → treat as guest
@@ -56,10 +57,12 @@ async def compare_faces(
         prompt = (
             "You are a face verification system. "
             "Image 1 is the owner's reference photo. Image 2 is a live camera frame.\n"
-            "Task: Determine if the person in Image 2 is the same individual as in Image 1.\n"
+            "Task: First check if any face is visible in Image 2. "
+            "If no face is visible, set face_detected to false and is_same_person to false.\n"
+            "If a face is visible, determine if it is the same individual as in Image 1.\n"
             "Consider: lighting differences, angles, and natural variation are acceptable.\n"
             "Reply ONLY with valid JSON, no markdown:\n"
-            '{"is_same_person": true_or_false, "confidence": 0.0_to_1.0, "reason": "brief"}'
+            '{"face_detected": true_or_false, "is_same_person": true_or_false, "confidence": 0.0_to_1.0, "reason": "brief"}'
         )
 
         from google import genai as _genai
@@ -89,15 +92,17 @@ async def compare_faces(
             raw = raw.strip()
 
         parsed = json.loads(raw)
-        confidence = float(parsed.get("confidence", 0.5))
-        is_owner   = parsed.get("is_same_person", True) and confidence >= _OWNER_THRESHOLD
+        face_detected = bool(parsed.get("face_detected", True))
+        confidence    = float(parsed.get("confidence", 0.5))
+        is_owner      = face_detected and parsed.get("is_same_person", True) and confidence >= _OWNER_THRESHOLD
 
-        logger.debug("face_matcher: confidence=%.2f is_owner=%s reason=%s",
-                     confidence, is_owner, parsed.get("reason", ""))
+        logger.debug("face_matcher: face_detected=%s confidence=%.2f is_owner=%s reason=%s",
+                     face_detected, confidence, is_owner, parsed.get("reason", ""))
         return FaceMatchResult(
             is_owner=is_owner,
             confidence=confidence,
             reason=parsed.get("reason", ""),
+            face_detected=face_detected,
         )
 
     except Exception as exc:
