@@ -585,16 +585,10 @@ export default function DashboardPage() {
   // 2s delay before enabling barge-in — protects the opening of every response
   // from being instantly cancelled by ambient noise or mic pickup of Rumi's voice.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    if (speaking && micEnabledRef.current) {
-      timer = setTimeout(() => startBargeinListener(), 2000);
-    } else {
-      stopBargeinListener();
-    }
-    return () => {
-      if (timer) clearTimeout(timer);
-      stopBargeinListener();
-    };
+    // Barge-in disabled — mic picks up Rumi's own speaker output and self-interrupts.
+    // Standard voice demo flow: Rumi speaks fully, user waits, then responds.
+    if (!speaking) stopBargeinListener();
+    return () => stopBargeinListener();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speaking]);
 
