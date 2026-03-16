@@ -985,10 +985,10 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                         interaction_id
                     ).update({"user_response": response, "response_at": datetime.now(timezone.utc)})
             elif msg.get("type") == "talk_start":
-                # Pre-connect Gemini then signal speech start
+                # Pre-warm Gemini connection. No ActivityStart — Gemini auto-VAD
+                # detects speech/silence from the continuous audio stream itself.
                 await mgr.ensure_gemini_connected()
                 if mgr.gemini and mgr.gemini.is_connected:
-                    await mgr.gemini.activity_start()
                     # Wire input transcript callback — captures websocket in closure.
                     # Set every connect so it survives reconnects.
                     async def _on_user_transcript(text: str, _ws=websocket) -> None:
@@ -1017,11 +1017,9 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     await mgr.gemini.send_audio(pcm_bytes)
                     mgr._reset_gemini_idle_timer()
             elif msg.get("type") == "audio_end":
-                # User released mic — signal speech end, Gemini generates reply
-                if mgr.gemini and mgr.gemini.is_connected:
-                    await mgr.gemini.activity_end()
-                else:
-                    logger.warning("audio_end received but Gemini not connected — reply lost")
+                # Mic stopped — Gemini auto-VAD detects the silence in the stream
+                # and generates a reply automatically. No explicit signal needed.
+                pass
             elif msg.get("type") == "demo_trigger":
                 # Manual demo trigger — bypasses all thresholds and cooldowns.
                 # Fired from the frontend via the \ key shortcut during live demos.

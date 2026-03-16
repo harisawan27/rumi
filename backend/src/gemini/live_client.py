@@ -56,19 +56,10 @@ class GeminiLiveClient:
 
     async def connect(self, system_prompt: str) -> None:
         self._system_prompt = system_prompt
-        # Disable automatic VAD so ActivityEnd is the authoritative turn signal.
-        # With auto-VAD enabled (default), Gemini ignores ActivityEnd and waits for
-        # its own silence detection — but we stop streaming on silence, so Gemini
-        # never hears the silence and never responds.
-        try:
-            realtime_cfg = types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
-            )
-        except Exception:
-            realtime_cfg = None
-            logger.warning("GeminiLiveClient: RealtimeInputConfig not supported in this SDK version")
-
-        config_kwargs: dict = dict(
+        # Auto-VAD enabled (Gemini default) — Gemini detects speech/silence from
+        # the continuous PCM stream and generates responses automatically.
+        # No ActivityStart/ActivityEnd needed.
+        config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             system_instruction=system_prompt,
             speech_config=types.SpeechConfig(
@@ -78,10 +69,6 @@ class GeminiLiveClient:
             ),
             input_audio_transcription=types.AudioTranscriptionConfig(),
         )
-        if realtime_cfg is not None:
-            config_kwargs["realtime_input_config"] = realtime_cfg
-
-        config = types.LiveConnectConfig(**config_kwargs)
         self._session_ctx = self._client.aio.live.connect(
             model=LIVE_MODEL, config=config
         )

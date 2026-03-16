@@ -582,71 +582,59 @@ export default function DashboardPage() {
       });
       nativeStreamRef.current = stream;
 
-      // Request 16kHz — Gemini Live requires PCM at 16000 Hz
       const ctx = new AudioContext({ sampleRate: 16000 });
       nativeCtxRef.current = ctx;
-      // resume() is required — AudioContext starts suspended after async getUserMedia
-      // breaks the user-gesture chain; ScriptProcessorNode won't fire otherwise.
-      await ctx.resume();
-      const inputRate = ctx.sampleRate; // actual rate (browser may give 44100/48000)
+      await ctx.resume(); // required — context starts suspended after async getUserMedia
+      const inputRate = ctx.sampleRate;
 
       const source = ctx.createMediaStreamSource(stream);
       // eslint-disable-next-line @typescript-eslint/no-deprecated
       const processor = ctx.createScriptProcessor(4096, 1, 1);
       nativeProcessorRef.current = processor;
 
-      setIsTalking(true);
-      isTalkingRef.current = true;
       setTranscript("");
       transcriptRef.current = "";
-      setRumiEmotion("thinking");
 
-      // Signal backend: user started speaking
+      // Pre-warm Gemini connection (no ActivityStart — Gemini auto-VAD handles turns)
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "talk_start" }));
       }
 
-      let silenceFrames = 0;
-      let totalFrames = 0;
-      const frameMs = (4096 / inputRate) * 1000;
-      const SILENCE_THRESHOLD = 18;  // RMS 0-100; ambient/breathing ≈ 5-15, speech ≈ 30-80
-      const SILENCE_FRAMES_TARGET = Math.ceil(1800 / frameMs);  // 1.8s silence → send
-      const MAX_FRAMES = Math.ceil(30000 / frameMs);            // 30s hard cutoff
-
-      function _finishRecording() {
-        stopNativeAudio();
-        setIsTalking(false);
-        isTalkingRef.current = false;
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: "audio_end" }));
-        }
-        setIsProcessing(true);
-        setRumiEmotion("thinking");
-      }
+      // Local RMS is ONLY for UI state (isTalking indicator).
+      // Gemini's server-side VAD decides when the user is done and generates a response.
+      // We stream continuously — no silence detection, no stopping, no ActivityEnd.
+      let speechFrames = 0;
+      let silenceAfterSpeech = 0;
+      const SPEECH_THRESHOLD = 18;
 
       processor.onaudioprocess = (e: AudioProcessingEvent) => {
         const float32 = e.inputBuffer.getChannelData(0);
-        totalFrames++;
 
-        // 30s hard cutoff — prevents forever-streaming on bad silence detection
-        if (totalFrames >= MAX_FRAMES) { _finishRecording(); return; }
-
-        // RMS for silence detection
+        // RMS for UI only
         let sum = 0;
         for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
         const rms = Math.sqrt(sum / float32.length) * 100;
 
-        if (rms < SILENCE_THRESHOLD) {
-          silenceFrames++;
-          if (silenceFrames >= SILENCE_FRAMES_TARGET) {
-            _finishRecording();
-            return;
+        if (rms > SPEECH_THRESHOLD) {
+          speechFrames++;
+          silenceAfterSpeech = 0;
+          if (speechFrames === 3) {
+            setIsTalking(true);
+            isTalkingRef.current = true;
+            setIsProcessing(false);
+            setRumiEmotion("thinking");
           }
-        } else {
-          silenceFrames = 0;
+        } else if (isTalkingRef.current) {
+          silenceAfterSpeech++;
+          if (silenceAfterSpeech === 10) { // ~2.5s silence after speech → show processing
+            setIsTalking(false);
+            isTalkingRef.current = false;
+            setIsProcessing(true);
+            speechFrames = 0;
+          }
         }
 
-        // Resample if browser didn't honor 16kHz request
+        // Resample if browser didn't honour 16kHz request
         let samples = float32;
         if (inputRate !== 16000) {
           const ratio = inputRate / 16000;
@@ -662,12 +650,11 @@ export default function DashboardPage() {
           int16[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768));
         }
 
-        // Base64 encode (chunked to avoid stack overflow)
+        // Base64 encode (chunked to avoid stack overflow on large buffers)
         const bytes = new Uint8Array(int16.buffer);
         let b64 = "";
-        const chunk = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          b64 += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          b64 += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
         }
         b64 = btoa(b64);
 
