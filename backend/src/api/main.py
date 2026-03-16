@@ -1084,7 +1084,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                             try:
                                 fc = await _identify_face(t, img, sp)
                                 if fc:
-                                    await mgr._speak_verbatim(fc, canvas=False)
+                                    await mgr.voice_query(fc)
                                 else:
                                     await mgr.voice_query(t)
                             except asyncio.CancelledError:
@@ -1166,10 +1166,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                             except Exception as exc:
                                                 logger.warning("tool:add_known_person failed: %s", exc)
                                                 confirmation = "I couldn't save that person — make sure I can see their face."
-                                    if confirmation:
-                                        await mgr._speak_verbatim(confirmation, canvas=False)
-                                    else:
-                                        await mgr.voice_query(t)
+                                    await mgr.voice_query(confirmation or t)
                                 except asyncio.CancelledError:
                                     pass
                                 except Exception as exc:
@@ -1196,7 +1193,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                         }))
                                         if not _fu:
                                             asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
-                                        await mgr._speak_verbatim(content, canvas=True)
+                                        await mgr.voice_query("I've put that on your canvas — take a look.")
                                     else:
                                         await mgr.voice_query(t)
                                 except asyncio.CancelledError:

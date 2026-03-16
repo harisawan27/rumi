@@ -429,7 +429,7 @@ class SessionManager:
         await self.dispatch_intervention("A", interaction_id, intervention_text)
         # Speak intervention aloud — only if no voice query is currently active
         if not self._is_responding:
-            self._speak_task = asyncio.create_task(self._speak_verbatim(intervention_text, canvas=False))
+            self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
         logger.info("SessionManager: Trigger A fired — interaction %s", interaction_id)
 
     async def _fire_trigger_b(self) -> None:
@@ -447,7 +447,7 @@ class SessionManager:
         )
         await self.dispatch_intervention("B", interaction_id, intervention_text)
         if not self._is_responding:
-            self._speak_task = asyncio.create_task(self._speak_verbatim(intervention_text, canvas=False))
+            self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
         logger.info("SessionManager: Trigger B fired — interaction %s", interaction_id)
 
     async def _fire_trigger_c(self) -> None:
@@ -465,7 +465,7 @@ class SessionManager:
         )
         await self.dispatch_intervention("C", interaction_id, intervention_text)
         if not self._is_responding:
-            self._speak_task = asyncio.create_task(self._speak_verbatim(intervention_text, canvas=False))
+            self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
         logger.info("SessionManager: Trigger C fired — interaction %s", interaction_id)
 
     async def _fire_trigger_e(self) -> None:
@@ -483,7 +483,7 @@ class SessionManager:
         )
         await self.dispatch_intervention("E", interaction_id, intervention_text)
         if not self._is_responding:
-            self._speak_task = asyncio.create_task(self._speak_verbatim(intervention_text, canvas=False))
+            self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
         logger.info("SessionManager: Trigger E fired — interaction %s", interaction_id)
 
     async def _soft_frustration_checkin(self) -> None:
