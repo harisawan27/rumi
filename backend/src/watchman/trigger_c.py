@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -7,8 +8,9 @@ from src.watchman.state_monitor import StateResult
 
 logger = logging.getLogger(__name__)
 
-SESSION_BREAK_THRESHOLD_SECONDS = 90 * 60   # 90 minutes of continuous work
-COOLDOWN_SECONDS = 60 * 60                  # remind again after 1 more hour
+_DEMO = os.getenv("DEMO_MODE", "").lower() in ("1", "true", "yes")
+SESSION_BREAK_THRESHOLD_SECONDS = 60 if _DEMO else 90 * 60
+COOLDOWN_SECONDS                = 60 if _DEMO else 60 * 60
 
 
 class LongSessionTracker:

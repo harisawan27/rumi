@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -7,8 +8,9 @@ from src.watchman.state_monitor import StateResult, CYCLE_INTERVAL_SECONDS
 
 logger = logging.getLogger(__name__)
 
-CODING_BLOCK_THRESHOLD_SECONDS = 600  # 10 minutes
-COOLDOWN_MINUTES = 30
+_DEMO = os.getenv("DEMO_MODE", "").lower() in ("1", "true", "yes")
+CODING_BLOCK_THRESHOLD_SECONDS = 20 if _DEMO else 600
+COOLDOWN_MINUTES               = 1  if _DEMO else 30
 
 
 class CodingBlockTracker:

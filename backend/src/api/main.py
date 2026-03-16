@@ -948,6 +948,12 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     await mgr.gemini.activity_end()
                 else:
                     logger.warning("audio_end received but Gemini not connected — reply lost")
+            elif msg.get("type") == "demo_trigger":
+                # Manual demo trigger — bypasses all thresholds and cooldowns.
+                # Fired from the frontend via the \ key shortcut during live demos.
+                logger.info("ws_observe: demo_trigger received — firing intervention A")
+                asyncio.create_task(mgr._fire_trigger_a())
+
             elif msg.get("type") == "audio_interrupt":
                 # Frontend-initiated barge-in. All three are SYNCHRONOUS.
                 # Critically: _voice_gen += 1 here prevents the cancelled voice_query's

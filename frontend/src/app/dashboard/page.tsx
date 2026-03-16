@@ -282,9 +282,16 @@ export default function DashboardPage() {
   // Space bar shortcut for mic
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || e.repeat || e.target !== document.body) return;
-      e.preventDefault();
-      handleMicToggle();
+      if (e.repeat || e.target !== document.body) return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        handleMicToggle();
+      } else if (e.code === "Backslash") {
+        // Secret demo trigger — fires an intervention card instantly (\ key)
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "demo_trigger" }));
+        }
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

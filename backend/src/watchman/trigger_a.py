@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -6,9 +7,10 @@ from src.watchman.state_monitor import StateResult
 
 logger = logging.getLogger(__name__)
 
-FRUSTRATION_THRESHOLD_SECONDS = 30
-SOFT_CHECK_SECONDS = 10       # gentle voice check-in before full intervention
-COOLDOWN_MINUTES = 30
+_DEMO = os.getenv("DEMO_MODE", "").lower() in ("1", "true", "yes")
+FRUSTRATION_THRESHOLD_SECONDS = 8 if _DEMO else 30
+SOFT_CHECK_SECONDS            = 4 if _DEMO else 10
+COOLDOWN_MINUTES              = 1 if _DEMO else 30
 
 
 class FrustrationTracker:

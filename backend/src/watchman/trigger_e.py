@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -6,8 +7,9 @@ from src.watchman.state_monitor import StateResult, CYCLE_INTERVAL_SECONDS
 
 logger = logging.getLogger(__name__)
 
-DEEP_FOCUS_THRESHOLD_SECONDS = 30 * 60     # 30 minutes of calm, active work
-COOLDOWN_SECONDS = 2 * 60 * 60             # celebrate at most once every 2 hours
+_DEMO = os.getenv("DEMO_MODE", "").lower() in ("1", "true", "yes")
+DEEP_FOCUS_THRESHOLD_SECONDS = 30          if _DEMO else 30 * 60
+COOLDOWN_SECONDS             = 60          if _DEMO else 2 * 60 * 60
 
 
 class DeepFocusTracker:
