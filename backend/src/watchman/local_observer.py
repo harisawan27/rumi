@@ -68,6 +68,24 @@ class LocalObserver:
                 "LocalObserver: fer unavailable (%s) — emotion detection disabled", exc
             )
 
+    def has_face(self, frame_bytes: bytes) -> bool:
+        """Return True if at least one face is detected in the frame.
+
+        Used as a free, local pre-check before calling the Gemini face-matcher
+        API. If FER is not yet loaded, returns True (fail-safe: let Gemini decide).
+        """
+        if not self._fer_loaded or self._fer is None:
+            return True  # fail-safe — don't block the API check during startup
+        try:
+            nparr = np.frombuffer(frame_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is None:
+                return False
+            results = self._fer.detect_emotions(frame)
+            return len(results) > 0
+        except Exception:
+            return True  # fail-safe on error
+
     def observe(self, frame_bytes: bytes) -> LocalObservation:
         """Analyse a JPEG frame locally. No API call ever."""
         nparr = np.frombuffer(frame_bytes, np.uint8)
