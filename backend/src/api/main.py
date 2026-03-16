@@ -447,6 +447,50 @@ def _sanitize_voice(content: str) -> str:
     return content.strip()
 
 
+async def _flash_detect_tool(text: str) -> dict | None:
+    """Lightweight tool-intent detector — returns tool_call dict or None.
+
+    Separate from _flash_smart so canvas content generation is NOT mixed with
+    tool detection. Short JSON-only prompt → reliable parse, no essay in JSON.
+    Returns e.g. {"name": "update_profile", "field": "name", "value": "Haris",
+                  "confirmation": "Done — I've updated your name to Haris."}
+    or None if no tool intent detected.
+    """
+    from google import genai as _genai
+    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+    prompt = f"""The user said: "{text}"
+
+Detect if they want to perform one of these two actions. Reply with ONLY valid JSON, no markdown fences.
+
+ACTION 1 — update a profile field:
+Triggers: "update my name to X", "change my bio to X", "set my language to X",
+"my name is X now", "call me X", "update my timezone", "change my coding style",
+"update my stack to X", "my preferred language is X"
+Reply: {{"tool": "update_profile", "field": "<field>", "value": "<value>", "confirmation": "one warm sentence confirming the update"}}
+field must be one of: name, bio, preferred_language, timezone, coding_style, tech_stack, preferred_tone, goals, personal_context, learning_focus, mood_preference
+
+ACTION 2 — remember a person from camera:
+Triggers: "remember this person as X", "save this person", "this is my friend X",
+"add X as my colleague", "this is X they're my Y", "remember him/her as X"
+Reply: {{"tool": "add_known_person", "person_name": "<name>", "relationship": "<rel>", "confirmation": "one warm sentence confirming"}}
+
+If NEITHER action matches, reply exactly: {{"tool": null}}"""
+
+    for model in ("gemini-2.0-flash", "gemini-2.5-flash"):
+        try:
+            response = await client.aio.models.generate_content(model=model, contents=prompt)
+            raw = (response.text or "").strip()
+            data = _extract_smart_json(raw)
+            if data and data.get("tool"):
+                return data
+            if data and "tool" in data and data["tool"] is None:
+                return None
+        except Exception as exc:
+            logger.debug("_flash_detect_tool: %s failed: %s", model, exc)
+    return None
+
+
 async def _flash_smart(
     text: str,
     image_b64: str | None,
@@ -457,6 +501,7 @@ async def _flash_smart(
     """Route query to canvas or voice, then generate content.
 
     Returns {"canvas_needed": bool, "title": str, "content": str}.
+    Tool detection is handled by _flash_detect_tool before this is called.
     Poetry/face queries are handled by dedicated callers before this is reached.
     force_canvas=True when an explicit file/image attachment is present.
     """
@@ -480,34 +525,12 @@ async def _flash_smart(
     routing_instruction = f"""{force_note}
 You must respond with ONLY valid JSON — no text before or after, no markdown fences:
 {{
-  "tool_call": null,
   "canvas_needed": false,
   "title": "",
   "content": "your full response here"
 }}
 
-═══ TOOL CALLS ═══
-Check for these intents FIRST. If matched, set tool_call and leave content as spoken confirmation.
-
-tool_call = {{"name": "update_profile", "field": "<field>", "value": "<value>"}}
-  • User says: "update my name to X", "change my bio to X", "set my language to X",
-    "update my timezone", "change my coding style", "update my stack to X",
-    "my name is X now", "call me X from now on"
-  • field must be one of: name, bio, preferred_language, timezone, coding_style,
-    tech_stack, preferred_tone, goals, personal_context, learning_focus, mood_preference
-  • content = warm one-sentence spoken confirmation, e.g. "Done — I've updated your name to X."
-
-tool_call = {{"name": "add_known_person", "person_name": "<name>", "relationship": "<relationship>"}}
-  • User says: "remember this person as X", "save this person", "this is my friend X",
-    "add X as my colleague", "this is X, they're my Y", "remember him/her as X"
-  • person_name = extracted name, relationship = extracted relationship (friend/family/colleague/etc.)
-  • content = warm one-sentence spoken confirmation, e.g. "Got it — I'll remember X as your friend."
-  • NOTE: A camera frame MUST be present in the current message for this tool to capture the face.
-
-If neither tool matches, set tool_call = null and proceed with normal routing below.
-
-═══ CANVAS ROUTING ═══
-DECISION RULES for canvas_needed (only when tool_call is null):
+DECISION RULES for canvas_needed:
 TRUE — response must be read, not just heard:
   • Code, technical solutions, debugging steps
   • Step-by-step instructions (3+ steps)
@@ -521,14 +544,12 @@ FALSE — experienced by listening. This includes:
   • Greetings, encouragement, check-ins
   • Simple facts (sports results, time, weather, quick questions)
   • Anything the user asks to "tell", "say", "read", or "recite"
-  • Real-time questions you can't answer (live scores, today's news) — just say
-    you don't have live data verbally. Never route uncertainty to canvas.
+  • Real-time questions you can't answer (live scores, today's news) — say so verbally.
 
 When canvas_needed=false:
   - title = empty string
   - content = your full spoken response, plain text, NO markdown
   - NO length limit. Speak as long as the topic deserves naturally.
-  - If you don't know something, say so out loud simply — do NOT mention canvas.
   - NEVER say "I'll write it", "check the canvas", "I've displayed", or similar.
   - The user ONLY hears your voice. Everything must be delivered verbally.
 
@@ -563,14 +584,11 @@ When canvas_needed=true:
             raw = (response.text or "").strip()
             data = _extract_smart_json(raw)
             if data and "content" in data:
-                tool_call = data.get("tool_call") or None
                 canvas = bool(data.get("canvas_needed", False))
-                if force_canvas and not tool_call:
+                if force_canvas:
                     canvas = True
-                logger.info("_flash_smart: tool=%s canvas=%s model=%s chars=%d",
-                            tool_call["name"] if tool_call else None, canvas, model, len(data["content"]))
+                logger.info("_flash_smart: canvas=%s model=%s chars=%d", canvas, model, len(data["content"]))
                 return {
-                    "tool_call": tool_call,
                     "canvas_needed": canvas,
                     "title": data.get("title", "") or (_make_title(text) if canvas else ""),
                     "content": data["content"],
@@ -1100,17 +1118,16 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                                      _ws=websocket, _fu=is_followup,
                                                      _fc=force_canvas) -> None:
                                 try:
-                                    result = await _flash_smart(t, img, sp, force_canvas=_fc)
-                                    tool_call = result.get("tool_call")
-                                    content   = result.get("content", "")
+                                    # ── Step 1: tool intent detection (fast, short JSON) ──
+                                    tool_data = await _flash_detect_tool(t)
 
-                                    # ── Tool calls ──────────────────────────────────
-                                    if tool_call and isinstance(tool_call, dict):
-                                        tool_name = tool_call.get("name", "")
+                                    if tool_data and tool_data.get("tool"):
+                                        tool_name    = tool_data.get("tool", "")
+                                        confirmation = tool_data.get("confirmation", "")
 
                                         if tool_name == "update_profile":
-                                            field = tool_call.get("field", "").strip()
-                                            value = tool_call.get("value", "").strip()
+                                            field = tool_data.get("field", "").strip()
+                                            value = tool_data.get("value", "").strip()
                                             if field and value:
                                                 try:
                                                     from src.identity.identity_loader import save_identity
@@ -1126,15 +1143,15 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                                         pass
                                                 except Exception as exc:
                                                     logger.warning("tool:update_profile failed: %s", exc)
-                                                    content = "I had trouble updating that — please try from your profile page."
-                                            if content:
-                                                await mgr._speak_verbatim(content, canvas=False)
+                                                    confirmation = "I had trouble updating that — please try from your profile page."
+                                            if confirmation:
+                                                await mgr._speak_verbatim(confirmation, canvas=False)
                                             else:
                                                 await mgr.voice_query(t)
 
                                         elif tool_name == "add_known_person":
-                                            name = tool_call.get("person_name", "").strip()
-                                            rel  = tool_call.get("relationship", "").strip()
+                                            name = tool_data.get("person_name", "").strip()
+                                            rel  = tool_data.get("relationship", "").strip()
                                             if name and rel:
                                                 try:
                                                     await mgr.save_person_from_voice(name, rel)
@@ -1145,17 +1162,20 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                                         pass
                                                 except Exception as exc:
                                                     logger.warning("tool:add_known_person failed: %s", exc)
-                                                    content = "I couldn't save that person — make sure I can see their face clearly."
-                                            if content:
-                                                await mgr._speak_verbatim(content, canvas=False)
+                                                    confirmation = "I couldn't save that person — make sure I can see their face clearly."
+                                            if confirmation:
+                                                await mgr._speak_verbatim(confirmation, canvas=False)
                                             else:
                                                 await mgr.voice_query(t)
-
                                         else:
                                             await mgr.voice_query(t)
+                                        return
 
-                                    # ── Canvas response ──────────────────────────────
-                                    elif result.get("canvas_needed") and content and len(content) > 10:
+                                    # ── Step 2: canvas/voice routing + content generation ──
+                                    result  = await _flash_smart(t, img, sp, force_canvas=_fc)
+                                    content = result.get("content", "")
+
+                                    if result.get("canvas_needed") and content and len(content) > 10:
                                         title = result.get("title", "") or _make_title(t)
                                         await _ws.send_text(json.dumps({
                                             "type": "text_response", "title": title,
@@ -1165,12 +1185,8 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                         if not _fu:
                                             asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
                                         await mgr._speak_verbatim(content, canvas=True)
-
-                                    # ── Voice response — always via Live, never via Flash content ──
                                     else:
-                                        # Let Gemini Live generate a natural spoken response.
-                                        # _speak_verbatim(Flash content) can cause audio gate timing
-                                        # issues. voice_query uses send_text() which is the proven path.
+                                        # Voice — always via Live (send_text proven path)
                                         await mgr.voice_query(t)
 
                                 except asyncio.CancelledError:
