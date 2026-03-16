@@ -793,18 +793,26 @@ export default function DashboardPage() {
   }
 
   // ── Audio playback ────────────────────────────────────────────────────────
-  async function playAudio(b64: string) {
+  // Synchronous — no await anywhere. When playAudio was async, multiple chunks
+  // arriving in the same WS batch all suspended at `await ctx.resume()` and
+  // resumed out-of-order in the microtask queue, causing chunks to race for
+  // nextPlayTimeRef and start at overlapping times → garbled/doubled speech.
+  function playAudio(b64: string) {
     try {
       if (!playCtxRef.current) playCtxRef.current = new AudioContext({ sampleRate: 24000 });
       const ctx = playCtxRef.current;
-      if (ctx.state === "suspended") await ctx.resume();
+      // Fire-and-forget resume — scheduling nodes on a suspended context auto-resumes it.
+      // Never await here; that's what caused the race condition.
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
 
       const raw = atob(b64);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      const int16 = new Int16Array(bytes.buffer);
-      const float32 = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+      // Ensure even byte count — PCM16 frames are 2 bytes; odd tail byte is noise
+      const sampleCount = Math.floor(bytes.byteLength / 2);
+      const int16 = new Int16Array(bytes.buffer, 0, sampleCount);
+      const float32 = new Float32Array(sampleCount);
+      for (let i = 0; i < sampleCount; i++) float32[i] = int16[i] / 32768;
 
       const buffer = ctx.createBuffer(1, float32.length, 24000);
       buffer.copyToChannel(float32, 0);
@@ -812,10 +820,14 @@ export default function DashboardPage() {
       source.buffer = buffer;
       source.connect(ctx.destination);
 
-      if (nextPlayTimeRef.current > ctx.currentTime + 10) nextPlayTimeRef.current = 0;
-      const startAt = Math.max(ctx.currentTime + 0.02, nextPlayTimeRef.current);
-      source.start(startAt);
-      nextPlayTimeRef.current = startAt + buffer.duration;
+      // Anchor nextPlayTime to now+50ms if it has drifted behind or jumped >10s ahead.
+      // 50ms lookahead gives the scheduler enough headroom on slow devices.
+      const now = ctx.currentTime;
+      if (nextPlayTimeRef.current < now || nextPlayTimeRef.current > now + 10) {
+        nextPlayTimeRef.current = now + 0.05;
+      }
+      source.start(nextPlayTimeRef.current);
+      nextPlayTimeRef.current += buffer.duration;
 
       // Track this source so stopAllAudio() can stop it immediately on interrupt
       activeSourcesRef.current.push(source);
