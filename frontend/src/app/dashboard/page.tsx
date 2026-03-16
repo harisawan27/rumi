@@ -553,10 +553,9 @@ export default function DashboardPage() {
         .map(r => r[0].transcript)
         .join("")
         .trim();
-      // Require 6+ chars to guard against fan/ambient noise producing short
-      // spurious transcripts ("mm", "the", "ah") that interrupt Rumi mid-sentence.
-      // Real interruptions ("stop it", "hey rumi", "actually") are all 6+ chars.
-      if (text.length >= 6) {
+      // Require 15+ chars — wind/fan produces short spurious transcripts.
+      // Real interruptions ("actually stop", "wait no", "hey rumi") are longer.
+      if (text.length >= 15) {
         stopBargeinListener();
         stopWakeWordListener(); // release mic fully before main listener grabs it
         // Stop all audio immediately (synchronous) — no context close
@@ -583,13 +582,19 @@ export default function DashboardPage() {
   }
 
   // Start/stop barge-in listener whenever Rumi's speaking state changes
+  // 2s delay before enabling barge-in — protects the opening of every response
+  // from being instantly cancelled by ambient noise or mic pickup of Rumi's voice.
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
     if (speaking && micEnabledRef.current) {
-      startBargeinListener();
+      timer = setTimeout(() => startBargeinListener(), 2000);
     } else {
       stopBargeinListener();
     }
-    return () => stopBargeinListener();
+    return () => {
+      if (timer) clearTimeout(timer);
+      stopBargeinListener();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speaking]);
 
