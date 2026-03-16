@@ -117,6 +117,8 @@ export type WsMessage =
   | { type: "owner_returned" }
   | { type: "identity_verified" }
   | { type: "known_person_detected"; name: string; relationship: string }
+  | { type: "profile_updated"; field: string }
+  | { type: "known_person_added"; name: string }
   | { type: "error"; code: string; message?: string };
 
 export async function connectObserveSocket(

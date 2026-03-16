@@ -283,12 +283,16 @@ class StateMonitor:
             return
         try:
             # ── Pre-check: local FER face detection (free, no API) ───────────
-            # Skip Gemini entirely if no face is visible — prevents blank-frame
-            # false positives where the model guesses identity on an empty frame.
-            if not self._local.has_face(self._current_frame):
+            # Skip Gemini only when FER is confident there is NO face AND the
+            # watchman state is "idle" (not just lighting/angle miss).
+            # This keeps the 10s identity check running even when FER can't find
+            # the face, while still blocking blank-frame false positives.
+            fer_has_face = self._local.has_face(self._current_frame)
+            last_state = (self._last_result.state if self._last_result else "neutral")
+            if not fer_has_face and last_state == "idle":
                 self._non_owner_streak = 0
                 self._last_face_label = "nobody"
-                logger.debug("StateMonitor: no face detected locally — skipping Gemini check")
+                logger.debug("StateMonitor: no face + idle state — skipping Gemini check")
                 return
 
             from src.vision.face_matcher import compare_faces

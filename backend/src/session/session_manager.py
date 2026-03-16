@@ -420,9 +420,6 @@ class SessionManager:
 
         intervention_text = await generate_intervention("frustrated", self._uid, self._session_id)
 
-        # Voice disabled — intervention shown as card only.
-        # Proactive _speak() races with voice_query on the shared Gemini session.
-
         interaction_id = log_interaction(
             uid=self._uid,
             session_id=self._session_id,
@@ -430,6 +427,9 @@ class SessionManager:
             intervention_text=intervention_text,
         )
         await self.dispatch_intervention("A", interaction_id, intervention_text)
+        # Speak intervention aloud — only if no voice query is currently active
+        if not self._is_responding:
+            asyncio.create_task(self._speak_verbatim(intervention_text, canvas=False))
         logger.info("SessionManager: Trigger A fired — interaction %s", interaction_id)
 
     async def _fire_trigger_b(self) -> None:
@@ -446,6 +446,8 @@ class SessionManager:
             intervention_text=intervention_text,
         )
         await self.dispatch_intervention("B", interaction_id, intervention_text)
+        if not self._is_responding:
+            asyncio.create_task(self._speak_verbatim(intervention_text, canvas=False))
         logger.info("SessionManager: Trigger B fired — interaction %s", interaction_id)
 
     async def _fire_trigger_c(self) -> None:
@@ -462,6 +464,8 @@ class SessionManager:
             intervention_text=intervention_text,
         )
         await self.dispatch_intervention("C", interaction_id, intervention_text)
+        if not self._is_responding:
+            asyncio.create_task(self._speak_verbatim(intervention_text, canvas=False))
         logger.info("SessionManager: Trigger C fired — interaction %s", interaction_id)
 
     async def _fire_trigger_e(self) -> None:
@@ -478,6 +482,8 @@ class SessionManager:
             intervention_text=intervention_text,
         )
         await self.dispatch_intervention("E", interaction_id, intervention_text)
+        if not self._is_responding:
+            asyncio.create_task(self._speak_verbatim(intervention_text, canvas=False))
         logger.info("SessionManager: Trigger E fired — interaction %s", interaction_id)
 
     async def _soft_frustration_checkin(self) -> None:
@@ -555,13 +561,11 @@ class SessionManager:
         # Block watchman for the lifetime of this verbatim response, just like voice_query.
         self._is_responding = True
         if canvas:
-            words = text.split()
-            snippet = " ".join(words[:120])
             prompt = (
-                "You've just displayed detailed content on the user's canvas screen. "
-                f"The content begins: \"{snippet}\"\n\n"
-                "Speak a warm, natural 1–2 sentence response — briefly acknowledge what "
-                "you've prepared and invite them to read it. Do NOT read the full text."
+                "You have just written a detailed response and displayed it on the user's "
+                "canvas screen. Speak exactly ONE warm sentence telling them it's ready — "
+                "for example: 'I've put that on your canvas, take a look.' "
+                "ONE sentence only. Do NOT read, summarize, or mention any of the content."
             )
         else:
             # Voice-only: speak the content itself. Send it as the reply to deliver.

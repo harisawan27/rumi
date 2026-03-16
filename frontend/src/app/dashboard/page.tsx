@@ -952,6 +952,14 @@ export default function DashboardPage() {
       const m = msg as { type: string; name: string; relationship: string };
       setMemoryToast(`${m.name} is here — ${m.relationship}`);
       setTimeout(() => setMemoryToast(null), 6000);
+    } else if (msg.type === "profile_updated") {
+      const m = msg as { type: string; field: string };
+      setMemoryToast(`Profile updated — ${m.field} saved`);
+      setTimeout(() => setMemoryToast(null), 4000);
+    } else if (msg.type === "known_person_added") {
+      const m = msg as { type: string; name: string };
+      setMemoryToast(`${m.name} added to known people`);
+      setTimeout(() => setMemoryToast(null), 4000);
     } else if (msg.type === "paused") {
       setObservationState("paused");
     } else if (msg.type === "error") {
