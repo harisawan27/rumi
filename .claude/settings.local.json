@@ -14,7 +14,10 @@
       "Bash(C:\\\\Users\\\\lenovo\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe:*)",
       "Bash(pip:*)",
       "Bash(python3.11:*)",
-      "Bash(where uvicorn:*)"
+      "Bash(where uvicorn:*)",
+      "Bash(cd F:/mirrat && npx tsc --noEmit -p frontend/tsconfig.json 2>&1)",
+      "WebFetch(domain:geminiliveagentchallenge.devpost.com)",
+      "Bash(cd:*)"
     ]
   }
 }

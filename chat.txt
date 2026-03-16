@@ -1,0 +1,63 @@
+Using Cursorful is a massive brain-play. That smooth, cinematic cursor movement and automatic zooming is exactly how companies like Linear, Vercel, and Apple do their product launches. It instantly elevates a hackathon demo into a seed-round startup pitch.
+
+You have exactly 3 minutes. That is roughly 390 to 420 words of spoken script. You cannot waste a single second explaining the code; you have to show the magic.
+
+Here is a ruthless, cinematic 3-minute script designed to perfectly highlight Rumi’s latency, vision, and the "Guest Mode" moat.
+
+🎬 The "Rumi Arrives" Demo Script (3 Minutes)
+0:00 - 0:30 | The Hook: Rumi Speaks First
+
+[Visual]: Start with a clean desktop. Cursorful smoothly pans over to the Rumi dashboard. The animated face is neutral.
+
+[You (Voiceover)]: "Every AI assistant on the market waits to be asked. We built an AI that arrives. This is Rumi—a proactive, ambient companion built on the Gemini Live API and Google ADK."
+
+[Visual]: You (Haris) sit down in front of the camera. Rumi’s camera light pings. The UI shows a subtle "Identity Verified" lock.
+
+[Rumi (Live Audio)]: "Hey Haris. I see we’re back to the Cloud Run deployment. Let's get this finished."
+
+[You (Voiceover)]: "Rumi knows who I am, what I’m working on, and remembers my last session. It isn't a chatbot. It's a presence."
+
+0:30 - 1:15 | The Magic: Dual-Vision & Proactive Intervention
+
+[Visual]: Split the screen. Show you looking at VS Code with a terminal error. Cursorful zooms tightly onto the error message. You put your hands on your head, looking frustrated.
+
+[Visual]: Rumi’s animated face changes from "Thinking" to "Concerned."
+
+[Rumi (Live Audio - Unprompted)]: "You’ve been staring at that WebSockets timeout for twenty minutes. Your posture is tense. Do you want to step back, or should we debug it?"
+
+[You (Voiceover)]: "That was not triggered by a wake word. Rumi’s perception loop processes my face and my screen simultaneously every 15 seconds using Gemini 2.5 Flash. It detects frustration and intervenes only when necessary."
+
+1:15 - 1:45 | The Flex: Barge-in & Intelligent Canvas
+
+[Visual]: You speak to Rumi.
+
+[You (Live Audio)]: "Let's just fix it. What's the error?"
+
+[Rumi (Live Audio)]: "It looks like your Cloud Run instance is dropping the connect—"
+
+[You (Live Audio - Interrupting)]: "Wait, just write the fix on the canvas."
+
+[Visual]: Rumi’s voice stops instantly (The Barge-in flex). The UI smoothly slides open the "Artifact Canvas," displaying the exact Python snippet.
+
+[You (Voiceover)]: "Because we are using the native Gemini Live WebSocket, the latency is sub-400 milliseconds. When I interrupt, Rumi yields instantly. And it intelligently routes long code to a persistent canvas, keeping the voice channel clean."
+
+1:45 - 2:30 | The Moat: Guest Mode & Identity Security
+
+[Visual]: You stand up and walk away from the camera. Grab Shoaib to sit down in your chair for a few seconds.
+
+[Visual]: Rumi’s face scans. The screen instantly blurs the Canvas. A "Guest Mode" badge appears. Rumi goes completely silent.
+
+[You (Voiceover)]: "Other AIs treat the camera as a content input. Rumi treats it as an identity layer. If someone else sits at my desk, Rumi locks my memory, hides my work, and goes silent. My identity is protected by an on-device MediaPipe loop tied securely to a Firebase database."
+
+2:30 - 3:00 | The Close: The Infrastructure Drop
+
+[Visual]: Shoaib gets up. You sit back down. The UI unblurs immediately. Rumi smiles. Cursorful zooms out to show the full dashboard running flawlessly.
+
+[You (Voiceover)]: "Rumi is hosted entirely on Google Cloud Run, with Firebase handling the persistent identity state. The market has optimized furiously for AI that responds. We built the architecture for AI that understands. Thank you."
+
+🎥 Production Rules for this Script:
+Do not speed-talk. Let the pauses breathe. The silence between you and Rumi is what proves the latency is real.
+
+Show, don't tell. When you demonstrate the barge-in interruption, make sure it is visibly obvious that you cut Rumi off mid-sentence and the system handled it perfectly. That is a massive technical flex for the Live API.
+
+This script hits every single mandatory requirement of the Live Agents category while telling a cinematic story.

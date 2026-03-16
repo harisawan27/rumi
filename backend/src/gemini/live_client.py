@@ -51,14 +51,9 @@ class GeminiLiveClient:
         # the check happens in the same event-loop turn that the audio arrives,
         # before any asyncio.create_task delay.
         self._suppress_check: Optional[Callable[[], bool]] = None
-        self._on_interrupted: Optional[Callable] = None
-        self._on_input_transcript: Optional[Callable] = None
 
     async def connect(self, system_prompt: str) -> None:
         self._system_prompt = system_prompt
-        # Auto-VAD enabled (Gemini default) — Gemini detects speech/silence from
-        # the continuous PCM stream and generates responses automatically.
-        # No ActivityStart/ActivityEnd needed.
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             system_instruction=system_prompt,
@@ -67,7 +62,6 @@ class GeminiLiveClient:
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
                 )
             ),
-            input_audio_transcription=types.AudioTranscriptionConfig(),
         )
         self._session_ctx = self._client.aio.live.connect(
             model=LIVE_MODEL, config=config
@@ -128,20 +122,6 @@ class GeminiLiveClient:
                     and response.server_content.turn_complete
                 ):
                     await self._response_queue.put(("done", None))
-
-                # ── Interrupted (server-side VAD barge-in) ────────────────
-                if (
-                    response.server_content
-                    and getattr(response.server_content, "interrupted", False)
-                    and self._on_interrupted
-                ):
-                    asyncio.create_task(self._on_interrupted())
-
-                # ── Input transcription (user's speech as text) ───────────
-                if response.server_content:
-                    it = getattr(response.server_content, "input_transcription", None)
-                    if it and getattr(it, "text", None) and self._on_input_transcript:
-                        asyncio.create_task(self._on_input_transcript(it.text))
         except Exception as exc:
             logger.warning("GeminiLiveClient: receive loop ended: %s", exc)
         finally:
@@ -156,12 +136,6 @@ class GeminiLiveClient:
         Called inline in _receive_loop at the moment each audio chunk arrives.
         """
         self._suppress_check = check
-
-    def set_interrupted_callback(self, cb) -> None:
-        self._on_interrupted = cb
-
-    def set_input_transcript_callback(self, cb) -> None:
-        self._on_input_transcript = cb
 
     async def disconnect(self) -> None:
         if self._receive_task:
