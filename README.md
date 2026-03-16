@@ -32,7 +32,7 @@ The Live Agents category requires: real-time audio/vision interaction, natural c
 | **Real-time Audio** | Gemini 2.5 Flash Native Audio Dialog | Bidirectional voice WebSocket — Rumi speaks and listens in the same session |
 | **Real-time Vision** | Gemini 2.5 Flash dual-frame analysis | Camera frame + screen frame analysed together every 15 seconds |
 | **Talk naturally** | Web Speech API + 35-variant wake word | Say "Hey Rumi" in any accent, any ambient noise — it activates |
-| **Can be interrupted** | VAD barge-in + `audio_interrupt` WebSocket | A dedicated `SpeechRecognition` listener runs *during* Rumi's speech — any utterance >2 chars triggers immediate audio cancellation (AudioContext closed, speech synthesis stopped) **without** needing the wake word. Barge-in during API processing also cancels the in-flight response and processes the new query fresh — no dropped input at any stage |
+| **Can be interrupted** | VAD barge-in + `audio_interrupt` WebSocket | A dedicated `SpeechRecognition` listener runs *during* Rumi's speech — any utterance >2 chars triggers immediate audio stop (`AudioBufferSourceNode.stop(0)`, synchronous) **without** needing the wake word. An echo guard prevents Rumi's own last word from triggering a false interrupt. Barge-in during API processing also cancels the in-flight response and processes the new query fresh — no dropped input at any stage |
 | **Gemini Live API** | ✅ GeminiLiveClient | Core voice pipeline — proactive interventions and all spoken responses |
 | **Google ADK** | ✅ Rumi Core Agent | Identity-grounded reasoning — every intervention is ADK-reasoned against Firestore memory |
 | **Hosted on Google Cloud** | ✅ Cloud Run + Firebase Hosting | Backend on Cloud Run (asia-south1), frontend on Firebase Hosting global CDN |
@@ -86,13 +86,21 @@ Every session begins with Rumi greeting you by name, referencing your last sessi
 
 ### Owner Awareness — Rumi Knows Who Is Sitting There
 
-Every 10 seconds, Rumi verifies the person in front of the camera against the owner's registered face. This is not face recognition as surveillance — it is presence verification as a trust layer.
+Every 10 seconds, Rumi verifies the person in front of the camera against the owner's registered face using Gemini Vision. This is not face recognition as surveillance — it is presence verification as a trust layer.
 
-**When a guest sits down:** Rumi detects the unfamiliar face, goes silent, and enters guest mode. It stops all proactive interventions. Your work, your memory, your identity — none of it is visible or spoken aloud to someone else.
+**Identity Verified:** The moment the owner's face is confirmed, a teal shield badge — *Identity Verified* — appears in the dashboard navbar. It fires once per ownership period and re-fires when the owner returns after a guest visit.
 
-**When you return:** Rumi detects you, resumes the session, and picks up exactly where it left off.
+**Empty frame:** If the owner steps away from the camera without a guest present, Rumi marks the state as *nobody* and resets the guest streak. An empty frame never triggers guest mode — only an actual unknown face does.
 
-No other AI assistant in the world knows who is physically sitting in front of it. Every other AI treats the camera as a content input. Rumi treats it as an identity layer — the first question it answers every 30 seconds is not "what is this person doing?" but "is this the person I know?"
+**Known people:** If a saved person (friend, family) sits down, Rumi recognises them by their stored photo, greets them by name via a toast notification, and does not treat them as a guest. Voice-save works mid-session — say "remember this person as [name]" and Rumi captures the current camera frame, uploads it to Firebase Storage, and saves the identity.
+
+**When a guest sits down:** The canvas instantly blurs (backdrop-filter + saturation drop). A red *Guest Mode* badge appears in the navbar. A *Session Locked* overlay covers the workspace. Rumi goes silent on proactive triggers. If the guest asks questions, Rumi responds helpfully to general topics (coding, knowledge, casual chat) but explicitly refuses to share any personal details, project names, session history, or identity information belonging to the owner.
+
+**Profile page lock:** If the guest navigates to `/profile`, they see a gold padlock screen — *"Profile Locked — Rumi has protected it from guest access"* — with no identity data, no editable fields, no known people list.
+
+**When you return:** The canvas unblurs instantly. The *Identity Verified* badge reappears. Rumi's face expression shifts to *happy* for three seconds, then resets. The session continues exactly where it left off.
+
+No other AI assistant in the world knows who is physically sitting in front of it. Every other AI treats the camera as a content input. Rumi treats it as an identity layer — the first question it answers every 10 seconds is not "what is this person doing?" but "is this the person I know?"
 
 ### Emotional State → Face Expression
 Rumi's face is a real-time reflection of what it perceives. When the watchman detects frustration, Rumi's face shifts to *concerned*. When it detects deep work, the face shifts to *thinking*. The face is not decorative — it is a live readout of Rumi's understanding of you in this moment.
@@ -155,7 +163,7 @@ The profile page allows every field to be updated at any time — Rumi's model o
 │  _flash_smart() — single Gemini call: routing + content         │
 │  GeminiLiveClient — bidirectional audio WebSocket               │
 │  AutoSummarizer — session → 2-sentence Firestore summary        │
-│  FaceWatcher — owner verification every 30s (guest detection)   │
+│  FaceWatcher — owner/known-people verification every 10s        │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────────┐
@@ -228,10 +236,12 @@ Zero culture-specific strings exist anywhere in the codebase. Gemini handles the
 
 ### Voice Intelligence
 The wake word system is built for real-world speech, not lab conditions:
-- **35 phonetic variants** of "Hey Rumi" covering accent variation, elision, and mishearing
-- **Mic warmup** on page load — primes the audio pipeline before the user ever speaks
-- **Confidence filtering** — skips recognition results the engine is already >90% certain are not a wake word
+- **35+ phonetic variants** of "Hey Rumi" — covering accent variation, elision, far-field mishearing, and run-on speech. All confidence levels accepted; false positives are preferred over missed wake words.
+- **Mic warmup** on page load — primes the audio pipeline with optimal echo cancellation, noise suppression, and AGC before the user ever speaks
 - **Adaptive silence detection** — 1800ms window before first final result; drops to 1000ms after, matching the cadence of how Alexa and Siri handle real speech
+- **VAD barge-in** — a dedicated `SpeechRecognition` listener runs *while* Rumi is speaking. Any utterance >2 chars triggers immediate audio stop (`AudioBufferSourceNode.stop(0)` — synchronous, no async close) and hands off to the main listener. The echo guard (`activeSourcesRef.length === 0`) prevents Rumi's own last word from triggering a false interrupt.
+- **Conversation window** — when Rumi finishes speaking, the main listener opens directly (no wake word needed) for 1–2 seconds of natural follow-up. Wake word standby resumes after.
+- **Cancel button** — visible whenever Rumi is processing or speaking. Stops all audio, sends `audio_interrupt` to the backend, and resets to wake word standby in one tap (or Space bar).
 
 ---
 
@@ -285,6 +295,21 @@ That piece now exists.
 The question is not whether this category gets built. It will be built. The question is whether it gets built on Google infrastructure — or whether it gets built somewhere else, and Google spends the next decade watching a competitor own the layer between humans and their computers.
 
 Rumi is already home on Google. Every API call, every byte of memory, every deployment — runs on Google infrastructure by design, not by convenience. This is not a project that needs to be migrated. It needs to be scaled.
+
+---
+
+## Demo Mode
+
+For live demonstrations where real trigger thresholds (30 min focus, 90 min session) would never fire within a 3-minute window, set `DEMO_MODE=true` on the Cloud Run service. All trigger timers drop to seconds:
+
+| Trigger | Normal | Demo |
+|---|---|---|
+| Frustration (A) | 30 min | 8 s |
+| Coding block (B) | 10 min | 20 s |
+| Long session (C) | 90 min | 60 s |
+| Deep focus (E) | 30 min | 30 s |
+
+**Manual demo trigger:** Press `\` (backslash) at any time to instantly fire a Trigger A intervention card — useful mid-demo without waiting for any threshold.
 
 ---
 
