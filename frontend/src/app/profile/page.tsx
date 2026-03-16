@@ -727,8 +727,14 @@ export default function ProfilePage() {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [uid, setUid] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [isGuest, setIsGuest] = useState(false);
 
   useEffect(() => {
+    if (typeof window !== "undefined" && sessionStorage.getItem("rumiGuestMode") === "true") {
+      setIsGuest(true);
+      setLoading(false);
+      return;
+    }
     verifyAuth()
       .then((auth) => { setUid(auth.uid); return getIdentity(); })
       .then((id) => {
@@ -748,6 +754,25 @@ export default function ProfilePage() {
     setIdentity(merged);
     // Refresh active session context so changes take effect immediately
     refreshSessionContext().catch(() => {});
+  }
+
+  if (isGuest) {
+    return (
+      <main className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
+        <div className="rumi-card text-center" style={{ maxWidth: 360, display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" strokeWidth="1.5" strokeLinecap="round">
+            <rect x="3" y="11" width="18" height="11" rx="2"/>
+            <path d="M7 11V7a5 5 0 0110 0v4"/>
+          </svg>
+          <p className="font-display" style={{ fontSize: "1.2rem", color: "var(--gold)", margin: 0 }}>Profile Locked</p>
+          <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: 0, lineHeight: 1.6 }}>
+            This profile belongs to the owner of this session.<br />
+            Rumi has protected it from guest access.
+          </p>
+          <button className="btn-ghost" onClick={() => router.back()} style={{ marginTop: 4 }}>Go back</button>
+        </div>
+      </main>
+    );
   }
 
   if (loading) {

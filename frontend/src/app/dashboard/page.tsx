@@ -916,9 +916,11 @@ export default function DashboardPage() {
       setGuestMode(true);
       setIdentityVerified(false);
       setRumiEmotion("neutral");
+      sessionStorage.setItem("rumiGuestMode", "true");
     } else if (msg.type === "owner_returned") {
       setGuestMode(false);
       setIdentityVerified(true);
+      sessionStorage.removeItem("rumiGuestMode");
       setRumiEmotion("happy");
       setTimeout(() => setRumiEmotion("neutral"), 3000);
     } else if (msg.type === "known_person_detected") {
