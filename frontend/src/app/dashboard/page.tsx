@@ -89,6 +89,8 @@ export default function DashboardPage() {
   const bargeinRef = useRef<SpeechRecognition | null>(null); // VAD barge-in listener (active while Rumi speaks)
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]); // all playing sources — stopped on interrupt
   const speakingRef = useRef<boolean>(false); // closure-safe speaking state for rec.onend
+  const audioGenRef = useRef<number>(0);                        // incremented on stopAllAudio to cancel pending chunks
+  const audioChainRef = useRef<Promise<void>>(Promise.resolve()); // sequential scheduling chain — prevents chunk racing
 
   const [wakeListening, setWakeListening] = useState(false);
 
@@ -786,6 +788,7 @@ export default function DashboardPage() {
   // Does NOT close the AudioContext — closing is async and the context keeps
   // playing during the close, which was causing two voices simultaneously.
   function stopAllAudio() {
+    audioGenRef.current++;          // invalidate any chunks still waiting in the chain
     activeSourcesRef.current.forEach(s => { try { s.stop(0); } catch { /* already stopped */ } });
     activeSourcesRef.current = [];
     nextPlayTimeRef.current = 0;
@@ -793,53 +796,60 @@ export default function DashboardPage() {
   }
 
   // ── Audio playback ────────────────────────────────────────────────────────
-  // Synchronous — no await anywhere. When playAudio was async, multiple chunks
-  // arriving in the same WS batch all suspended at `await ctx.resume()` and
-  // resumed out-of-order in the microtask queue, causing chunks to race for
-  // nextPlayTimeRef and start at overlapping times → garbled/doubled speech.
+  // Uses a sequential promise chain (audioChainRef) so chunks always schedule
+  // in arrival order — no race on nextPlayTimeRef regardless of WS batching.
+  // audioGenRef lets stopAllAudio() cancel chunks still waiting in the chain.
   function playAudio(b64: string) {
-    try {
-      if (!playCtxRef.current) playCtxRef.current = new AudioContext({ sampleRate: 24000 });
-      const ctx = playCtxRef.current;
-      // Fire-and-forget resume — scheduling nodes on a suspended context auto-resumes it.
-      // Never await here; that's what caused the race condition.
-      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const myGen = audioGenRef.current;
 
-      const raw = atob(b64);
-      const bytes = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      // Ensure even byte count — PCM16 frames are 2 bytes; odd tail byte is noise
-      const sampleCount = Math.floor(bytes.byteLength / 2);
-      const int16 = new Int16Array(bytes.buffer, 0, sampleCount);
-      const float32 = new Float32Array(sampleCount);
-      for (let i = 0; i < sampleCount; i++) float32[i] = int16[i] / 32768;
+    // Decode PCM synchronously before entering the chain — keeps chain slots short.
+    const raw = atob(b64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const sampleCount = Math.floor(bytes.byteLength / 2); // PCM16 = 2 bytes/sample
+    const int16 = new Int16Array(bytes.buffer, 0, sampleCount);
+    const float32 = new Float32Array(sampleCount);
+    for (let i = 0; i < sampleCount; i++) float32[i] = int16[i] / 32768;
 
-      const buffer = ctx.createBuffer(1, float32.length, 24000);
-      buffer.copyToChannel(float32, 0);
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
+    audioChainRef.current = audioChainRef.current.then(async () => {
+      // Chunk was cancelled by stopAllAudio() while waiting in the chain
+      if (audioGenRef.current !== myGen) return;
 
-      // Anchor nextPlayTime to now+50ms if it has drifted behind or jumped >10s ahead.
-      // 50ms lookahead gives the scheduler enough headroom on slow devices.
-      const now = ctx.currentTime;
-      if (nextPlayTimeRef.current < now || nextPlayTimeRef.current > now + 10) {
-        nextPlayTimeRef.current = now + 0.05;
+      try {
+        if (!playCtxRef.current) playCtxRef.current = new AudioContext({ sampleRate: 24000 });
+        const ctx = playCtxRef.current;
+
+        // Await resume so source.start() never fires on a suspended context.
+        // Safe here because the chain serialises calls — no concurrent awaits.
+        if (ctx.state === "suspended") await ctx.resume();
+
+        if (audioGenRef.current !== myGen) return; // cancelled during resume
+
+        const buffer = ctx.createBuffer(1, float32.length, 24000);
+        buffer.copyToChannel(float32, 0);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+
+        // Anchor nextPlayTime when it drifts behind now or jumps >10s ahead
+        const now = ctx.currentTime;
+        if (nextPlayTimeRef.current < now || nextPlayTimeRef.current > now + 10) {
+          nextPlayTimeRef.current = now + 0.05;
+        }
+        source.start(nextPlayTimeRef.current);
+        nextPlayTimeRef.current += buffer.duration;
+
+        activeSourcesRef.current.push(source);
+        setSpeaking(true);
+        source.onended = () => {
+          activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+          if (activeSourcesRef.current.length === 0) setSpeaking(false);
+        };
+      } catch (e) {
+        console.error("playAudio error:", e);
+        setSpeaking(false);
       }
-      source.start(nextPlayTimeRef.current);
-      nextPlayTimeRef.current += buffer.duration;
-
-      // Track this source so stopAllAudio() can stop it immediately on interrupt
-      activeSourcesRef.current.push(source);
-      setSpeaking(true);
-      source.onended = () => {
-        activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
-        if (activeSourcesRef.current.length === 0) setSpeaking(false);
-      };
-    } catch (e) {
-      console.error("playAudio error:", e);
-      setSpeaking(false);
-    }
+    }).catch(() => { setSpeaking(false); });
   }
 
   // ── WS message handler ────────────────────────────────────────────────────
