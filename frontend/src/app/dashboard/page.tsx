@@ -600,38 +600,43 @@ export default function DashboardPage() {
         wsRef.current.send(JSON.stringify({ type: "talk_start" }));
       }
 
-      // Local RMS is ONLY for UI state (isTalking indicator).
-      // Gemini's server-side VAD decides when the user is done and generates a response.
-      // We stream continuously — no silence detection, no stopping, no ActivityEnd.
-      let speechFrames = 0;
+      // Gate: don't send anything until voice is detected.
+      // Once speech starts, stream everything (including the following silence)
+      // so Gemini's auto-VAD can detect the end of turn and respond.
+      let sending = false;
       let silenceAfterSpeech = 0;
-      const SPEECH_THRESHOLD = 18;
+      const SPEECH_THRESHOLD = 20;
 
       processor.onaudioprocess = (e: AudioProcessingEvent) => {
         const float32 = e.inputBuffer.getChannelData(0);
 
-        // RMS for UI only
+        // RMS
         let sum = 0;
         for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
         const rms = Math.sqrt(sum / float32.length) * 100;
 
-        if (rms > SPEECH_THRESHOLD) {
-          speechFrames++;
-          silenceAfterSpeech = 0;
-          if (speechFrames === 3) {
+        // Before speech detected — monitor but don't send
+        if (!sending) {
+          if (rms > SPEECH_THRESHOLD) {
+            sending = true;
             setIsTalking(true);
             isTalkingRef.current = true;
-            setIsProcessing(false);
             setRumiEmotion("thinking");
+          } else {
+            return; // silent — discard, don't send to Gemini
           }
-        } else if (isTalkingRef.current) {
+        }
+
+        // After speech started — update UI on silence
+        if (rms <= SPEECH_THRESHOLD) {
           silenceAfterSpeech++;
-          if (silenceAfterSpeech === 10) { // ~2.5s silence after speech → show processing
+          if (silenceAfterSpeech === 10) { // ~2.5s of silence → show "processing"
             setIsTalking(false);
             isTalkingRef.current = false;
             setIsProcessing(true);
-            speechFrames = 0;
           }
+        } else {
+          silenceAfterSpeech = 0;
         }
 
         // Resample if browser didn't honour 16kHz request
