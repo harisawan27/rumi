@@ -604,11 +604,29 @@ export default function DashboardPage() {
       }
 
       let silenceFrames = 0;
-      const SILENCE_THRESHOLD = 6; // RMS 0-100 below this = silence
-      const SILENCE_FRAMES_TARGET = Math.ceil((1800 / 1000) / (4096 / inputRate)); // ~1.8s
+      let totalFrames = 0;
+      const frameMs = (4096 / inputRate) * 1000;
+      const SILENCE_THRESHOLD = 18;  // RMS 0-100; ambient/breathing ≈ 5-15, speech ≈ 30-80
+      const SILENCE_FRAMES_TARGET = Math.ceil(1800 / frameMs);  // 1.8s silence → send
+      const MAX_FRAMES = Math.ceil(30000 / frameMs);            // 30s hard cutoff
+
+      function _finishRecording() {
+        stopNativeAudio();
+        setIsTalking(false);
+        isTalkingRef.current = false;
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: "audio_end" }));
+        }
+        setIsProcessing(true);
+        setRumiEmotion("thinking");
+      }
 
       processor.onaudioprocess = (e: AudioProcessingEvent) => {
         const float32 = e.inputBuffer.getChannelData(0);
+        totalFrames++;
+
+        // 30s hard cutoff — prevents forever-streaming on bad silence detection
+        if (totalFrames >= MAX_FRAMES) { _finishRecording(); return; }
 
         // RMS for silence detection
         let sum = 0;
@@ -618,15 +636,7 @@ export default function DashboardPage() {
         if (rms < SILENCE_THRESHOLD) {
           silenceFrames++;
           if (silenceFrames >= SILENCE_FRAMES_TARGET) {
-            // Silence: stop recording, signal end of speech
-            stopNativeAudio();
-            setIsTalking(false);
-            isTalkingRef.current = false;
-            if (wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: "audio_end" }));
-            }
-            setIsProcessing(true);
-            setRumiEmotion("thinking");
+            _finishRecording();
             return;
           }
         } else {
