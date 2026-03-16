@@ -43,6 +43,7 @@ export default function DashboardPage() {
   const [sessionReady, setSessionReady] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [guestMode, setGuestMode] = useState(false);
+  const [identityVerified, setIdentityVerified] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
   const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
   const [detection, setDetection] = useState<{ state: string; confidence: number; cues: string[]; emotions: Record<string, number> } | null>(null);
@@ -909,11 +910,17 @@ export default function DashboardPage() {
       const m = msg as { type: string; message: string };
       setMemoryToast(m.message);
       setTimeout(() => setMemoryToast(null), 6000);
+    } else if (msg.type === "identity_verified") {
+      setIdentityVerified(true);
     } else if (msg.type === "guest_detected") {
       setGuestMode(true);
+      setIdentityVerified(false);
       setRumiEmotion("neutral");
     } else if (msg.type === "owner_returned") {
       setGuestMode(false);
+      setIdentityVerified(true);
+      setRumiEmotion("happy");
+      setTimeout(() => setRumiEmotion("neutral"), 3000);
     } else if (msg.type === "known_person_detected") {
       const m = msg as { type: string; name: string; relationship: string };
       setMemoryToast(`${m.name} is here — ${m.relationship}`);
@@ -983,6 +990,30 @@ export default function DashboardPage() {
           }}>
             {observationState === "active" ? "Observing" : observationState === "degraded" ? "Degraded" : "Paused"}
           </div>
+          {/* Identity Verified badge — appears when owner face is confirmed */}
+          {identityVerified && !guestMode && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 4,
+              padding: "3px 8px", borderRadius: 99,
+              background: "rgba(34,211,238,0.1)", border: "1px solid rgba(34,211,238,0.4)",
+              animation: "fadeSlideUp 0.3s ease both",
+            }}>
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="var(--teal)"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+              <span style={{ fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--teal)", fontWeight: 600 }}>Identity Verified</span>
+            </div>
+          )}
+          {/* Guest Mode badge — replaces verified badge when guest detected */}
+          {guestMode && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 4,
+              padding: "3px 10px", borderRadius: 99,
+              background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.5)",
+              animation: "fadeSlideUp 0.3s ease both",
+            }}>
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="#ef4444"><path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5L12 2zm-1 8h2v4h-2zm0-4h2v2h-2z"/></svg>
+              <span style={{ fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#ef4444", fontWeight: 700 }}>Guest Mode</span>
+            </div>
+          )}
           {/* Privacy status — persistent badges when cam/mic are off */}
           {!cameraEnabled && (
             <button onClick={handleCameraToggle} title="Camera is OFF — Rumi cannot see you. Click to enable." style={{
@@ -1040,7 +1071,7 @@ export default function DashboardPage() {
       </nav>
 
       {/* ── App body: fluid two-zone layout ─────────────────────────────────── */}
-      <div className={`app-body${canvasOpen ? " canvas-open" : ""}`}>
+      <div className={`app-body${canvasOpen ? " canvas-open" : ""}`} style={{ position: "relative" }}>
 
         {/* ZONE 1 — Rumi Core */}
         <div className="rumi-zone">
@@ -1316,7 +1347,12 @@ export default function DashboardPage() {
         </div>
 
         {/* ZONE 2 — Artifact Canvas */}
-        <div className={`canvas-zone${canvasOpen ? " canvas-open" : ""}`}>
+        <div className={`canvas-zone${canvasOpen ? " canvas-open" : ""}`} style={{
+          position: "relative",
+          filter: guestMode ? "blur(10px) saturate(0.2)" : "none",
+          transition: "filter 0.5s ease",
+          pointerEvents: guestMode ? "none" : "auto",
+        }}>
           <ArtifactCanvas
             content={canvasContent}
             onDismiss={handleCanvasDismiss}
@@ -1327,6 +1363,32 @@ export default function DashboardPage() {
             isFollowingUp={isFollowingUp}
           />
         </div>
+
+        {/* Guest Mode privacy overlay — covers everything when non-owner detected */}
+        {guestMode && (
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 30,
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            background: "rgba(4,8,15,0.55)", backdropFilter: "blur(2px)",
+            animation: "fadeSlideUp 0.4s ease both",
+            pointerEvents: "none",
+          }}>
+            <div style={{
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
+              padding: "20px 32px", borderRadius: 16,
+              background: "rgba(4,8,15,0.8)", border: "1px solid rgba(239,68,68,0.3)",
+              boxShadow: "0 0 40px rgba(239,68,68,0.08)",
+            }}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round">
+                <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+              </svg>
+              <span style={{ fontSize: "0.75rem", letterSpacing: "0.2em", textTransform: "uppercase", color: "#ef4444", fontWeight: 700 }}>Session Locked</span>
+              <span style={{ fontSize: "0.65rem", color: "var(--muted)", letterSpacing: "0.05em", textAlign: "center" }}>
+                Rumi has protected this workspace.<br/>Owner identity required to continue.
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Canvas pull tab — visible when session active but canvas closed */}
         {observationState !== "paused" && !canvasOpen && (

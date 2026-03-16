@@ -69,6 +69,8 @@ class StateMonitor:
         self._on_owner_returned   = None  # set via set_owner_returned_callback()
         # Current face label — "owner" | "known:Name:relationship" | "guest" | "nobody"
         self._last_face_label: str = "nobody"
+        # Fires identity_verified WS event once per ownership period; resets on guest
+        self._owner_verified_sent: bool = False
 
     def set_uid(self, uid: str) -> None:
         """Store uid so face checker can query known people from Firestore."""
@@ -294,6 +296,13 @@ class StateMonitor:
                         await self._websocket.send_text(json.dumps({"type": "owner_returned"}))
                     if self._on_owner_returned:
                         asyncio.create_task(self._on_owner_returned())
+                    # Re-arm so next confirm also sends identity_verified
+                    self._owner_verified_sent = False
+                if not self._owner_verified_sent:
+                    if self._websocket:
+                        await self._websocket.send_text(json.dumps({"type": "identity_verified"}))
+                    self._owner_verified_sent = True
+                    logger.info("StateMonitor: identity verified — owner confirmed")
                 self._non_owner_streak = 0
                 self._guest_active = False
                 self._last_face_label = "owner"
@@ -333,6 +342,7 @@ class StateMonitor:
             # ── Step 3: unknown person — guest detection ─────────────────────
             if self._non_owner_streak >= self._non_owner_threshold and not self._guest_active:
                 self._guest_active = True
+                self._owner_verified_sent = False  # reset so owner return re-sends identity_verified
                 self._last_face_label = "guest"
                 logger.info("StateMonitor: guest confirmed (confidence=%.2f)", result.confidence)
                 if self._websocket:
