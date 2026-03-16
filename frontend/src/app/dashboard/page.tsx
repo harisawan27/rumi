@@ -553,7 +553,10 @@ export default function DashboardPage() {
         .map(r => r[0].transcript)
         .join("")
         .trim();
-      if (text.length > 2) {
+      // Require 6+ chars to guard against fan/ambient noise producing short
+      // spurious transcripts ("mm", "the", "ah") that interrupt Rumi mid-sentence.
+      // Real interruptions ("stop it", "hey rumi", "actually") are all 6+ chars.
+      if (text.length >= 6) {
         stopBargeinListener();
         stopWakeWordListener(); // release mic fully before main listener grabs it
         // Stop all audio immediately (synchronous) — no context close

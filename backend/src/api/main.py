@@ -1018,10 +1018,18 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     force_canvas = bool(image_b64)
 
                     _CANVAS_TRIGGER_KEYWORDS = [
+                        # Code / technical
                         "write code", "code for", "show me code", "write a function",
                         "write a script", "step by step", "steps to", "step-by-step",
-                        "explain with code", "show on canvas", "write it down",
-                        "write this down", "put it on canvas", "show me in writing",
+                        "explain with code",
+                        # Long-form written content — these must never go to voice
+                        "essay", "article", "blog post", "write about", "write me a",
+                        "write an", "write a report", "write a letter", "write a summary",
+                        "summarize", "summarise", "research on", "report on",
+                        "explain in detail", "detailed explanation",
+                        # Explicit canvas requests
+                        "show on canvas", "write it down", "write this down",
+                        "put it on canvas", "show me in writing",
                     ]
                     wants_canvas = force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
                     is_face = effective_img and any(kw in t_lower for kw in _FACE_QUERY_KEYWORDS)
