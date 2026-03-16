@@ -1094,88 +1094,100 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                         mgr._speak_task = asyncio.create_task(_face_respond())
 
                     else:
-                        # Fast-path: short conversational queries skip Flash entirely → Live
-                        # Heuristic: no image, ≤8 words, no long-form/tool keywords
-                        _LONG_FORM_HINT = (
-                            "write", "essay", "article", "report", "explain", "research",
-                            "summarize", "summarise", "step", "code", "update my", "change my",
-                            "remember", "save", "set my", "my name is", "call me",
-                        )
-                        _is_conversational = (
-                            not effective_img
-                            and len(text.split()) <= 8
-                            and not any(h in t_lower for h in _LONG_FORM_HINT)
-                        )
-                        if _is_conversational:
-                            mgr._speak_task = asyncio.create_task(mgr.voice_query(text))
-                        else:
-                            # Smart routing — Flash decides: tool_call | canvas | voice
-                            state_mon = getattr(mgr, "_state_monitor", None)
-                            _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
-                            sys_prompt = _GUEST_SYSTEM_PROMPT if _is_guest else (mgr._system_prompt or "")
+                        state_mon = getattr(mgr, "_state_monitor", None)
+                        _is_guest = state_mon and getattr(state_mon, "_guest_active", False)
+                        sys_prompt = _GUEST_SYSTEM_PROMPT if _is_guest else (mgr._system_prompt or "")
 
-                            async def _smart_respond(t=text, img=effective_img, sp=sys_prompt,
-                                                     _ws=websocket, _fu=is_followup,
-                                                     _fc=force_canvas) -> None:
+                        # ── Keyword routing (zero latency) ────────────────────────
+                        _CANVAS_TRIGGER_KEYWORDS = [
+                            "write code", "code for", "show me code", "write a function",
+                            "write a script", "step by step", "steps to", "step-by-step",
+                            "explain with code", "essay", "article", "blog post",
+                            "write about", "write me a", "write an", "write a report",
+                            "write a letter", "write a summary", "summarize", "summarise",
+                            "research on", "report on", "explain in detail",
+                            "detailed explanation", "show on canvas", "write it down",
+                            "write this down", "put it on canvas", "show me in writing",
+                        ]
+                        _TOOL_HINT_KEYWORDS = [
+                            "update my name", "change my name", "my name is now",
+                            "call me ", "update my bio", "change my bio",
+                            "set my language", "update my language", "change my language",
+                            "update my timezone", "change my timezone",
+                            "update my coding style", "change my coding style",
+                            "remember this person", "save this person",
+                            "this is my friend", "this is my brother", "this is my sister",
+                            "this is my colleague", "add as my", "remember him as",
+                            "remember her as", "remember them as",
+                        ]
+                        wants_canvas = force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
+                        is_tool_hint = any(kw in t_lower for kw in _TOOL_HINT_KEYWORDS)
+
+                        if is_tool_hint:
+                            # Tool path — Flash detects intent and extracts params
+                            async def _tool_respond(t=text, sp=sys_prompt, _ws=websocket) -> None:
                                 try:
-                                    # ── Step 1: tool intent detection (fast, short JSON) ──
                                     tool_data = await _flash_detect_tool(t)
-
-                                    if tool_data and tool_data.get("tool"):
-                                        tool_name    = tool_data.get("tool", "")
-                                        confirmation = tool_data.get("confirmation", "")
-
-                                        if tool_name == "update_profile":
-                                            field = tool_data.get("field", "").strip()
-                                            value = tool_data.get("value", "").strip()
-                                            if field and value:
-                                                try:
-                                                    from src.identity.identity_loader import save_identity
-                                                    import asyncio as _aio
-                                                    await _aio.get_event_loop().run_in_executor(
-                                                        None, save_identity, mgr._uid, {field: value}
-                                                    )
-                                                    asyncio.create_task(mgr.refresh_context())
-                                                    logger.info("tool:update_profile %s=%s", field, value)
-                                                    try:
-                                                        await _ws.send_text(json.dumps({"type": "profile_updated", "field": field}))
-                                                    except Exception:
-                                                        pass
-                                                except Exception as exc:
-                                                    logger.warning("tool:update_profile failed: %s", exc)
-                                                    confirmation = "I had trouble updating that — please try from your profile page."
-                                            if confirmation:
-                                                await mgr._speak_verbatim(confirmation, canvas=False)
-                                            else:
-                                                await mgr.voice_query(t)
-
-                                        elif tool_name == "add_known_person":
-                                            name = tool_data.get("person_name", "").strip()
-                                            rel  = tool_data.get("relationship", "").strip()
-                                            if name and rel:
-                                                try:
-                                                    await mgr.save_person_from_voice(name, rel)
-                                                    logger.info("tool:add_known_person %s (%s)", name, rel)
-                                                    try:
-                                                        await _ws.send_text(json.dumps({"type": "known_person_added", "name": name}))
-                                                    except Exception:
-                                                        pass
-                                                except Exception as exc:
-                                                    logger.warning("tool:add_known_person failed: %s", exc)
-                                                    confirmation = "I couldn't save that person — make sure I can see their face clearly."
-                                            if confirmation:
-                                                await mgr._speak_verbatim(confirmation, canvas=False)
-                                            else:
-                                                await mgr.voice_query(t)
-                                        else:
-                                            await mgr.voice_query(t)
+                                    if not tool_data or not tool_data.get("tool"):
+                                        await mgr.voice_query(t)
                                         return
+                                    tool_name    = tool_data.get("tool", "")
+                                    confirmation = tool_data.get("confirmation", "")
+                                    if tool_name == "update_profile":
+                                        field = tool_data.get("field", "").strip()
+                                        value = tool_data.get("value", "").strip()
+                                        if field and value:
+                                            try:
+                                                from src.identity.identity_loader import save_identity
+                                                import asyncio as _aio
+                                                await _aio.get_event_loop().run_in_executor(
+                                                    None, save_identity, mgr._uid, {field: value}
+                                                )
+                                                asyncio.create_task(mgr.refresh_context())
+                                                logger.info("tool:update_profile %s=%s", field, value)
+                                                try:
+                                                    await _ws.send_text(json.dumps({"type": "profile_updated", "field": field}))
+                                                except Exception:
+                                                    pass
+                                            except Exception as exc:
+                                                logger.warning("tool:update_profile failed: %s", exc)
+                                                confirmation = "I had trouble with that — try the profile page."
+                                    elif tool_name == "add_known_person":
+                                        name = tool_data.get("person_name", "").strip()
+                                        rel  = tool_data.get("relationship", "").strip()
+                                        if name and rel:
+                                            try:
+                                                await mgr.save_person_from_voice(name, rel)
+                                                logger.info("tool:add_known_person %s (%s)", name, rel)
+                                                try:
+                                                    await _ws.send_text(json.dumps({"type": "known_person_added", "name": name}))
+                                                except Exception:
+                                                    pass
+                                            except Exception as exc:
+                                                logger.warning("tool:add_known_person failed: %s", exc)
+                                                confirmation = "I couldn't save that person — make sure I can see their face."
+                                    if confirmation:
+                                        await mgr._speak_verbatim(confirmation, canvas=False)
+                                    else:
+                                        await mgr.voice_query(t)
+                                except asyncio.CancelledError:
+                                    pass
+                                except Exception as exc:
+                                    logger.warning("_tool_respond failed: %s", exc)
+                                    try:
+                                        await mgr.voice_query(t)
+                                    except Exception:
+                                        pass
+                            mgr._speak_task = asyncio.create_task(_tool_respond())
 
-                                    # ── Step 2: canvas/voice routing + content generation ──
-                                    result  = await _flash_smart(t, img, sp, force_canvas=_fc)
+                        elif wants_canvas:
+                            # Canvas path — single Flash call for content generation
+                            async def _canvas_respond(t=text, img=effective_img, sp=sys_prompt,
+                                                      _ws=websocket, _fu=is_followup) -> None:
+                                try:
+                                    result  = await _flash_smart(t, img, sp, force_canvas=True)
                                     content = result.get("content", "")
-
-                                    if result.get("canvas_needed") and content and len(content) > 10:
+                                    if content and len(content) > 10:
                                         title = result.get("title", "") or _make_title(t)
                                         await _ws.send_text(json.dumps({
                                             "type": "text_response", "title": title,
@@ -1186,19 +1198,20 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                             asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
                                         await mgr._speak_verbatim(content, canvas=True)
                                     else:
-                                        # Voice — always via Live (send_text proven path)
                                         await mgr.voice_query(t)
-
                                 except asyncio.CancelledError:
                                     pass
                                 except Exception as exc:
-                                    logger.warning("_smart_respond failed: %s", exc)
+                                    logger.warning("_canvas_respond failed: %s", exc)
                                     try:
                                         await mgr.voice_query(t)
                                     except Exception:
                                         pass
+                            mgr._speak_task = asyncio.create_task(_canvas_respond())
 
-                            mgr._speak_task = asyncio.create_task(_smart_respond())
+                        else:
+                            # Voice — direct Gemini Live, no Flash overhead
+                            mgr._speak_task = asyncio.create_task(mgr.voice_query(text))
     except WebSocketDisconnect:
         pass
     finally:
