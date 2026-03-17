@@ -599,11 +599,14 @@ When canvas_needed=true:
     return {"canvas_needed": False, "title": "", "content": ""}
 
 
-# Keywords that route to the dedicated face identification path
+# Keywords that route to the vision analysis path (face + object recognition)
 _FACE_QUERY_KEYWORDS = [
     "who is in front", "who do you see", "who am i", "can you see me",
     "do you see me", "who is this", "look at me", "see me",
     "how do i look", "am i on camera", "what do i look",
+    "what is in my hand", "what's in my hand", "what am i holding",
+    "what do you see", "what can you see", "what are you seeing",
+    "look at this", "can you see this", "what is this",
 ]
 
 # Keywords that bypass _flash_smart and go straight to voice recitation
@@ -1063,11 +1066,19 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                         gt.cancel()
 
                     t_lower = text.lower()
+                    import base64 as _b64_inline
                     screen_b64: str | None = None
                     if hasattr(mgr, "_latest_screen_frame") and mgr._latest_screen_frame:
-                        import base64 as _b64_inline
                         screen_b64 = _b64_inline.b64encode(mgr._latest_screen_frame).decode()
-                    effective_img = image_b64 or screen_b64
+                    # Grab latest camera frame from state_monitor for visual queries
+                    cam_b64: str | None = None
+                    state_mon_img = getattr(mgr, "_state_monitor", None)
+                    if state_mon_img and getattr(state_mon_img, "_current_frame", None) is not None:
+                        try:
+                            cam_b64 = _b64_inline.b64encode(state_mon_img._current_frame).decode()
+                        except Exception:
+                            pass
+                    effective_img = image_b64 or screen_b64 or cam_b64
                     force_canvas = bool(image_b64)
 
                     is_face = effective_img and any(kw in t_lower for kw in _FACE_QUERY_KEYWORDS)
