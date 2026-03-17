@@ -1,28 +1,60 @@
 "use client";
 
-import { useState } from "react";
-import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import { useState, useEffect } from "react";
+import {
+  signInWithPopup, signInWithRedirect, getRedirectResult,
+  GoogleAuthProvider, UserCredential,
+} from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { auth } from "@/services/firebase";
 import { verifyAuth, getIdentity } from "@/services/session";
+
+function isMobileBrowser() {
+  if (typeof navigator === "undefined") return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+async function finishSignIn(result: UserCredential, router: ReturnType<typeof useRouter>) {
+  const idToken = await result.user.getIdToken();
+  sessionStorage.setItem("id_token", idToken);
+  await verifyAuth();
+  const identity = await getIdentity();
+  router.push(identity ? "/dashboard" : "/onboarding");
+}
 
 export default function SignInPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Handle redirect result on page load (mobile flow)
+  useEffect(() => {
+    setLoading(true);
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (!result) { setLoading(false); return; }
+        await finishSignIn(result, router);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Sign-in failed");
+        setLoading(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handleSignIn() {
     setLoading(true);
     setError(null);
     try {
       const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
-      const idToken = await result.user.getIdToken();
-      sessionStorage.setItem("id_token", idToken);
-      setLoading(true);
-      await verifyAuth();
-      const identity = await getIdentity();
-      router.push(identity ? "/dashboard" : "/onboarding");
+      if (isMobileBrowser()) {
+        // Mobile: redirect flow avoids popup issues on Chrome/Safari
+        await signInWithRedirect(auth, provider);
+        // Page navigates away — finishSignIn runs in the useEffect above on return
+      } else {
+        const result = await signInWithPopup(auth, provider);
+        await finishSignIn(result, router);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign-in failed");
       setLoading(false);

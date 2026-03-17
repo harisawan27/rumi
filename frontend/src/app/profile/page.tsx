@@ -730,18 +730,22 @@ export default function ProfilePage() {
   const [isGuest, setIsGuest] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== "undefined" && sessionStorage.getItem("rumiGuestMode") === "true") {
-      setIsGuest(true);
-      setLoading(false);
-      return;
-    }
+    // Always verify auth first — the owner must never be locked out of their profile.
+    // Guest mode (rumiGuestMode in sessionStorage) is only honoured when auth fails.
     verifyAuth()
       .then((auth) => { setUid(auth.uid); return getIdentity(); })
       .then((id) => {
         if (!id) { router.push("/onboarding"); return; }
         setIdentity(id);
       })
-      .catch(() => router.push("/"))
+      .catch(() => {
+        // Auth failed — only then treat as guest
+        if (typeof window !== "undefined" && sessionStorage.getItem("rumiGuestMode") === "true") {
+          setIsGuest(true);
+        } else {
+          router.push("/");
+        }
+      })
       .finally(() => setLoading(false));
   }, [router]);
 

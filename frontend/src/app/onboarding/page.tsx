@@ -32,6 +32,56 @@ interface FormData {
 
 const EMPTY_PROJECT: Project = { name: "", status: "", context: "" };
 
+// ── TagInput defined OUTSIDE OnboardingPage to prevent remount on parent re-renders
+// (defining components inside another component causes React to treat them as new
+//  types on every render → unmount/remount → mobile keyboard closes after each key)
+function TagInput({
+  tags, onAdd, onRemove, placeholder,
+}: {
+  tags: string[];
+  onAdd: (v: string) => void;
+  onRemove: (v: string) => void;
+  placeholder: string;
+}) {
+  const [val, setVal] = useState("");
+  return (
+    <div>
+      <div className="flex gap-2 flex-wrap mb-2 min-h-[28px]">
+        {tags.map((t) => (
+          <span key={t} className="rumi-tag">
+            {t}
+            <button
+              onClick={() => onRemove(t)}
+              style={{ color: "var(--gold-dim)", marginLeft: 2, lineHeight: 1 }}
+            >
+              &times;
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          className="rumi-input flex-1"
+          placeholder={placeholder}
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); onAdd(val); setVal(""); }
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => { onAdd(val); setVal(""); }}
+          className="btn-ghost"
+          style={{ padding: "0.5rem 0.875rem", fontSize: "0.8125rem" }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const STEP_TITLES = [
   "Who are you?",
   "What are you building?",
@@ -75,46 +125,6 @@ export default function OnboardingPage() {
 
   function removeTag(field: "roles" | "interests" | "focus_breakers", value: string) {
     setForm((f) => ({ ...f, [field]: f[field].filter((t) => t !== value) }));
-  }
-
-  function TagInput({ field, placeholder }: { field: "roles" | "interests" | "focus_breakers"; placeholder: string }) {
-    const [val, setVal] = useState("");
-    return (
-      <div>
-        <div className="flex gap-2 flex-wrap mb-2 min-h-[28px]">
-          {form[field].map((t) => (
-            <span key={t} className="rumi-tag">
-              {t}
-              <button
-                onClick={() => removeTag(field, t)}
-                style={{ color: "var(--gold-dim)", marginLeft: 2, lineHeight: 1 }}
-              >
-                &times;
-              </button>
-            </span>
-          ))}
-        </div>
-        <div className="flex gap-2">
-          <input
-            className="rumi-input flex-1"
-            placeholder={placeholder}
-            value={val}
-            onChange={(e) => setVal(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); addTag(field, val); setVal(""); }
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => { addTag(field, val); setVal(""); }}
-            className="btn-ghost"
-            style={{ padding: "0.5rem 0.875rem", fontSize: "0.8125rem" }}
-          >
-            Add
-          </button>
-        </div>
-      </div>
-    );
   }
 
   // ── Project helpers ────────────────────────────────────────────────────────
@@ -179,7 +189,12 @@ export default function OnboardingPage() {
       <Input label="City / Country" fkey="location" placeholder="e.g. Karachi, Pakistan" />
       <div className="flex flex-col gap-1.5">
         <span className="uppercase-label">Your roles (Enter to add)</span>
-        <TagInput field="roles" placeholder="e.g. Full Stack Developer" />
+        <TagInput
+          tags={form.roles}
+          onAdd={(v) => addTag("roles", v)}
+          onRemove={(v) => removeTag("roles", v)}
+          placeholder="e.g. Full Stack Developer"
+        />
       </div>
     </div>,
 
@@ -240,7 +255,12 @@ export default function OnboardingPage() {
     <div key="drive" className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
         <span className="uppercase-label">Interests & passions (Enter to add)</span>
-        <TagInput field="interests" placeholder="e.g. Rumi, Turkish culture, Chess" />
+        <TagInput
+          tags={form.interests}
+          onAdd={(v) => addTag("interests", v)}
+          onRemove={(v) => removeTag("interests", v)}
+          placeholder="e.g. Rumi, Turkish culture, Chess"
+        />
       </div>
       <Textarea label="Immediate goal (this week / month)" fkey="immediate_goal" placeholder="e.g. Win the Google Gemini Challenge" />
       <Textarea label="Long-term goal" fkey="long_term_goal" placeholder="e.g. Build WEBXES into a US/Pakistan LLC" />
@@ -252,7 +272,12 @@ export default function OnboardingPage() {
       <Textarea label="How do you work best?" fkey="work_style" placeholder="e.g. Late-night deep work sprints, SDD methodology" />
       <div className="flex flex-col gap-1.5">
         <span className="uppercase-label">What breaks your focus? (Enter to add)</span>
-        <TagInput field="focus_breakers" placeholder="e.g. Doom-scrolling, noise" />
+        <TagInput
+          tags={form.focus_breakers}
+          onAdd={(v) => addTag("focus_breakers", v)}
+          onRemove={(v) => removeTag("focus_breakers", v)}
+          placeholder="e.g. Doom-scrolling, noise"
+        />
       </div>
       <Textarea label="How should Rumi talk to you?" fkey="communication_preference" placeholder="e.g. Gentle but firm — inspire, don't nag" />
       <Input label="Faith / religion (optional)" fkey="faith" placeholder="e.g. Practicing Muslim" />
@@ -357,10 +382,7 @@ export default function OnboardingPage() {
           {step < steps.length - 1 ? (
             <button
               onClick={() => setStep((s) => s + 1)}
-              disabled={
-                (step === 0 && !form.name.trim()) ||
-                (step === 1 && form.projects.every(p => !p.name.trim()))
-              }
+              disabled={step === 0 && !form.name.trim()}
               className="btn-primary flex-1"
             >
               Continue

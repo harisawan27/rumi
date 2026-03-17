@@ -262,9 +262,9 @@ class StateMonitor:
                         await on_deep_focus()
 
                 # ── Face watcher — runs every 10s, non-blocking ──────────
-                # Runs regardless of owner_photo_url — empty room / blackout
-                # must still trigger guest mode even without a reference photo.
-                if self._current_frame:
+                # Only runs after owner has uploaded a profile photo.
+                # Before that, guest mode is never triggered (new accounts are safe).
+                if self._current_frame and self._owner_photo_url:
                     self._face_check_counter += 1
                     if self._face_check_counter >= self._face_check_interval:
                         self._face_check_counter = 0
@@ -289,27 +289,6 @@ class StateMonitor:
             return
         try:
             frame_b64 = base64.b64encode(self._current_frame).decode()
-
-            # ── No owner photo: fall back to presence-only detection ─────────
-            if not self._owner_photo_url:
-                fer_has_face = self._local.has_face(self._current_frame)
-                if fer_has_face:
-                    # Someone is there but we can't verify who — treat as unknown
-                    self._non_owner_streak += 1
-                    self._last_face_label = "guest"
-                else:
-                    self._non_owner_streak += 1
-                    self._last_face_label = "nobody"
-                if self._non_owner_streak >= self._non_owner_threshold and not self._guest_active:
-                    self._guest_active = True
-                    logger.info("StateMonitor: guest mode — no owner photo to verify against")
-                    if self._websocket:
-                        await self._websocket.send_text(json.dumps({
-                            "type": "guest_detected", "confidence": 0.5,
-                        }))
-                    if self._on_guest_detected:
-                        asyncio.create_task(self._on_guest_detected())
-                return
 
             from src.vision.face_matcher import compare_faces
 
