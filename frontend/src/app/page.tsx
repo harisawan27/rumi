@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import {
-  signInWithRedirect, getRedirectResult,
+  signInWithRedirect, onAuthStateChanged,
   GoogleAuthProvider, UserCredential,
 } from "firebase/auth";
 import { useRouter } from "next/navigation";
@@ -22,18 +22,20 @@ export default function SignInPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Handle redirect result on page load (mobile flow)
+  // Listen for auth state — fires after redirect completes or on existing session
   useEffect(() => {
     setLoading(true);
-    getRedirectResult(auth)
-      .then(async (result) => {
-        if (!result) { setLoading(false); return; }
-        await finishSignIn(result, router);
-      })
-      .catch((err: unknown) => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) { setLoading(false); return; }
+      try {
+        await finishSignIn({ user } as UserCredential, router);
+      } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Sign-in failed");
         setLoading(false);
-      });
+      }
+      unsub();
+    });
+    return () => unsub();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
