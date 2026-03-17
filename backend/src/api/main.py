@@ -400,7 +400,7 @@ def _make_genai_client():
         return _genai.Client(
             vertexai=True,
             project=project,
-            location=os.getenv("GOOGLE_CLOUD_REGION", "us-central1"),
+            location=os.getenv("GOOGLE_CLOUD_REGION", "asia-south1"),
         )
     return _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
