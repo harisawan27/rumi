@@ -2,17 +2,12 @@
 
 import { useState, useEffect } from "react";
 import {
-  signInWithPopup, signInWithRedirect, getRedirectResult,
+  signInWithRedirect, getRedirectResult,
   GoogleAuthProvider, UserCredential,
 } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { auth } from "@/services/firebase";
 import { verifyAuth, getIdentity } from "@/services/session";
-
-function isMobileBrowser() {
-  if (typeof navigator === "undefined") return false;
-  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-}
 
 async function finishSignIn(result: UserCredential, router: ReturnType<typeof useRouter>) {
   const idToken = await result.user.getIdToken();
@@ -47,14 +42,8 @@ export default function SignInPage() {
     setError(null);
     try {
       const provider = new GoogleAuthProvider();
-      if (isMobileBrowser()) {
-        // Mobile: redirect flow avoids popup issues on Chrome/Safari
-        await signInWithRedirect(auth, provider);
-        // Page navigates away — finishSignIn runs in the useEffect above on return
-      } else {
-        const result = await signInWithPopup(auth, provider);
-        await finishSignIn(result, router);
-      }
+      await signInWithRedirect(auth, provider);
+      // Page navigates away — finishSignIn runs in the useEffect above on return
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign-in failed");
       setLoading(false);
