@@ -278,20 +278,6 @@ export default function DashboardPage() {
   useEffect(() => { micEnabledRef.current = micEnabled; }, [micEnabled]);
   useEffect(() => { cameraEnabledRef.current = cameraEnabled; }, [cameraEnabled]);
 
-  // Prime the mic with optimal audio constraints once on mount.
-  // Chrome reuses the same device config — noise suppression + AGC set here
-  // carry over into Web Speech API for the whole session.
-  useEffect(() => {
-    navigator.mediaDevices?.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
-    }).then(stream => stream.getTracks().forEach(t => t.stop()))
-      .catch(() => {}); // silently ignore if denied — doesn't affect existing flow
-  }, []);
 
   // Space bar shortcut for mic
   useEffect(() => {
@@ -628,6 +614,9 @@ export default function DashboardPage() {
     // Pointing at something
     "show you", "showing you", "what is this", "what's this", "attach",
     "look at this", "can you see this", "see this", "what do you see",
+    // Hand / object queries
+    "in my hand", "what's in my", "what is in my", "can you see my",
+    "what am i holding", "what is this i",
     // Identity / face questions
     "who is in front", "who do you see", "who am i", "can you see me",
     "do you see me", "who is this", "look at me", "see me",
