@@ -2,40 +2,33 @@
 
 import { useState, useEffect } from "react";
 import {
-  signInWithRedirect, onAuthStateChanged,
-  GoogleAuthProvider, UserCredential,
+  signInWithPopup, signInWithRedirect, getRedirectResult,
+  GoogleAuthProvider,
 } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { auth } from "@/services/firebase";
 import { verifyAuth, getIdentity } from "@/services/session";
 
-async function finishSignIn(result: UserCredential, router: ReturnType<typeof useRouter>) {
-  const idToken = await result.user.getIdToken();
-  sessionStorage.setItem("id_token", idToken);
-  await verifyAuth();
-  const identity = await getIdentity();
-  router.push(identity ? "/dashboard" : "/onboarding");
-}
-
 export default function SignInPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  // Listen for auth state — fires after redirect completes or on existing session
+  // Handle redirect result on page load (fallback flow for popup-blocked browsers)
   useEffect(() => {
-    setLoading(true);
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      if (!user) { setLoading(false); return; }
-      try {
-        await finishSignIn({ user } as UserCredential, router);
-      } catch (err: unknown) {
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (!result) { setLoading(false); return; }
+        const idToken = await result.user.getIdToken();
+        sessionStorage.setItem("id_token", idToken);
+        await verifyAuth();
+        const identity = await getIdentity();
+        router.push(identity ? "/dashboard" : "/onboarding");
+      })
+      .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Sign-in failed");
         setLoading(false);
-      }
-      unsub();
-    });
-    return () => unsub();
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -44,8 +37,24 @@ export default function SignInPage() {
     setError(null);
     try {
       const provider = new GoogleAuthProvider();
-      await signInWithRedirect(auth, provider);
-      // Page navigates away — finishSignIn runs in the useEffect above on return
+      try {
+        // Primary: popup (instant, works on desktop + most mobile)
+        const result = await signInWithPopup(auth, provider);
+        const idToken = await result.user.getIdToken();
+        sessionStorage.setItem("id_token", idToken);
+        await verifyAuth();
+        const identity = await getIdentity();
+        router.push(identity ? "/dashboard" : "/onboarding");
+      } catch (popupErr: unknown) {
+        // Fallback: redirect for browsers that block popups
+        const code = (popupErr as { code?: string })?.code ?? "";
+        if (code === "auth/popup-blocked" || code === "auth/popup-closed-by-user") {
+          await signInWithRedirect(auth, provider);
+          // page navigates away — getRedirectResult in useEffect handles the return
+        } else {
+          throw popupErr;
+        }
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign-in failed");
       setLoading(false);
@@ -93,7 +102,6 @@ export default function SignInPage() {
 
         {/* Main card */}
         <div className="glass rounded-2xl p-8 text-center">
-          {/* Title */}
           <h1
             className="font-display text-gold mb-1"
             style={{ fontSize: "3.5rem", fontWeight: 300, lineHeight: 1.1, letterSpacing: "0.04em" }}
@@ -102,7 +110,6 @@ export default function SignInPage() {
           </h1>
           <p className="uppercase-label mb-6">Present before you speak</p>
 
-          {/* Divider with Arabic ornament */}
           <div className="flex items-center gap-3 mb-6">
             <div className="flex-1 h-px bg-gradient-to-r from-transparent to-[var(--border)]" />
             <span style={{ color: "var(--gold-dim)", fontSize: "1rem" }}>&#10022;</span>
@@ -114,7 +121,6 @@ export default function SignInPage() {
             witnesses, understands, and speaks only when it matters.
           </p>
 
-          {/* Sign-in button */}
           <button
             onClick={handleSignIn}
             disabled={loading}
@@ -147,7 +153,6 @@ export default function SignInPage() {
           )}
         </div>
 
-        {/* Footer */}
         <p className="text-center mt-6 text-xs" style={{ color: "var(--muted)" }}>
           Your identity is your own. Rumi only remembers what you share.
         </p>
