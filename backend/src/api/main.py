@@ -1035,6 +1035,10 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 mgr._voice_gen += 1
                 if mgr._speak_task and not mgr._speak_task.done():
                     mgr._speak_task.cancel()
+                # Also cancel greeting — it wakes at 1.5s and can fire after suppression
+                # opens, producing a second simultaneous audio stream.
+                if mgr._greeting_task and not mgr._greeting_task.done():
+                    mgr._greeting_task.cancel()
                 logger.info("ws_observe: audio_interrupt from frontend — suppressed + cancelled")
             elif msg.get("type") == "user_text":
                 # Web Speech API transcript — Flash generates text (single source of truth),
@@ -1060,6 +1064,13 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     mgr._suppress_audio = True
                     mgr._is_responding = True
                     mgr._voice_gen += 1
+
+                    # Cancel greeting task — it sleeps 1.5s then fires; if user speaks
+                    # within that window (or if greeting audio overlaps the user query),
+                    # it creates a second concurrent Gemini audio stream. ROOT CAUSE of
+                    # double-speak when user talks shortly after session starts.
+                    if mgr._greeting_task and not mgr._greeting_task.done():
+                        mgr._greeting_task.cancel()
 
                     # Cancel any active speak task — works for both barge-in and normal flow
                     if mgr._speak_task and not mgr._speak_task.done():

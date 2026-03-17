@@ -249,7 +249,18 @@ export default function DashboardPage() {
 
   // Reset emotion + open conversation window when Rumi finishes speaking
   useEffect(() => {
-    if (prevSpeakingRef.current && !speaking) {
+    if (!prevSpeakingRef.current && speaking) {
+      // Rumi just started speaking — kill the main listener immediately so it
+      // cannot transcribe Rumi's own speaker output and send a phantom user_text.
+      // This is the root cause of double-speak: listener stays active after the
+      // conversation window, picks up Rumi's audio, fires onend → sendToRumi.
+      if (!isTalkingRef.current) {
+        transcriptRef.current = "";          // discard any partial transcript
+        recognitionRef.current?.abort();     // onend fires with empty text → no send
+        recognitionRef.current = null;
+        stopWakeWordListener();
+      }
+    } else if (prevSpeakingRef.current && !speaking) {
       setRumiEmotion("neutral");
       // Conversation window — skip wake word, listen immediately for follow-up
       if (micEnabledRef.current && !isTalkingRef.current) {

@@ -182,7 +182,16 @@ class SessionManager:
         self._has_greeted = True
         try:
             await asyncio.sleep(1.5)  # let WS stabilise
+            # Safety valve: if user already spoke during the sleep, skip greeting.
+            # The user_text handler cancels this task, but race-conditions can slip
+            # through if the cancel arrives just after the sleep resolves.
+            if self._is_responding:
+                logger.info("SessionManager: greeting suppressed — user already speaking")
+                return
             async with self._gemini_lock:
+                if self._is_responding:
+                    logger.info("SessionManager: greeting suppressed inside lock — user speaking")
+                    return
                 await self.ensure_gemini_connected()
                 await self._gemini.query(
                     f"You have just started a new observation session with {self._owner_name}. "
