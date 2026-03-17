@@ -391,6 +391,20 @@ def delete_known_person_route(person_id: str, uid: str = Depends(get_current_uid
 # Canvas helpers (Phase 3 + 5)
 # ---------------------------------------------------------------------------
 
+def _make_genai_client():
+    """Return a genai Client using Vertex AI when GOOGLE_CLOUD_PROJECT is set,
+    otherwise fall back to GEMINI_API_KEY. Mirrors live_client.py auth logic."""
+    from google import genai as _genai
+    project = os.getenv("GOOGLE_CLOUD_PROJECT")
+    if project:
+        return _genai.Client(
+            vertexai=True,
+            project=project,
+            location=os.getenv("GOOGLE_CLOUD_REGION", "us-central1"),
+        )
+    return _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+
 def _make_title(query: str, max_words: int = 5) -> str:
     """Derive a short canvas title from the user query."""
     q = query.strip().rstrip("?!.")
@@ -457,7 +471,7 @@ async def _flash_detect_tool(text: str) -> dict | None:
     or None if no tool intent detected.
     """
     from google import genai as _genai
-    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = _make_genai_client()
 
     prompt = f"""The user said: "{text}"
 
@@ -509,7 +523,7 @@ async def _flash_smart(
     from google.genai import types as _types
     import base64 as _b64
 
-    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = _make_genai_client()
     identity_block = f"{system_prompt}\n\n---\n\n" if system_prompt else ""
 
     context_block = ""
@@ -642,7 +656,7 @@ async def _identify_face(text: str, image_b64: str, system_prompt: str) -> str:
     from google.genai import types as _types
     import base64 as _b64
 
-    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = _make_genai_client()
     prompt = (
         f"{system_prompt}\n\n---\n\n"
         f'The user asked: "{text}"\n\n'
@@ -678,7 +692,7 @@ async def _recite_poem(text: str, system_prompt: str) -> str:
     from google import genai as _genai
     from google.genai import types as _types
 
-    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = _make_genai_client()
     prompt = (
         f"{system_prompt}\n\n---\n\n"
         f'The user asked: "{text}"\n\n'
@@ -722,7 +736,7 @@ async def _flash_text_only(text: str, system_prompt: str = "") -> str:
     for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
         try:
             logger.info("_flash_text_only: trying %s for: %.60s", model, text)
-            client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+            client = _make_genai_client()
             response = await client.aio.models.generate_content(
                 model=model,
                 contents=prompt,
@@ -763,7 +777,7 @@ async def _flash_with_image(text: str, image_b64: str, system_prompt: str = "") 
     from google import genai as _genai
     from google.genai import types as _types
 
-    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = _make_genai_client()
     image_bytes = _b64.b64decode(image_b64)
     identity_block = f"{system_prompt}\n\n---\n\n" if system_prompt else ""
     text_prompt = (
@@ -800,7 +814,7 @@ async def _flash_followup(text: str, context: list, image_b64: str | None, syste
     from google.genai import types as _types
     import base64 as _b64
 
-    client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = _make_genai_client()
     identity_block = f"{system_prompt}\n\n---\n\n" if system_prompt else ""
 
     context_block = ""
