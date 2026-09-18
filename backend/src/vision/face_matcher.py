@@ -8,6 +8,7 @@ Usage:
     if result.status == FaceVerificationStatus.OWNER:
         ...
 """
+import asyncio
 import base64
 import json
 import logging
@@ -40,6 +41,70 @@ class FaceMatchResult:
 
 
 _OWNER_THRESHOLD = 0.65   # below this → treat as unknown/guest
+
+
+async def fetch_reference_photo_b64(photo_url: str) -> Optional[str]:
+    """Securely load reference portrait bytes.
+
+    Supports:
+    - Base64 data URIs ("data:image/jpeg;base64,...")
+    - Private Cloud Storage URIs ("gs://bucket/path") via server-side admin credentials
+    - Firebase Storage URLs ("https://firebasestorage.googleapis.com/...") via admin credentials
+    - Standard HTTPS URLs with fallback to authenticated download
+    """
+    if not photo_url:
+        return None
+
+    if photo_url.startswith("data:"):
+        parts = photo_url.split(",", 1)
+        return parts[1] if len(parts) > 1 else None
+
+    # Server-side Firebase Admin Storage access for private blobs
+    is_storage_target = (
+        photo_url.startswith("gs://")
+        or "firebasestorage.googleapis.com" in photo_url
+        or "storage.googleapis.com" in photo_url
+    )
+
+    if is_storage_target:
+        try:
+            from firebase_admin import storage as _fb_storage
+            import urllib.parse
+            bucket = _fb_storage.bucket()
+
+            blob_path = None
+            if photo_url.startswith("gs://"):
+                parts = photo_url[5:].split("/", 1)
+                if len(parts) == 2:
+                    blob_path = parts[1]
+            elif "firebasestorage.googleapis.com" in photo_url:
+                if "/o/" in photo_url:
+                    raw_path = photo_url.split("/o/")[1].split("?")[0]
+                    blob_path = urllib.parse.unquote(raw_path)
+            elif "storage.googleapis.com" in photo_url and "Signature=" not in photo_url:
+                parts = photo_url.split("storage.googleapis.com/")[1].split("/", 1)
+                if len(parts) == 2:
+                    blob_path = parts[1].split("?")[0]
+
+            if blob_path:
+                blob = bucket.blob(blob_path)
+                data = await asyncio.get_event_loop().run_in_executor(None, blob.download_as_bytes)
+                if data:
+                    return base64.b64encode(data).decode()
+        except Exception as exc:
+            logger.debug("fetch_reference_photo_b64: admin storage fetch failed (%s) — falling back to HTTP", exc)
+
+    # Remote HTTP URL (including signed URLs or third-party avatars)
+    if photo_url.startswith("http://") or photo_url.startswith("https://"):
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                ref_resp = await client.get(photo_url)
+                ref_resp.raise_for_status()
+                return base64.b64encode(ref_resp.content).decode()
+        except Exception as exc:
+            logger.warning("fetch_reference_photo_b64: HTTP fetch failed: %s", exc)
+
+    return None
 
 
 async def compare_faces(
@@ -81,14 +146,16 @@ async def compare_faces(
         )
 
     try:
-        # Load owner reference photo — supports data URIs and remote URLs
-        if owner_photo_url.startswith("data:"):
-            ref_b64 = owner_photo_url.split(",", 1)[1]
-        else:
-            async with httpx.AsyncClient(timeout=8) as client:
-                ref_resp = await client.get(owner_photo_url)
-                ref_resp.raise_for_status()
-                ref_b64 = base64.b64encode(ref_resp.content).decode()
+        ref_b64 = await fetch_reference_photo_b64(owner_photo_url)
+        if not ref_b64:
+            logger.warning("compare_faces: could not retrieve reference photo for %s", owner_photo_url[:60])
+            return FaceMatchResult(
+                is_owner=False,
+                confidence=0.0,
+                reason="could_not_fetch_reference",
+                face_detected=False,
+                status=FaceVerificationStatus.VERIFICATION_UNAVAILABLE,
+            )
 
         prompt = (
             "You are a visual presence verification helper. "

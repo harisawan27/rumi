@@ -33,3 +33,28 @@ async def test_face_matcher_no_face_detected():
         result = await compare_faces("data:image/jpeg;base64,123", "data:image/jpeg;base64,456")
         assert not result.is_owner
         assert not result.face_detected
+
+
+@pytest.mark.asyncio
+async def test_fetch_reference_photo_b64_data_uri():
+    from src.vision.face_matcher import fetch_reference_photo_b64
+    b64 = await fetch_reference_photo_b64("data:image/jpeg;base64,QUJDREVGRw==")
+    assert b64 == "QUJDREVGRw=="
+
+
+@pytest.mark.asyncio
+async def test_fetch_reference_photo_b64_private_gs_path():
+    from src.vision.face_matcher import fetch_reference_photo_b64
+    from unittest.mock import MagicMock
+
+    mock_blob = MagicMock()
+    mock_blob.download_as_bytes.return_value = b"test_jpeg_bytes"
+
+    mock_bucket = MagicMock()
+    mock_bucket.blob.return_value = mock_blob
+
+    with patch("firebase_admin.storage.bucket", return_value=mock_bucket):
+        b64 = await fetch_reference_photo_b64("gs://my-private-bucket/known-people/user1/test.jpg")
+        mock_bucket.blob.assert_called_with("known-people/user1/test.jpg")
+        import base64
+        assert b64 == base64.b64encode(b"test_jpeg_bytes").decode()

@@ -195,6 +195,7 @@ async def generate_intervention(event_type: str, uid: str, session_id: str) -> s
 
     event_type: "frustrated" | "coding_block"
     Returns the intervention text string.
+    """
     token = _current_uid_var.set(uid)
     try:
         agent = _get_agent()

@@ -65,6 +65,14 @@ Session summary:
 JSON patch (or {{}} if nothing new):"""
 
 
+ALLOWED_CANDIDATE_FIELDS = {
+    "work_style", "immediate_goal", "long_term_goal", "driving_fear",
+    "wellness_trigger", "projects", "interests", "focus_breakers",
+    "communication_preference", "companion_language", "companion_tone",
+    "student_context", "environment",
+}
+
+
 class MemoryExtractor:
     """Extracts new facts from a session and patches the user's identity."""
 
@@ -146,29 +154,43 @@ class MemoryExtractor:
             logger.info("MemoryExtractor: nothing new learned this session")
             return {}
 
-
         # Save inferred memory candidates with provenance without destroying confirmed profile
         try:
             now = datetime.now(timezone.utc)
             candidates_ref = db.collection("users").document(uid).collection("memory_candidates")
+            saved_count = 0
             for field_name, value in patch.items():
-                if field_name in ("last_updated", "user_id"):
+                if field_name not in ALLOWED_CANDIDATE_FIELDS:
+                    logger.debug("MemoryExtractor: skipping unrecognized field '%s'", field_name)
                     continue
-                candidates_ref.add({
-                    "field": field_name,
-                    "suggested_value": value,
-                    "source_session_id": session_id,
-                    "confidence": 0.75,
-                    "status": "inferred",
-                    "created_at": now,
-                })
+
+                # De-duplication check: avoid duplicate candidate spam
+                existing = list(candidates_ref.where("field", "==", field_name).where("status", "==", "inferred").limit(5).stream())
+                is_duplicate = False
+                for doc in existing:
+                    d = doc.to_dict()
+                    if d.get("suggested_value") == value:
+                        doc.reference.update({"updated_at": now, "confidence": min(1.0, d.get("confidence", 0.75) + 0.05)})
+                        is_duplicate = True
+                        break
+
+                if not is_duplicate:
+                    candidates_ref.add({
+                        "field": field_name,
+                        "suggested_value": value,
+                        "source_session_id": session_id,
+                        "confidence": 0.75,
+                        "status": "inferred",
+                        "created_at": now,
+                    })
+                    saved_count += 1
+
             # Touch timestamp on user document only
             db.collection("users").document(uid).update({"last_memory_extraction_at": now})
             logger.info(
-                "MemoryExtractor: saved %d inferred memory candidate(s) for session %s: %s",
-                len(patch),
+                "MemoryExtractor: saved/updated %d inferred memory candidate(s) for session %s",
+                saved_count,
                 session_id,
-                list(patch.keys()),
             )
         except Exception as exc:
             logger.warning("MemoryExtractor: Firestore candidate storage failed: %s", exc)

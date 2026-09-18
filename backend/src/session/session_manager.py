@@ -70,6 +70,8 @@ class SessionManager:
         self._gemini_connecting: bool = False  # guard against concurrent connects
         # Serialise watchman _speak calls — prevents concurrent trigger audio
         self._gemini_lock: asyncio.Lock = asyncio.Lock()
+        # Atomic lock to guarantee single Watchman loop creation under concurrency
+        self._watchman_lock: asyncio.Lock = asyncio.Lock()
         # Greeting task ref — cancelled immediately when user speaks
         self._greeting_task: Optional[asyncio.Task] = None
         # When True, _forward_audio drops bytes AND _receive_loop skips task creation
@@ -186,7 +188,7 @@ class SessionManager:
         if self._status == "paused":
             logger.info("SessionManager: WebSocket reconnected but session is paused — skipping watchman + greeting")
             return
-        self.ensure_watchman_started()
+        await self.ensure_watchman_started()
         self._greeting_task = asyncio.create_task(self._send_greeting())
         logger.info("SessionManager: WebSocket ready — greeting queued")
 
@@ -264,7 +266,7 @@ class SessionManager:
             if tracker:
                 tracker.reset_clock()
         # Restart the watchman loop with single task guarantee
-        self.ensure_watchman_started()
+        await self.ensure_watchman_started()
         # Send greeting so Rumi acknowledges the (re)start
         self._greeting_task = asyncio.create_task(self._send_greeting())
         logger.info("SessionManager: session resumed — %s", self._session_id)
@@ -384,60 +386,61 @@ class SessionManager:
     # Watchman loop (T029 — wires Trigger A; T034 — Trigger B added in Phase 6)
     # -----------------------------------------------------------------------
 
-    def ensure_watchman_started(self) -> None:
+    async def ensure_watchman_started(self) -> None:
         """Ensure exactly ONE Watchman observation task is active for this session.
 
         Guards against duplicate tasks on WebSocket reconnects, resume_session calls,
-        or race conditions.
+        or race conditions via asyncio.Lock.
         """
-        if self._watchman_task is not None and not self._watchman_task.done():
-            logger.debug("SessionManager: Watchman task already running — skipping duplicate start")
-            return
+        async with self._watchman_lock:
+            if self._watchman_task is not None and not self._watchman_task.done():
+                logger.debug("SessionManager: Watchman task already running — skipping duplicate start")
+                return
 
-        if self._status != "active":
-            logger.info("SessionManager: skipping Watchman start because session status is '%s'", self._status)
-            return
+            if self._status != "active":
+                logger.info("SessionManager: skipping Watchman start because session status is '%s'", self._status)
+                return
 
-        from src.watchman.state_monitor import StateMonitor
-        from src.watchman.trigger_a import FrustrationTracker
-        from src.watchman.trigger_b import CodingBlockTracker
-        from src.watchman.trigger_c import LongSessionTracker
-        from src.watchman.trigger_e import DeepFocusTracker
+            from src.watchman.state_monitor import StateMonitor
+            from src.watchman.trigger_a import FrustrationTracker
+            from src.watchman.trigger_b import CodingBlockTracker
+            from src.watchman.trigger_c import LongSessionTracker
+            from src.watchman.trigger_e import DeepFocusTracker
 
-        if not hasattr(self, "_state_monitor") or self._state_monitor is None:
-            frustration = FrustrationTracker()
-            coding_block = CodingBlockTracker()
-            long_session = LongSessionTracker()
-            deep_focus = DeepFocusTracker()
+            if not hasattr(self, "_state_monitor") or self._state_monitor is None:
+                frustration = FrustrationTracker()
+                coding_block = CodingBlockTracker()
+                long_session = LongSessionTracker()
+                deep_focus = DeepFocusTracker()
 
-            self._coding_block_tracker = coding_block  # expose for frame updates
-            monitor = StateMonitor(
-                gemini_client=self._gemini,
-                frustration_tracker=frustration,
-                coding_block_tracker=coding_block,
-                long_session_tracker=long_session,
-                deep_focus_tracker=deep_focus,
+                self._coding_block_tracker = coding_block  # expose for frame updates
+                monitor = StateMonitor(
+                    gemini_client=self._gemini,
+                    frustration_tracker=frustration,
+                    coding_block_tracker=coding_block,
+                    long_session_tracker=long_session,
+                    deep_focus_tracker=deep_focus,
+                )
+                monitor.set_websocket(self._websocket)
+                monitor.set_uid(self._uid)
+                if self._owner_photo_url:
+                    monitor.set_owner_photo(self._owner_photo_url)
+                monitor.set_guest_callback(self._fire_guest_detected)
+                monitor.set_owner_returned_callback(self.reset_guest_intervention)
+                self._state_monitor = monitor
+            else:
+                self._state_monitor.set_websocket(self._websocket)
+
+            self._watchman_task = asyncio.create_task(
+                self._state_monitor.run_loop(
+                    on_frustration=self._fire_trigger_a,
+                    on_coding_block=self._fire_trigger_b,
+                    on_long_session=self._fire_trigger_c,
+                    on_deep_focus=self._fire_trigger_e,
+                    on_soft_frustration=self._soft_frustration_checkin,
+                )
             )
-            monitor.set_websocket(self._websocket)
-            monitor.set_uid(self._uid)
-            if self._owner_photo_url:
-                monitor.set_owner_photo(self._owner_photo_url)
-            monitor.set_guest_callback(self._fire_guest_detected)
-            monitor.set_owner_returned_callback(self.reset_guest_intervention)
-            self._state_monitor = monitor
-        else:
-            self._state_monitor.set_websocket(self._websocket)
-
-        self._watchman_task = asyncio.create_task(
-            self._state_monitor.run_loop(
-                on_frustration=self._fire_trigger_a,
-                on_coding_block=self._fire_trigger_b,
-                on_long_session=self._fire_trigger_c,
-                on_deep_focus=self._fire_trigger_e,
-                on_soft_frustration=self._soft_frustration_checkin,
-            )
-        )
-        logger.info("SessionManager: Watchman loop started (single guarded task)")
+            logger.info("SessionManager: Watchman loop started (single guarded task)")
 
     def stop_watchman(self) -> None:
         """Stop and cancel the active Watchman task and perception loop."""
@@ -449,9 +452,9 @@ class SessionManager:
             self._watchman_task = None
             logger.info("SessionManager: Watchman task stopped and cancelled")
 
-    def start_watchman(self) -> None:
+    async def start_watchman(self) -> None:
         """Backward-compatible entry point: safely delegates to ensure_watchman_started."""
-        self.ensure_watchman_started()
+        await self.ensure_watchman_started()
 
     async def _fire_trigger_a(self) -> None:
         """Generate Trigger A intervention via ADK Agent and dispatch to frontend."""

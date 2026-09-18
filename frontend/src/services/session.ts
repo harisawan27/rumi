@@ -109,8 +109,8 @@ export type WsMessage =
   | { type: "audio_response"; data: string }
   | { type: "transcript"; text: string }
   | { type: "audio_interrupt" }
-  | { type: "canvas_history"; items: { query: string; title: string; content: string; content_type: string; timestamp: string }[] }
-  | { type: "text_response"; text: string; canvas?: boolean; title?: string }
+  | { type: "canvas_history"; items: { query?: string; title: string; content: string; content_type?: string; timestamp?: string }[] }
+  | { type: "text_response"; title: string; content: string; content_type?: string; append?: boolean }
   | { type: "detection_update"; state: string; confidence: number; cues?: string[]; landmarks?: Record<string, number> }
   | { type: "memory_updated"; fields: string[]; message: string }
   | { type: "guest_detected"; name?: string; photo_url?: string; confidence?: number }

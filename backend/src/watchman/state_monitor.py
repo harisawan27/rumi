@@ -204,11 +204,6 @@ class StateMonitor:
                                 pass
                     else:
                         # Throttled idle loop while user is away
-                        if self._websocket:
-                            try:
-                                await self._websocket.send_text(json.dumps({"type": "away_mode"}))
-                            except Exception:
-                                pass
                         continue
 
                 result = await self.run_cycle()

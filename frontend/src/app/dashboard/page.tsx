@@ -887,7 +887,7 @@ export default function DashboardPage() {
       setIsProcessing(false);
       setIsFollowingUp(false);
       setTranscript("");
-      const m = msg as unknown as { type: string; title: string; content: string; content_type?: string; append?: boolean };
+      const m = msg;
       const stamp = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
       const exchange: CanvasExchange = {
         query: lastSentQueryRef.current || "",
@@ -912,7 +912,7 @@ export default function DashboardPage() {
       }
       setCanvasOpen(true);
     } else if (msg.type === "detection_update") {
-      const d = msg as unknown as { type: string; state: string; confidence: number; cues: string[]; landmarks: Record<string, number> };
+      const d = msg;
       // Map detection state → Rumi face emotion (only when Rumi is not speaking)
       if (!speaking) {
         const stateToEmotion: Record<string, "neutral" | "concerned" | "happy" | "thinking"> = {
@@ -927,7 +927,7 @@ export default function DashboardPage() {
       }
       const newEmotions = d.landmarks ?? {};
       setDetection(prev => ({
-        state: d.state, confidence: d.confidence, cues: d.cues,
+        state: d.state, confidence: d.confidence, cues: d.cues ?? [],
         emotions: Object.keys(newEmotions).length > 0 ? newEmotions : (prev?.emotions ?? {}),
       }));
     } else if (msg.type === "memory_updated") {
