@@ -37,9 +37,10 @@ if backend_dir not in sys.path:
 
 import torch
 import gradio as gr
+from fastapi.middleware.cors import CORSMiddleware
 
-# Import core FastAPI application
-from src.api.main import app as fastapi_app
+# Import core FastAPI application and startup event
+from src.api.main import app as fastapi_app, _startup
 
 
 # ---------------------------------------------------------------------------
@@ -165,18 +166,39 @@ with gr.Blocks(theme=theme, title="Project Rumi — AI Core Backend") as demo:
 # Enable queueing for Gradio (essential for ZeroGPU event routing)
 demo.queue()
 
-# Mount Gradio onto the existing FastAPI application
-# FastAPI endpoints (/health, /auth/verify, /session/*, /ws/observe) are preserved
-app = gr.mount_gradio_app(fastapi_app, demo, path="/")
+# Ensure Gradio's internal FastAPI app is instantiated
+if not hasattr(demo, "app") or demo.app is None:
+    demo.app = gr.routes.App.create_app(demo)
+
+# Mount all FastAPI endpoints (/health, /auth/verify, /identity, /session/*, /canvas/*, /ws/observe)
+# directly onto Gradio's internal FastAPI app
+demo.app.include_router(fastapi_app.router)
+
+# Register backend startup event on the Gradio app
+demo.app.on_event("startup")(_startup)
+
+# Configure CORS on the Gradio app for Vercel
+frontend_origins = ["http://localhost:3000", "http://localhost:3001", "http://localhost:8000", "http://localhost:7860"]
+frontend_env = os.getenv("FRONTEND_URL", "")
+if frontend_env:
+    frontend_origins.extend([origin.strip() for origin in frontend_env.split(",") if origin.strip()])
+
+demo.app.add_middleware(
+    CORSMiddleware,
+    allow_origins=frontend_origins,
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
-# Entrypoint for Hugging Face Spaces
+# Entrypoint for Hugging Face Spaces (ZeroGPU + Gradio)
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import uvicorn
-    # Hugging Face Spaces public entrypoint is port 7860.
-    port = int(os.getenv("APP_PORT", 7860))
-    logger.info("Starting Rumi Core on port %d...", port)
-    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+    logger.info("Starting Rumi Core on port 7860 via demo.launch()...")
+    # In ZeroGPU, demo.launch() triggers the dynamic GPU broker handshake
+    # and exposes both the Gradio UI and all mounted FastAPI routes on 0.0.0.0:7860.
+    demo.launch(server_name="0.0.0.0", server_port=7860)
