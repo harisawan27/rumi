@@ -163,34 +163,56 @@ with gr.Blocks(theme=theme, title="Project Rumi — AI Core Backend") as demo:
                 """
             )
 
-# Enable queueing for Gradio (essential for ZeroGPU event routing)
-demo.queue()
+# ---------------------------------------------------------------------------
+# Mount FastAPI Router onto Gradio Server
+# ---------------------------------------------------------------------------
 
-# Ensure Gradio's internal FastAPI app is instantiated
-if not hasattr(demo, "app") or demo.app is None:
-    demo.app = gr.routes.App.create_app(demo)
-
-# Mount all FastAPI endpoints (/health, /auth/verify, /identity, /session/*, /canvas/*, /ws/observe)
-# directly onto Gradio's internal FastAPI app
-demo.app.include_router(fastapi_app.router)
-
-# Register backend startup event on the Gradio app
-demo.app.on_event("startup")(_startup)
-
-# Configure CORS on the Gradio app for Vercel
+# Configure CORS origins for Vercel
 frontend_origins = ["http://localhost:3000", "http://localhost:3001", "http://localhost:8000", "http://localhost:7860"]
 frontend_env = os.getenv("FRONTEND_URL", "")
 if frontend_env:
     frontend_origins.extend([origin.strip() for origin in frontend_env.split(",") if origin.strip()])
 
-demo.app.add_middleware(
-    CORSMiddleware,
-    allow_origins=frontend_origins,
-    allow_origin_regex=r"^https://.*\.vercel\.app$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Intercept Gradio's internal App.create_app so all FastAPI endpoints
+# (/health, /auth/verify, /identity, /session/*, /canvas/*, /ws/observe)
+# and startup events are prepended to the ASGI app when demo.launch() runs.
+import gradio.routes
+
+_original_create_app = gradio.routes.App.create_app
+
+
+def _custom_create_app(*args, **kwargs):
+    app = _original_create_app(*args, **kwargs)
+
+    # Save existing Gradio routes (SSR, static assets, internal endpoints)
+    gradio_routes = list(app.router.routes)
+    app.router.routes.clear()
+
+    # Prepend all FastAPI endpoints so they take priority
+    app.include_router(fastapi_app.router)
+
+    # Re-append Gradio routes
+    app.router.routes.extend(gradio_routes)
+
+    # Register backend startup event on the app
+    app.on_event("startup")(_startup)
+
+    # Add CORS middleware for Vercel
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=frontend_origins,
+        allow_origin_regex=r"^https://.*\.vercel\.app$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    return app
+
+
+gradio.routes.App.create_app = staticmethod(_custom_create_app)
+
+# Enable queueing for Gradio (essential for ZeroGPU event routing)
+demo.queue()
 
 
 # ---------------------------------------------------------------------------
@@ -202,3 +224,4 @@ if __name__ == "__main__":
     # In ZeroGPU, demo.launch() triggers the dynamic GPU broker handshake
     # and exposes both the Gradio UI and all mounted FastAPI routes on 0.0.0.0:7860.
     demo.launch(server_name="0.0.0.0", server_port=7860)
+
