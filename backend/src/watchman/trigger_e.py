@@ -13,10 +13,11 @@ COOLDOWN_SECONDS             = 60          if _DEMO else 2 * 60 * 60
 
 
 class DeepFocusTracker:
-    """Fires Trigger E when Haris sustains focused, calm work for 30+ minutes.
+    """Fires Trigger E when the user sustains focused, calm work for 30+ minutes.
 
-    Counts consecutive cycles where state == 'neutral' (not frustrated, not idle).
-    This is the *positive* trigger — Rumi celebrates productive flow states.
+    Counts consecutive cycles where state in ('focused', 'neutral').
+    Resets when state is 'frustrated', 'idle', or 'coding_block'.
+    This is the positive trigger — Rumi celebrates productive flow states.
     """
 
     def __init__(self):
@@ -26,7 +27,7 @@ class DeepFocusTracker:
 
     def update(self, state_result: StateResult) -> None:
         """Called every Watchman cycle."""
-        if state_result.state == "neutral":
+        if state_result.state in ("focused", "neutral"):
             self._elapsed_seconds += CYCLE_INTERVAL_SECONDS
             logger.debug(
                 "DeepFocusTracker: focus streak=%.0fs threshold=%ds",
@@ -35,7 +36,7 @@ class DeepFocusTracker:
             if self._elapsed_seconds >= DEEP_FOCUS_THRESHOLD_SECONDS:
                 self._check_cooldown_and_arm()
         else:
-            # Any frustration or idle breaks the streak
+            # Any negative state (frustration, coding block) or idle breaks the streak
             self._elapsed_seconds = 0.0
 
     def _check_cooldown_and_arm(self) -> None:

@@ -961,6 +961,12 @@ export default function DashboardPage() {
       setTimeout(() => setMemoryToast(null), 4000);
     } else if (msg.type === "paused") {
       setObservationState("paused");
+    } else if (msg.type === "away_mode") {
+      setObservationState("away");
+    } else if (msg.type === "presence_returned") {
+      setObservationState("active");
+      setMemoryToast("Welcome back! Rumi resumed active observation.");
+      setTimeout(() => setMemoryToast(null), 4000);
     } else if (msg.type === "error") {
       const m = msg as { type: string; code: string };
       if (m.code === "CAMERA_UNAVAILABLE") setObservationState("degraded");
@@ -1509,10 +1515,19 @@ export default function DashboardPage() {
           <span style={{ fontSize: "0.8rem", color: "var(--gold)" }}>
             Guest mode — <strong>{name}</strong> isn&apos;t at their desk. Rumi is here to help.
           </span>
-          <button onClick={() => setGuestMode(false)} style={{
-            marginLeft: 8, background: "none", border: "none", cursor: "pointer",
-            color: "var(--muted)", fontSize: "1rem", lineHeight: 1,
-          }}>×</button>
+          <span style={{
+            marginLeft: 8,
+            fontSize: "0.68rem",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            color: "#ef4444",
+            border: "1px solid rgba(239, 68, 68, 0.4)",
+            borderRadius: 4,
+            padding: "2px 6px",
+            fontWeight: 600,
+          }}>
+            Locked
+          </span>
         </div>
       )}
 

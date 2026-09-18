@@ -83,11 +83,9 @@ def _build_language_instruction(ctx: dict) -> str:
     return " ".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# ADK Tools
-# ---------------------------------------------------------------------------
+import contextvars
 
-_current_uid: str = ""   # set by SessionManager before each agent call
+_current_uid_var: contextvars.ContextVar[str] = contextvars.ContextVar("current_uid", default="")
 
 
 def get_user_context() -> dict:
@@ -95,7 +93,7 @@ def get_user_context() -> dict:
     try:
         from src.memory.firestore_client import get_db
         db = get_db()
-        uid = _current_uid
+        uid = _current_uid_var.get()
         if not uid:
             return {}
         doc = db.collection("users").document(uid).get()
@@ -197,89 +195,89 @@ async def generate_intervention(event_type: str, uid: str, session_id: str) -> s
 
     event_type: "frustrated" | "coding_block"
     Returns the intervention text string.
-    Falls back to a hardcoded message if ADK is unavailable.
-    """
-    global _current_uid
-    _current_uid = uid   # make uid available to the get_user_context tool
-    agent = _get_agent()
-    if agent is None:
-        return _fallback_intervention(event_type)
-
-    ctx      = get_user_context()
-    time_ctx = _time_context(ctx.get("timezone", "UTC"))
-    lang_ctx = _build_language_instruction(ctx)
-    preamble = time_ctx + lang_ctx + " "
-
-    if event_type == "frustrated":
-        prompt = (
-            preamble +
-            "The user seems frustrated — their posture suggests tension or fatigue. "
-            "Use get_user_context to learn their name and projects, then use get_rumi_wisdom if helpful. "
-            "Generate a warm, brief intervention addressed by name (1–2 sentences max)."
-        )
-    elif event_type == "coding_block":
-        prompt = (
-            preamble +
-            "The user appears stuck — their screen hasn't changed in a while. "
-            "Use get_user_context to learn their name and active projects. "
-            "Ask one specific check-in question about their current project (1–2 sentences max)."
-        )
-    elif event_type == "long_session":
-        prompt = (
-            preamble +
-            "The user has been working continuously for over 90 minutes without a break. "
-            "Use get_user_context to learn their name and wellness preference. "
-            "Gently suggest a break. Address them by name, warm and brief (1–2 sentences max)."
-        )
-    else:  # deep_focus
-        prompt = (
-            preamble +
-            "The user has been in deep, uninterrupted focus for over 30 minutes — rare and valuable. "
-            "Use get_user_context to learn their name and current project. "
-            "Celebrate their focus briefly and warmly (1–2 sentences max). Do not interrupt the flow."
-        )
-
+    token = _current_uid_var.set(uid)
     try:
-        from google.adk.runners import Runner
-        from google.adk.sessions import InMemorySessionService
-        from google.genai import types as genai_types
+        agent = _get_agent()
+        if agent is None:
+            return _fallback_intervention(event_type)
 
-        session_service = InMemorySessionService()
-        runner = Runner(
-            agent=agent,
-            app_name="rumi",
-            session_service=session_service,
-        )
+        ctx      = get_user_context()
+        time_ctx = _time_context(ctx.get("timezone", "UTC"))
+        lang_ctx = _build_language_instruction(ctx)
+        preamble = time_ctx + lang_ctx + " "
 
-        await session_service.create_session(
-            app_name="rumi",
-            user_id=uid,
-            session_id=f"{session_id}_{event_type}",
-        )
+        if event_type == "frustrated":
+            prompt = (
+                preamble +
+                "The user seems frustrated — their posture suggests tension or fatigue. "
+                "Use get_user_context to learn their name and projects, then use get_rumi_wisdom if helpful. "
+                "Generate a warm, brief intervention addressed by name (1–2 sentences max)."
+            )
+        elif event_type == "coding_block":
+            prompt = (
+                preamble +
+                "The user appears stuck — their screen hasn't changed in a while. "
+                "Use get_user_context to learn their name and active projects. "
+                "Ask one specific check-in question about their current project (1–2 sentences max)."
+            )
+        elif event_type == "long_session":
+            prompt = (
+                preamble +
+                "The user has been working continuously for over 90 minutes without a break. "
+                "Use get_user_context to learn their name and wellness preference. "
+                "Gently suggest a break. Address them by name, warm and brief (1–2 sentences max)."
+            )
+        else:  # deep_focus
+            prompt = (
+                preamble +
+                "The user has been in deep, uninterrupted focus for over 30 minutes — rare and valuable. "
+                "Use get_user_context to learn their name and current project. "
+                "Celebrate their focus briefly and warmly (1–2 sentences max). Do not interrupt the flow."
+            )
 
-        response_parts = []
-        async for event in runner.run_async(
-            user_id=uid,
-            session_id=f"{session_id}_{event_type}",
-            new_message=genai_types.Content(
-                role="user",
-                parts=[genai_types.Part(text=prompt)],
-            ),
-        ):
-            if event.is_final_response() and event.content:
-                for part in event.content.parts:
-                    if hasattr(part, "text") and part.text:
-                        response_parts.append(part.text)
+        try:
+            from google.adk.runners import Runner
+            from google.adk.sessions import InMemorySessionService
+            from google.genai import types as genai_types
 
-        text = "".join(response_parts).strip()
-        if text:
-            logger.info("[RUMI CORE] Agent [%s]: generated intervention (%d chars)", event_type, len(text))
-            return text
+            session_service = InMemorySessionService()
+            runner = Runner(
+                agent=agent,
+                app_name="rumi",
+                session_service=session_service,
+            )
 
-    except Exception as exc:
-        logger.warning("[RUMI CORE] Agent invocation failed: %s — using fallback", exc)
+            await session_service.create_session(
+                app_name="rumi",
+                user_id=uid,
+                session_id=f"{session_id}_{event_type}",
+            )
 
-    return _fallback_intervention(event_type)
+            response_parts = []
+            async for event in runner.run_async(
+                user_id=uid,
+                session_id=f"{session_id}_{event_type}",
+                new_message=genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part(text=prompt)],
+                ),
+            ):
+                if event.is_final_response() and event.content:
+                    for part in event.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            response_parts.append(part.text)
+
+            text = "".join(response_parts).strip()
+            if text:
+                logger.info("[RUMI CORE] Agent [%s]: generated intervention (%d chars)", event_type, len(text))
+                return text
+
+        except Exception as exc:
+            logger.warning("[RUMI CORE] Agent invocation failed: %s — using fallback", exc)
+
+        return _fallback_intervention(event_type)
+    finally:
+        _current_uid_var.reset(token)
 
 
 def _fallback_intervention(event_type: str) -> str:

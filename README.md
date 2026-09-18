@@ -29,12 +29,12 @@ The Live Agents category requires: real-time audio/vision interaction, natural c
 
 | Requirement | Implementation | Detail |
 |---|---|---|
-| **Real-time Audio** | Gemini 2.5 Flash Native Audio Dialog | Bidirectional voice WebSocket — Rumi speaks and listens in the same session |
-| **Real-time Vision** | Gemini 2.5 Flash dual-frame analysis | Camera frame + screen frame analysed together every 15 seconds |
+| **Real-time Audio** | Gemini Live Audio Dialog | Bidirectional voice WebSocket — Rumi speaks and listens in the same session |
+| **Real-time Vision** | Gemini 3.5 Flash Lite dual-frame analysis | Camera frame + screen frame analysed together every 15 seconds |
 | **Talk naturally** | Web Speech API + 35-variant wake word | Say "Hey Rumi" in any accent, any ambient noise — it activates |
-| **Can be interrupted** | VAD barge-in + `audio_interrupt` WebSocket | A dedicated `SpeechRecognition` listener runs *during* Rumi's speech — any utterance >2 chars triggers immediate audio stop (`AudioBufferSourceNode.stop(0)`, synchronous) **without** needing the wake word. An echo guard prevents Rumi's own last word from triggering a false interrupt. Barge-in during API processing also cancels the in-flight response and processes the new query fresh — no dropped input at any stage |
+| **Can be interrupted** | Audio interrupt + speech detection | Client-side audio playback halts immediately on speech detection, sending `audio_interrupt` over WebSocket to cancel in-flight backend generation |
 | **Gemini Live API** | ✅ GeminiLiveClient | Core voice pipeline — proactive interventions and all spoken responses |
-| **Google ADK** | ✅ Rumi Core Agent | Identity-grounded reasoning — every intervention is ADK-reasoned against Firestore memory |
+| **Google ADK** | ✅ Rumi Core Agent | Identity-grounded reasoning with multi-user isolation — every intervention is ADK-reasoned against Firestore memory |
 | **Hosted on Google Cloud** | ✅ Cloud Run + Firebase Hosting | Backend on Cloud Run (asia-south1), frontend on Firebase Hosting global CDN |
 
 Rumi is not a voice wrapper. It is a continuously running perception-reasoning-speech loop that initiates conversation without being asked, sees your face and screen simultaneously, and yields instantly when you speak over it.
@@ -86,17 +86,15 @@ Every session begins with Rumi greeting you by name, referencing your last sessi
 
 ### Owner Awareness — Rumi Knows Who Is Sitting There
 
-Every 10 seconds, Rumi verifies the person in front of the camera against the owner's registered face using Gemini Vision. This is not face recognition as surveillance — it is presence verification as a trust layer.
+Every 10 seconds, Rumi checks the person in front of the camera against the owner's registered reference photo using Gemini Vision. This is designed as an ambient physical presence check to protect personal context, not as a replacement for primary authentication.
 
-**Identity Verified:** The moment the owner's face is confirmed, a teal shield badge — *Identity Verified* — appears in the dashboard navbar. It fires once per ownership period and re-fires when the owner returns after a guest visit.
+**Identity Verified:** When the owner's presence is verified, a teal shield badge — *Identity Verified* — appears in the dashboard navbar, confirming full access to owner memory and canvas features.
 
-**Empty frame:** If the owner steps away from the camera without a guest present, Rumi marks the state as *nobody* and resets the guest streak. An empty frame never triggers guest mode — only an actual unknown face does.
+**Empty frame / Away Mode:** If the owner steps away from the camera, Rumi transitions to an away state without terminating background observation. An empty frame does not trigger guest lock — only the sustained presence of an unrecognized face activates guest mode.
 
-**Known people:** If a saved person (friend, family) sits down, Rumi recognises them by their stored photo, greets them by name via a toast notification, and does not treat them as a guest. Voice-save works mid-session — say "remember this person as [name]" and Rumi captures the current camera frame, uploads it to Firebase Storage, and saves the identity.
+**Known people:** When a registered friend or colleague sits down, Rumi matches them against their stored reference photo, greets them warmly by name, and keeps personal owner notes private.
 
-**When a guest sits down:** The canvas instantly blurs (backdrop-filter + saturation drop). A red *Guest Mode* badge appears in the navbar. A *Session Locked* overlay covers the workspace. Rumi goes silent on proactive triggers. If the guest asks questions, Rumi responds helpfully to general topics (coding, knowledge, casual chat) but explicitly refuses to share any personal details, project names, session history, or identity information belonging to the owner.
-
-**Profile page lock:** If the guest navigates to `/profile`, they see a gold padlock screen — *"Profile Locked — Rumi has protected it from guest access"* — with no identity data, no editable fields, no known people list.
+**When a guest sits down:** The interface blurs and displays a locked *Guest Mode* banner. Crucially, access control is enforced authoritatively on the backend: all sensitive REST endpoints (`/identity`, `/known-people`, `/canvas/history`, `/session-summaries`) return HTTP 403 Forbidden until the owner's face is verified again. Guests can converse with Rumi on general topics, but owner data remains inaccessible.
 
 **When you return:** The canvas unblurs instantly. The *Identity Verified* badge reappears. Rumi's face expression shifts to *happy* for three seconds, then resets. The session continues exactly where it left off.
 
@@ -254,13 +252,12 @@ This is not a surveillance product. The privacy model is non-negotiable and enfo
 - **Mic off** synchronously kills both the main recognition listener and the wake word standby listener — no async state gap. Rumi **cannot** hear you when mic is off.
 - Persistent **Cam Off / Mic Off** badges in the navbar make privacy state visible at all times without opening any settings.
 
-### Data Minimisation
-- **Video frames** travel from the browser MediaStream directly to Gemini's API. Never written to disk. Never stored in Firestore. Never logged.
-- **Audio** processed in-memory, discarded at session end.
-- **Stored**: plain-text Interaction Summaries and 2-sentence Session Summaries. No images. No audio. No video. Ever.
-- **On-device**: MediaPipe face landmarks never leave the device. Only the interpreted emotional state is sent to the backend.
-
-GDPR-compliant and enterprise-ready by architecture, not by checkbox.
+### Data Minimisation & Security
+- **Ephemeral Observation Frames:** Live webcam and screen frames are processed in-memory for visual triggers and Gemini analysis. They are never written to disk, logged, or stored in application databases.
+- **Reference Portraits:** User and known-people reference photos are stored securely in private Firebase Storage buckets with restricted access controls (never made publicly accessible).
+- **Audio Processing:** Real-time audio streams are processed in-memory and discarded once turns complete.
+- **Persistent Data:** Structured text summaries, identity profile documents, and candidate memory traits stored in Firestore. Inferred memory updates require confidence checks and do not silently overwrite core user profiles.
+- **Authoritative Guest Mode:** The privacy boundary is enforced at both UI and API layers. When guest presence is detected, backend endpoints reject sensitive reads and writes with HTTP 403.
 
 ---
 

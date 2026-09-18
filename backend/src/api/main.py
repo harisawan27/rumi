@@ -101,11 +101,24 @@ def auth_verify(body: VerifyRequest):
 
 
 # ---------------------------------------------------------------------------
-# Identity (T016)
+# Identity & Guest Access Control
 # ---------------------------------------------------------------------------
+
+def _check_guest_mode_restriction(uid: str) -> None:
+    """Security & Privacy guard: Rejects access to sensitive owner profile/canvas data
+    if the physical session is currently in Guest Mode.
+    """
+    mgr = _session_managers.get(uid)
+    if mgr and getattr(mgr, "is_guest_mode", False):
+        raise HTTPException(
+            status_code=403,
+            detail="GUEST_PROTECTED: Active session is locked in Guest Mode.",
+        )
+
 
 @app.get("/identity")
 def get_identity(uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
     from src.identity.identity_loader import load_core_identity, IdentityNotFoundError
     try:
         return load_core_identity(uid)
@@ -151,6 +164,7 @@ class IdentityUpdate(BaseModel):
 
 @app.put("/identity", status_code=200)
 def put_identity(body: IdentityUpdate, uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
     from src.identity.identity_loader import save_identity
     try:
         save_identity(uid, body.model_dump(exclude_none=True))
@@ -168,6 +182,7 @@ def get_session_summaries(
     limit: int = 3,
     uid: str = Depends(get_current_uid),
 ):
+    _check_guest_mode_restriction(uid)
     from src.identity.identity_loader import load_session_summaries
     import os
     max_depth = int(os.getenv("SESSION_SUMMARY_DEPTH", "3"))
@@ -236,7 +251,6 @@ async def pause_session(session_id: str, uid: str = Depends(get_current_uid)):
 async def resume_session(session_id: str, uid: str = Depends(get_current_uid)):
     mgr = _get_session_manager(uid)
     await mgr.resume_session()
-    mgr.start_watchman()
     from datetime import datetime, timezone
     return {
         "session_id": session_id,
@@ -352,6 +366,7 @@ class KnownPersonUpdate(BaseModel):
 
 @app.get("/known-people")
 def list_known_people(uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
     from src.memory.known_people import get_known_people
     try:
         return {"people": get_known_people(uid)}
@@ -361,6 +376,7 @@ def list_known_people(uid: str = Depends(get_current_uid)):
 
 @app.post("/known-people", status_code=201)
 def create_known_person(body: KnownPersonCreate, uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
     from src.memory.known_people import add_known_person
     try:
         person_id = add_known_person(uid, body.model_dump())
@@ -375,6 +391,7 @@ def update_known_person_route(
     body: KnownPersonUpdate,
     uid: str = Depends(get_current_uid),
 ):
+    _check_guest_mode_restriction(uid)
     from src.memory.known_people import update_known_person
     try:
         update_known_person(uid, person_id, body.model_dump(exclude_none=True))
@@ -385,6 +402,7 @@ def update_known_person_route(
 
 @app.delete("/known-people/{person_id}", status_code=200)
 def delete_known_person_route(person_id: str, uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
     from src.memory.known_people import delete_known_person
     try:
         delete_known_person(uid, person_id)
@@ -919,6 +937,7 @@ def _load_canvas_history(uid: str, limit: int = 20) -> list:
 @app.get("/canvas/history")
 async def get_canvas_history(uid: str = Depends(get_current_uid)):
     """REST endpoint — lets frontend fetch history at page load without WS timing dependency."""
+    _check_guest_mode_restriction(uid)
     items = await asyncio.get_event_loop().run_in_executor(None, _load_canvas_history, uid)
     return {"items": items}
 
@@ -984,15 +1003,15 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 frame_bytes = base64.b64decode(msg["data"])
                 if mgr.gemini and mgr.gemini.is_connected:
                     await mgr.gemini.send_frame(frame_bytes)
-                # Update CodingBlockTracker with frame hash (T034/T035)
-                if hasattr(mgr, "_coding_block_tracker") and mgr._coding_block_tracker:
-                    mgr._coding_block_tracker.update_frame(frame_bytes)
-                # Update StateMonitor with latest frame for VisionClient analysis
+                # Update StateMonitor with latest webcam frame for face/posture analysis
                 if hasattr(mgr, "_state_monitor") and mgr._state_monitor:
                     mgr._state_monitor.update_frame(frame_bytes)
             elif msg.get("type") == "screen_frame":
                 import base64
                 screen_bytes = base64.b64decode(msg["data"])
+                # Update CodingBlockTracker with screen frame to detect visual stasis
+                if hasattr(mgr, "_coding_block_tracker") and mgr._coding_block_tracker:
+                    mgr._coding_block_tracker.update_frame(screen_bytes)
                 if hasattr(mgr, "_state_monitor") and mgr._state_monitor:
                     mgr._state_monitor.update_screen_frame(screen_bytes)
                 mgr._latest_screen_frame = screen_bytes

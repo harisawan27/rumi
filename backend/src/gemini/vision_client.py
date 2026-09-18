@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from typing import Optional
 
 from google import genai
 from google.genai import types
@@ -45,9 +46,9 @@ class VisionClient:
     PRIVACY_CHECK: frames sent ephemerally, never persisted.
     """
 
-    def __init__(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        self._client = genai.Client(api_key=api_key)
+    def __init__(self, api_key: Optional[str] = None):
+        self._api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self._client = genai.Client(api_key=self._api_key) if self._api_key else None
 
     async def analyse_frame_with_screen(self, camera_bytes: bytes, screen_bytes: bytes) -> dict:
         """Analyse camera frame + screen frame together for richer context.

@@ -147,17 +147,31 @@ class MemoryExtractor:
             return {}
 
 
-        # Apply patch to Firestore
+        # Save inferred memory candidates with provenance without destroying confirmed profile
         try:
-            patch["last_updated"] = datetime.now(timezone.utc)
-            db.collection("users").document(uid).update(patch)
+            now = datetime.now(timezone.utc)
+            candidates_ref = db.collection("users").document(uid).collection("memory_candidates")
+            for field_name, value in patch.items():
+                if field_name in ("last_updated", "user_id"):
+                    continue
+                candidates_ref.add({
+                    "field": field_name,
+                    "suggested_value": value,
+                    "source_session_id": session_id,
+                    "confidence": 0.75,
+                    "status": "inferred",
+                    "created_at": now,
+                })
+            # Touch timestamp on user document only
+            db.collection("users").document(uid).update({"last_memory_extraction_at": now})
             logger.info(
-                "MemoryExtractor: identity patched — %d field(s) updated: %s",
-                len(patch) - 1,
+                "MemoryExtractor: saved %d inferred memory candidate(s) for session %s: %s",
+                len(patch),
+                session_id,
                 list(patch.keys()),
             )
         except Exception as exc:
-            logger.warning("MemoryExtractor: Firestore patch failed: %s", exc)
+            logger.warning("MemoryExtractor: Firestore candidate storage failed: %s", exc)
             return {}
 
         return {k: v for k, v in patch.items() if k != "last_updated"}

@@ -2,7 +2,7 @@
 
 import { useRef, useEffect, useState } from "react";
 
-export type ObservationState = "active" | "paused" | "degraded";
+export type ObservationState = "active" | "paused" | "degraded" | "away";
 export type RumiEmotion = "neutral" | "concerned" | "happy" | "thinking";
 
 interface Props {
@@ -34,9 +34,11 @@ export default function RumiFace({ state, speaking, emotion = "neutral" }: Props
   const isActive   = state === "active";
   const isPaused   = state === "paused";
   const isDegraded = state === "degraded";
+  const isAway     = state === "away";
 
   const acc =
     isDegraded              ? "#f97316" :
+    isAway                  ? "#eab308" :
     isPaused                ? "#64748b" :
     emotion === "concerned" ? "#fb923c" :
     emotion === "happy"     ? "#fbbf24" :

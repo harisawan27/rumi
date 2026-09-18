@@ -1,6 +1,6 @@
 "use client";
 
-export type ObservationState = "active" | "paused" | "degraded";
+export type ObservationState = "active" | "paused" | "degraded" | "away";
 
 interface Props {
   state: ObservationState;
@@ -10,6 +10,7 @@ const CONFIG: Record<ObservationState, { color: string; label: string }> = {
   active:   { color: "var(--teal)",    label: "Observing" },
   paused:   { color: "var(--muted)",   label: "Paused" },
   degraded: { color: "#f97316",        label: "Camera unavailable" },
+  away:     { color: "#eab308",        label: "Away from desk" },
 };
 
 export default function ObservationIndicator({ state }: Props) {

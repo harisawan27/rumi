@@ -56,6 +56,7 @@ class StateMonitor:
         self._screen_frame: Optional[bytes] = None
         self._focused_streak = 0
         self._idle_streak = 0
+        self._is_away: bool = False
         self._websocket = None
         # ── Face watcher (owner verification + known people) ────────────────
         self._owner_photo_url: Optional[str] = None   # set by session_manager at start
@@ -189,6 +190,27 @@ class StateMonitor:
                 await self._request_frame()
                 await asyncio.sleep(0.3)  # brief wait for frame to arrive
 
+                # Lightweight presence check if in away mode
+                if self._is_away:
+                    local_obs = self._local.observe(self._current_frame) if self._current_frame else None
+                    if local_obs and (local_obs.idle_score < 0.85 or self._local.has_face(self._current_frame)):
+                        self._is_away = False
+                        self._idle_streak = 0
+                        logger.info("StateMonitor: presence returned — transitioning away -> active")
+                        if self._websocket:
+                            try:
+                                await self._websocket.send_text(json.dumps({"type": "presence_returned"}))
+                            except Exception:
+                                pass
+                    else:
+                        # Throttled idle loop while user is away
+                        if self._websocket:
+                            try:
+                                await self._websocket.send_text(json.dumps({"type": "away_mode"}))
+                            except Exception:
+                                pass
+                        continue
+
                 result = await self.run_cycle()
 
                 # Broadcast detection overlay to frontend
@@ -204,15 +226,19 @@ class StateMonitor:
                     except Exception:
                         pass
 
-                # Away mode
+                # Away mode threshold detection
                 if result.state == "idle":
                     self._idle_streak += 1
                     self._focused_streak = 0
                     if self._idle_streak >= AWAY_THRESHOLD_CYCLES:
-                        logger.info("StateMonitor: away mode — idle for ~5 min, stopping loop")
-                        self._idle_streak = 0
-                        self.stop()
-                        break
+                        if not self._is_away:
+                            logger.info("StateMonitor: away mode entered — idle for ~5 min")
+                            self._is_away = True
+                            if self._websocket:
+                                try:
+                                    await self._websocket.send_text(json.dumps({"type": "away_mode"}))
+                                except Exception:
+                                    pass
                 else:
                     self._idle_streak = 0
 
@@ -290,11 +316,15 @@ class StateMonitor:
         try:
             frame_b64 = base64.b64encode(self._current_frame).decode()
 
-            from src.vision.face_matcher import compare_faces
+            from src.vision.face_matcher import compare_faces, FaceVerificationStatus
 
             # ── Step 1: check owner ──────────────────────────────────────────
             result = await compare_faces(self._owner_photo_url, frame_b64)
-            if result.is_owner:
+            if result.status == FaceVerificationStatus.VERIFICATION_UNAVAILABLE:
+                logger.warning("StateMonitor: face verification unavailable (%s) — maintaining state", result.reason)
+                return
+
+            if result.is_owner or result.status == FaceVerificationStatus.OWNER:
                 if self._guest_active:
                     logger.info("StateMonitor: owner returned")
                     if self._websocket:
@@ -310,11 +340,10 @@ class StateMonitor:
                 return
 
             # ── Step 2: owner not confirmed ──────────────────────────────────
-            # Empty room, blackout, different face — all increment the streak.
-            # User wants: if my face isn't in frame every 10s → guest mode.
-            if not result.face_detected:
+            if result.status == FaceVerificationStatus.NO_FACE or not result.face_detected:
                 self._last_face_label = "nobody"
-                logger.debug("StateMonitor: no face in frame — incrementing non_owner_streak")
+                logger.debug("StateMonitor: no face in frame — desk empty")
+                return
             else:
                 # Face present but not owner — check known people before flagging guest
                 if self._uid:
@@ -322,12 +351,12 @@ class StateMonitor:
                         known = await asyncio.get_event_loop().run_in_executor(
                             None, _load_known_people, self._uid
                         )
-                        for person in known:
+                        for person in (known or []):
                             photo_url = person.get("photo_url", "")
                             if not photo_url:
                                 continue
                             match = await compare_faces(photo_url, frame_b64)
-                            if match.is_owner:
+                            if match.is_owner or match.status == FaceVerificationStatus.OWNER:
                                 logger.info("StateMonitor: known person — %s (%s)",
                                             person["name"], person["relationship"])
                                 self._non_owner_streak = 0

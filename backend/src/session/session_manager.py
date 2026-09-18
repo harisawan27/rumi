@@ -13,10 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 def _upload_frame_to_storage(uid: str, frame: bytes) -> str:
-    """Upload a JPEG frame to Firebase Storage and return the public download URL.
+    """Upload a JPEG frame to Firebase Storage and return an access URL.
 
-    Falls back to a base64 data URI if FIREBASE_STORAGE_BUCKET is not configured
-    (e.g. local dev). Runs synchronously — call via run_in_executor.
+    Security & Privacy:
+    Reference photos are kept private in the bucket. We generate a signed URL
+    with expiration instead of making the bucket object public.
+    Falls back to a base64 data URI if FIREBASE_STORAGE_BUCKET is not configured.
     """
     import base64
     import os
@@ -27,15 +29,25 @@ def _upload_frame_to_storage(uid: str, frame: bytes) -> str:
 
     try:
         from firebase_admin import storage as _fb_storage
-        from src.memory.firestore_client import get_db  # ensures firebase_admin is initialized
+        from src.memory.firestore_client import get_db
+        import datetime
+        import time
         get_db()
         bucket = _fb_storage.bucket()
-        import time
         path = f"known-people/{uid}/{int(time.time() * 1000)}.jpg"
         blob = bucket.blob(path)
         blob.upload_from_string(frame, content_type="image/jpeg")
-        blob.make_public()
-        return blob.public_url
+        # Keep private! Generate a signed URL with 7 days expiration
+        try:
+            signed_url = blob.generate_signed_url(
+                version="v4",
+                expiration=datetime.timedelta(days=7),
+                method="GET",
+            )
+            return signed_url
+        except Exception as sign_err:
+            logger.debug("Signed URL generation failed (%s), returning gs path", sign_err)
+            return f"gs://{bucket_name}/{path}"
     except Exception as exc:
         logger.warning("_upload_frame_to_storage: Storage upload failed (%s) — using data URI", exc)
         b64 = base64.b64encode(frame).decode()
@@ -78,8 +90,15 @@ class SessionManager:
         self._owner_photo_url: str = ""
         # Prevent firing guest intervention multiple times per guest visit
         self._guest_intervention_fired: bool = False
+        # Authoritative server-side guest mode state
+        self._is_guest_mode: bool = False
         # Latest screen frame from frontend (updated via screen_frame WS message)
         self._latest_screen_frame: Optional[bytes] = None
+
+    @property
+    def is_guest_mode(self) -> bool:
+        """True when the current observation session has detected a guest and locked owner data."""
+        return self._is_guest_mode
 
     # -----------------------------------------------------------------------
     # Session lifecycle
@@ -167,7 +186,7 @@ class SessionManager:
         if self._status == "paused":
             logger.info("SessionManager: WebSocket reconnected but session is paused — skipping watchman + greeting")
             return
-        self.start_watchman()
+        self.ensure_watchman_started()
         self._greeting_task = asyncio.create_task(self._send_greeting())
         logger.info("SessionManager: WebSocket ready — greeting queued")
 
@@ -228,13 +247,7 @@ class SessionManager:
 
     async def pause_session(self) -> None:
         self._status = "paused"
-        if self._watchman_task:
-            self._watchman_task.cancel()
-            try:
-                await self._watchman_task
-            except asyncio.CancelledError:
-                pass
-            self._watchman_task = None
+        self.stop_watchman()
         await self._update_firestore_status("paused")
         self._start_idle_timer()
         logger.info("SessionManager: session paused — %s", self._session_id)
@@ -245,32 +258,20 @@ class SessionManager:
             self._idle_timer_task = None
         self._status = "active"
         await self._update_firestore_status("active")
-        # Reset long-session clock so 90-min countdown restarts from resume, not session start
+        # Reset long-session clock so active working time starts fresh from resume
         if hasattr(self, "_state_monitor") and self._state_monitor:
             tracker = getattr(self._state_monitor, "_long_session_tracker", None)
             if tracker:
                 tracker.reset_clock()
-        # Restart the watchman loop — it was cancelled on pause
-        if hasattr(self, "_state_monitor") and self._state_monitor and not self._watchman_task:
-            self._watchman_task = asyncio.create_task(
-                self._state_monitor.run_loop(
-                    on_frustration=self._fire_trigger_a,
-                    on_coding_block=self._fire_trigger_b,
-                    on_long_session=self._fire_trigger_c,
-                    on_deep_focus=self._fire_trigger_e,
-                    on_soft_frustration=self._soft_frustration_checkin,
-                )
-            )
-            logger.info("SessionManager: Watchman loop restarted after resume")
+        # Restart the watchman loop with single task guarantee
+        self.ensure_watchman_started()
         # Send greeting so Rumi acknowledges the (re)start
         self._greeting_task = asyncio.create_task(self._send_greeting())
         logger.info("SessionManager: session resumed — %s", self._session_id)
 
     async def end_session(self) -> None:
         self._status = "ended"
-        if self._watchman_task:
-            self._watchman_task.cancel()
-            self._watchman_task = None
+        self.stop_watchman()
         if self._idle_timer_task:
             self._idle_timer_task.cancel()
             self._idle_timer_task = None
@@ -383,36 +384,52 @@ class SessionManager:
     # Watchman loop (T029 — wires Trigger A; T034 — Trigger B added in Phase 6)
     # -----------------------------------------------------------------------
 
-    def start_watchman(self) -> None:
-        """Start the Watchman observation loop with all four trigger trackers."""
+    def ensure_watchman_started(self) -> None:
+        """Ensure exactly ONE Watchman observation task is active for this session.
+
+        Guards against duplicate tasks on WebSocket reconnects, resume_session calls,
+        or race conditions.
+        """
+        if self._watchman_task is not None and not self._watchman_task.done():
+            logger.debug("SessionManager: Watchman task already running — skipping duplicate start")
+            return
+
+        if self._status != "active":
+            logger.info("SessionManager: skipping Watchman start because session status is '%s'", self._status)
+            return
+
         from src.watchman.state_monitor import StateMonitor
         from src.watchman.trigger_a import FrustrationTracker
         from src.watchman.trigger_b import CodingBlockTracker
         from src.watchman.trigger_c import LongSessionTracker
         from src.watchman.trigger_e import DeepFocusTracker
 
-        frustration = FrustrationTracker()
-        coding_block = CodingBlockTracker()
-        long_session = LongSessionTracker()
-        deep_focus = DeepFocusTracker()
+        if not hasattr(self, "_state_monitor") or self._state_monitor is None:
+            frustration = FrustrationTracker()
+            coding_block = CodingBlockTracker()
+            long_session = LongSessionTracker()
+            deep_focus = DeepFocusTracker()
 
-        self._coding_block_tracker = coding_block  # expose for frame hash updates
-        monitor = StateMonitor(
-            gemini_client=self._gemini,
-            frustration_tracker=frustration,
-            coding_block_tracker=coding_block,
-            long_session_tracker=long_session,
-            deep_focus_tracker=deep_focus,
-        )
-        monitor.set_websocket(self._websocket)
-        monitor.set_uid(self._uid)
-        if self._owner_photo_url:
-            monitor.set_owner_photo(self._owner_photo_url)
-        monitor.set_guest_callback(self._fire_guest_detected)
-        monitor.set_owner_returned_callback(self.reset_guest_intervention)
-        self._state_monitor = monitor
+            self._coding_block_tracker = coding_block  # expose for frame updates
+            monitor = StateMonitor(
+                gemini_client=self._gemini,
+                frustration_tracker=frustration,
+                coding_block_tracker=coding_block,
+                long_session_tracker=long_session,
+                deep_focus_tracker=deep_focus,
+            )
+            monitor.set_websocket(self._websocket)
+            monitor.set_uid(self._uid)
+            if self._owner_photo_url:
+                monitor.set_owner_photo(self._owner_photo_url)
+            monitor.set_guest_callback(self._fire_guest_detected)
+            monitor.set_owner_returned_callback(self.reset_guest_intervention)
+            self._state_monitor = monitor
+        else:
+            self._state_monitor.set_websocket(self._websocket)
+
         self._watchman_task = asyncio.create_task(
-            monitor.run_loop(
+            self._state_monitor.run_loop(
                 on_frustration=self._fire_trigger_a,
                 on_coding_block=self._fire_trigger_b,
                 on_long_session=self._fire_trigger_c,
@@ -420,7 +437,21 @@ class SessionManager:
                 on_soft_frustration=self._soft_frustration_checkin,
             )
         )
-        logger.info("SessionManager: Watchman loop started (triggers A, B, C, E, Guest)")
+        logger.info("SessionManager: Watchman loop started (single guarded task)")
+
+    def stop_watchman(self) -> None:
+        """Stop and cancel the active Watchman task and perception loop."""
+        if hasattr(self, "_state_monitor") and self._state_monitor:
+            self._state_monitor.stop()
+        if self._watchman_task:
+            if not self._watchman_task.done():
+                self._watchman_task.cancel()
+            self._watchman_task = None
+            logger.info("SessionManager: Watchman task stopped and cancelled")
+
+    def start_watchman(self) -> None:
+        """Backward-compatible entry point: safely delegates to ensure_watchman_started."""
+        self.ensure_watchman_started()
 
     async def _fire_trigger_a(self) -> None:
         """Generate Trigger A intervention via ADK Agent and dispatch to frontend."""
@@ -500,9 +531,10 @@ class SessionManager:
         logger.info("SessionManager: soft frustration check-in skipped (voice disabled)")
 
     async def _fire_guest_detected(self) -> None:
-        """Speak a warm guest greeting and send an intervention card.
+        """Speak a warm guest greeting, lock private state, and send an intervention card.
         Only fires once per guest visit — resets when owner returns.
         """
+        self._is_guest_mode = True
         if self._guest_intervention_fired:
             return
         self._guest_intervention_fired = True
@@ -530,11 +562,13 @@ class SessionManager:
             intervention_text=text,
         )
         await self.dispatch_intervention("G", interaction_id, text)
-        logger.info("SessionManager: guest intervention fired")
+        logger.info("SessionManager: guest intervention fired — session locked in guest mode")
 
     def reset_guest_intervention(self) -> None:
-        """Called when the owner returns — allows the next guest to get a fresh greeting."""
+        """Called when the owner returns — unlocks guest mode and allows future guest greetings."""
+        self._is_guest_mode = False
         self._guest_intervention_fired = False
+        logger.info("SessionManager: owner returned — guest mode unlocked")
 
     async def refresh_context(self) -> None:
         """Reload identity from Firestore and rebuild system prompt live.
