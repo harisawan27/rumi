@@ -298,28 +298,42 @@ class StateMonitor:
         self._stop_event.set()
 
     async def _run_face_check(self) -> None:
-        """Identity check every 10s.
+        """Identity check every 10s using local face embeddings (zero Gemini API cost).
 
-        Owner face in frame  → identity_verified, streak reset.
-        No face / blackout / empty room → non_owner_streak++  → guest mode.
-        Different face → check known people → if unknown, non_owner_streak++ → guest mode.
-        threshold=1 means ONE failed check activates guest mode immediately.
+        Owner face in frame  → identity_verified, streak reset, distributed presence extended.
+        Known person face    → known_person_detected, streak reset.
+        No face              → desk empty (nobody).
+        Multiple faces / Unknown face → guest mode activated immediately.
         """
-        import base64
         if not self._current_frame:
             return
         try:
-            frame_b64 = base64.b64encode(self._current_frame).decode()
+            from src.vision.face_identity_service import face_identity_service
+            from src.vision.face_matcher import FaceVerificationStatus
 
-            from src.vision.face_matcher import compare_faces, FaceVerificationStatus
+            result = await face_identity_service.identify(
+                frame_bytes=self._current_frame,
+                uid=self._uid,
+                owner_photo_url=self._owner_photo_url,
+            )
 
-            # ── Step 1: check owner ──────────────────────────────────────────
-            result = await compare_faces(self._owner_photo_url, frame_b64)
+            from src.utils.observability import log_structured_event
+            log_structured_event(
+                event_type="FACE_IDENTIFICATION",
+                uid=self._uid,
+                face_status=result.status.value,
+                face_similarity=result.similarity,
+                face_confidence=result.confidence,
+                presence_mode="guest" if self._guest_active else "owner",
+                faces_detected=result.faces_detected,
+            )
+
             if result.status == FaceVerificationStatus.VERIFICATION_UNAVAILABLE:
-                logger.warning("StateMonitor: face verification unavailable (%s) — maintaining state", result.reason)
+                logger.warning("StateMonitor: face identity unavailable — maintaining state")
                 return
 
-            if result.is_owner or result.status == FaceVerificationStatus.OWNER:
+            # ── 1. Owner confirmed ───────────────────────────────────────────
+            if result.status == FaceVerificationStatus.OWNER:
                 if self._guest_active:
                     logger.info("StateMonitor: owner returned")
                     if self._websocket:
@@ -328,60 +342,58 @@ class StateMonitor:
                         asyncio.create_task(self._on_owner_returned())
                 if self._websocket:
                     await self._websocket.send_text(json.dumps({"type": "identity_verified"}))
-                logger.info("StateMonitor: identity verified — owner confirmed")
+                logger.info("StateMonitor: identity verified — owner confirmed (sim=%.3f)", result.similarity or 0.0)
                 self._non_owner_streak = 0
                 self._guest_active = False
                 self._last_face_label = "owner"
+
+                # Extend distributed presence authorization
+                if self._uid:
+                    try:
+                        from src.session.presence_manager import presence_manager
+                        presence_manager.set_owner_verified(self._uid, confidence=result.confidence or 1.0)
+                    except Exception:
+                        pass
                 return
 
-            # ── Step 2: owner not confirmed ──────────────────────────────────
-            if result.status == FaceVerificationStatus.NO_FACE or not result.face_detected:
+            # ── 2. Known Person confirmed ────────────────────────────────────
+            if result.status == FaceVerificationStatus.KNOWN_PERSON:
+                logger.info("StateMonitor: known person detected — %s (%s, sim=%.3f)",
+                            result.name, result.relationship, result.similarity or 0.0)
+                self._non_owner_streak = 0
+                self._last_face_label = f"known:{result.name}:{result.relationship}"
+                if self._websocket:
+                    await self._websocket.send_text(json.dumps({
+                        "type": "known_person_detected",
+                        "name": result.name or "",
+                        "relationship": result.relationship or "",
+                    }))
+                if result.person_id and self._uid:
+                    asyncio.get_event_loop().run_in_executor(
+                        None, _bump_known_person, self._uid, result.person_id
+                    )
+                return
+
+            # ── 3. No face in frame ──────────────────────────────────────────
+            if result.status == FaceVerificationStatus.NO_FACE:
                 self._last_face_label = "nobody"
                 logger.debug("StateMonitor: no face in frame — desk empty")
                 return
-            else:
-                # Face present but not owner — check known people before flagging guest
-                if self._uid:
-                    try:
-                        known = await asyncio.get_event_loop().run_in_executor(
-                            None, _load_known_people, self._uid
-                        )
-                        for person in (known or []):
-                            photo_url = person.get("photo_url", "")
-                            if not photo_url:
-                                continue
-                            match = await compare_faces(photo_url, frame_b64)
-                            if match.is_owner or match.status == FaceVerificationStatus.OWNER:
-                                logger.info("StateMonitor: known person — %s (%s)",
-                                            person["name"], person["relationship"])
-                                self._non_owner_streak = 0
-                                self._last_face_label = f"known:{person['name']}:{person['relationship']}"
-                                if self._websocket:
-                                    await self._websocket.send_text(json.dumps({
-                                        "type": "known_person_detected",
-                                        "name": person["name"],
-                                        "relationship": person["relationship"],
-                                    }))
-                                asyncio.get_event_loop().run_in_executor(
-                                    None, _bump_known_person, self._uid, person["id"]
-                                )
-                                return
-                    except Exception as exc:
-                        logger.debug("StateMonitor: known people check failed: %s", exc)
-                self._last_face_label = "guest"
 
-            # ── Step 3: increment streak → trigger guest mode if threshold met ─
+            # ── 4. Unknown face or Multiple faces ────────────────────────────
+            self._last_face_label = "guest"
             self._non_owner_streak += 1
-            logger.debug("StateMonitor: non_owner_streak=%d (label=%s)",
-                         self._non_owner_streak, self._last_face_label)
+            logger.debug("StateMonitor: non_owner_streak=%d (status=%s, faces=%d)",
+                         self._non_owner_streak, result.status.value, result.faces_detected)
+
             if self._non_owner_streak >= self._non_owner_threshold and not self._guest_active:
                 self._guest_active = True
-                logger.info("StateMonitor: guest mode activated — streak=%d face=%s",
-                            self._non_owner_streak, self._last_face_label)
+                logger.info("StateMonitor: guest mode activated — streak=%d status=%s",
+                            self._non_owner_streak, result.status.value)
                 if self._websocket:
                     await self._websocket.send_text(json.dumps({
                         "type": "guest_detected",
-                        "confidence": result.confidence,
+                        "confidence": result.confidence or 0.0,
                     }))
                 if self._on_guest_detected:
                     asyncio.create_task(self._on_guest_detected())

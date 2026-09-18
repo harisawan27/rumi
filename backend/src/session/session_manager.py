@@ -72,13 +72,14 @@ class SessionManager:
         self._gemini_lock: asyncio.Lock = asyncio.Lock()
         # Atomic lock to guarantee single Watchman loop creation under concurrency
         self._watchman_lock: asyncio.Lock = asyncio.Lock()
+        # Formal voice generation lifecycle controller
+        from src.session.voice_session_controller import VoiceSessionController
+        self._voice_controller: VoiceSessionController = VoiceSessionController()
         # Greeting task ref — cancelled immediately when user speaks
         self._greeting_task: Optional[asyncio.Task] = None
         # When True, _forward_audio drops bytes AND _receive_loop skips task creation
         self._suppress_audio: bool = False
         # Generation counter — incremented on every voice_query call.
-        # CancelledError handlers check this before touching _suppress_audio so a
-        # stale cancelled task can't close the gate on a newer active response.
         self._voice_gen: int = 0
         # Prevent double-greeting (connect_gemini + resume both call _send_greeting)
         self._has_greeted: bool = False
@@ -132,6 +133,13 @@ class SessionManager:
         self._session_id = ref.id
         ref.update({"session_id": self._session_id})
         self._status = "active"
+
+        # Initialize distributed presence
+        try:
+            from src.session.presence_manager import presence_manager
+            presence_manager.set_owner_verified(uid, session_id=self._session_id, verification_method="token")
+        except Exception as p_exc:
+            logger.debug("SessionManager: presence initialization failed: %s", p_exc)
 
         logger.info("[RUMI CORE] Session started — identity protocol active — %s", self._session_id)
         return self._session_id
@@ -241,7 +249,11 @@ class SessionManager:
         try:
             b64 = base64.b64encode(pcm_bytes).decode()
             await self._websocket.send_text(
-                json.dumps({"type": "audio_response", "data": b64})
+                json.dumps({
+                    "type": "audio_response",
+                    "data": b64,
+                    "generation_id": self._voice_controller.generation_id,
+                })
             )
             self._reset_gemini_idle_timer()  # keep alive while response is streaming
         except Exception as exc:
@@ -251,6 +263,12 @@ class SessionManager:
         self._status = "paused"
         self.stop_watchman()
         await self._update_firestore_status("paused")
+        if self._uid:
+            try:
+                from src.session.presence_manager import presence_manager
+                presence_manager.set_away_mode(self._uid, self._session_id)
+            except Exception:
+                pass
         self._start_idle_timer()
         logger.info("SessionManager: session paused — %s", self._session_id)
 
@@ -260,6 +278,12 @@ class SessionManager:
             self._idle_timer_task = None
         self._status = "active"
         await self._update_firestore_status("active")
+        if self._uid:
+            try:
+                from src.session.presence_manager import presence_manager
+                presence_manager.set_owner_verified(self._uid, session_id=self._session_id, verification_method="token")
+            except Exception:
+                pass
         # Reset long-session clock so active working time starts fresh from resume
         if hasattr(self, "_state_monitor") and self._state_monitor:
             tracker = getattr(self._state_monitor, "_long_session_tracker", None)
@@ -295,6 +319,12 @@ class SessionManager:
 
         # Trigger auto-summarizer in background
         asyncio.create_task(self._run_auto_summarizer(ended_at))
+        if self._uid:
+            try:
+                from src.session.presence_manager import presence_manager
+                presence_manager.end_session(self._uid, self._session_id)
+            except Exception:
+                pass
         logger.info("SessionManager: session ended — %s", self._session_id)
 
     # -----------------------------------------------------------------------
@@ -469,6 +499,19 @@ class SessionManager:
             trigger_type="A",
             intervention_text=intervention_text,
         )
+        try:
+            from src.utils.observability import log_structured_event
+            log_structured_event(
+                event_type="INTERVENTION_TRIGGER",
+                uid=self._uid or "",
+                session_id=self._session_id,
+                trigger_type="A",
+                voice_state=self._voice_controller.state.value,
+                voice_gen_id=self._voice_controller.generation_id,
+                presence_mode="guest" if self._is_guest_mode else "owner",
+            )
+        except Exception:
+            pass
         await self.dispatch_intervention("A", interaction_id, intervention_text)
         # Speak intervention aloud — only if no voice query is currently active
         if not self._is_responding:
@@ -488,6 +531,19 @@ class SessionManager:
             trigger_type="B",
             intervention_text=intervention_text,
         )
+        try:
+            from src.utils.observability import log_structured_event
+            log_structured_event(
+                event_type="INTERVENTION_TRIGGER",
+                uid=self._uid or "",
+                session_id=self._session_id,
+                trigger_type="B",
+                voice_state=self._voice_controller.state.value,
+                voice_gen_id=self._voice_controller.generation_id,
+                presence_mode="guest" if self._is_guest_mode else "owner",
+            )
+        except Exception:
+            pass
         await self.dispatch_intervention("B", interaction_id, intervention_text)
         if not self._is_responding:
             self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
@@ -538,6 +594,12 @@ class SessionManager:
         Only fires once per guest visit — resets when owner returns.
         """
         self._is_guest_mode = True
+        if self._uid:
+            try:
+                from src.session.presence_manager import presence_manager
+                presence_manager.set_guest_mode(self._uid, self._session_id)
+            except Exception:
+                pass
         if self._guest_intervention_fired:
             return
         self._guest_intervention_fired = True
@@ -571,6 +633,12 @@ class SessionManager:
         """Called when the owner returns — unlocks guest mode and allows future guest greetings."""
         self._is_guest_mode = False
         self._guest_intervention_fired = False
+        if self._uid:
+            try:
+                from src.session.presence_manager import presence_manager
+                presence_manager.set_owner_verified(self._uid, self._session_id)
+            except Exception:
+                pass
         logger.info("SessionManager: owner returned — guest mode unlocked")
 
     async def refresh_context(self) -> None:
@@ -692,68 +760,71 @@ class SessionManager:
             return f"[CAMERA: an unrecognised guest is in front of the camera — NOT {self._owner_name}]"
         return f"[CAMERA: no face detected — {self._owner_name} may have stepped away]"
 
+    def interrupt_audio(self, reason: str = "interrupt") -> int:
+        """Synchronously suppress audio, cancel active speak task, and invalidate generation."""
+        self._suppress_audio = True
+        self._is_responding = True
+        self._voice_gen = self._voice_controller.cancel_active_generation(reason)
+        if self._speak_task and not self._speak_task.done():
+            self._speak_task.cancel()
+        if self._greeting_task and not self._greeting_task.done():
+            self._greeting_task.cancel()
+        try:
+            from src.utils.observability import log_structured_event
+            log_structured_event(
+                event_type="VOICE_INTERRUPT",
+                uid=self._uid or "",
+                session_id=self._session_id,
+                voice_state="INTERRUPTED",
+                voice_gen_id=self._voice_gen,
+                reason=reason,
+            )
+        except Exception:
+            pass
+        return self._voice_gen
+
     async def voice_query(self, text: str) -> None:
         """Natural voice conversation via Gemini Live.
 
-        Generation counter (_voice_gen) prevents a stale CancelledError from a
-        previous task from closing the audio gate on the current active response —
-        which was the cause of responses not completing.
-
-        Timing:
-          _suppress_audio is already True when this task starts (set synchronously
-          by the ws_observe handler before create_task). We:
-          1. Send text (Gemini interrupts old generation immediately on the server).
-          2. Keep suppress=True for 300ms (drain window — old audio still in transit
-             is caught by the inline _receive_loop check and never forwarded).
-          3. Open gate. New audio plays cleanly.
+        Managed by VoiceSessionController: increments generation, drains stale audio,
+        opens stream gate, and handles clean cancellation.
         """
-        self._voice_gen += 1
-        my_gen = self._voice_gen
-        # Block watchman's _speak() for the lifetime of this user query.
-        # _is_responding was never set after _respond() was removed — that was
-        # the root cause of watchman speaking concurrently with voice_query,
-        # producing two simultaneous Gemini generations on the second query.
+        my_gen = self._voice_controller.start_generation("voice_query")
+        self._voice_gen = my_gen
         self._is_responding = True
 
         try:
-            # Hold the lock for connect + send so _speak() can never fire a concurrent
-            # Gemini call between our suppress and our text arriving at Gemini.
             async with self._gemini_lock:
                 if not (self._gemini and self._gemini.is_connected):
                     await self.ensure_gemini_connected()
-                # _suppress_audio already True (set by ws_observe). Send while suppressed:
-                # Gemini receives this and immediately stops any prior generation.
                 ctx = self._camera_context()
                 payload = f"{ctx}\n{text}" if ctx else text
                 await self._gemini.send_text(payload)
             self._reset_gemini_idle_timer()
 
-            # 200ms drain: old audio arrives at _receive_loop suppressed (inline check).
-            # Gemini stops sending old audio within ~100ms of receiving new text.
-            # By 200ms only new-turn audio is arriving.
+            # 200ms drain: old audio arrives at _receive_loop suppressed
             await asyncio.sleep(0.2)
 
-            # Open gate — but only if we're still the current generation.
-            if self._voice_gen == my_gen:
+            if self._voice_controller.mark_streaming(my_gen):
                 self._suppress_audio = False
 
-            # Stay alive so barge-in CancelledError can suppress our audio.
+            # Stay alive so interruption CancelledError can suppress our audio
             await asyncio.sleep(30)
 
         except asyncio.CancelledError:
-            if self._voice_gen == my_gen:
+            if self._voice_controller.generation_id == my_gen:
+                self._voice_controller.cancel_active_generation("task_cancelled")
                 self._suppress_audio = True
             logger.info("SessionManager: voice_query cancelled (gen=%d)", my_gen)
 
         except Exception as exc:
             logger.warning("SessionManager: voice_query failed: %s", exc)
-            if self._voice_gen == my_gen:
+            if self._voice_controller.generation_id == my_gen:
                 self._suppress_audio = False
 
         finally:
-            # Release the block only if we're still the active generation.
-            # A newer voice_query has already set _is_responding = True for itself.
-            if self._voice_gen == my_gen:
+            if self._voice_controller.generation_id == my_gen:
+                self._voice_controller.mark_complete(my_gen)
                 self._is_responding = False
 
     async def _speak(self, text: str) -> None:

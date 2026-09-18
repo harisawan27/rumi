@@ -64,10 +64,21 @@ def update_known_person(uid: str, person_id: str, data: dict) -> None:
     update = {k: v for k, v in data.items() if k in allowed}
     if update:
         _col(uid).document(person_id).update(update)
+        if "photo_url" in update:
+            try:
+                from src.vision.face_identity_service import face_identity_service
+                face_identity_service.delete_person_embedding(uid, person_id)
+            except Exception:
+                pass
 
 
 def delete_known_person(uid: str, person_id: str) -> None:
     _col(uid).document(person_id).delete()
+    try:
+        from src.vision.face_identity_service import face_identity_service
+        face_identity_service.delete_person_embedding(uid, person_id)
+    except Exception:
+        pass
 
 
 def record_known_person_interaction(uid: str, person_id: str) -> None:

@@ -98,3 +98,8 @@ Thumbs.db
 *.tfstate*
 
 *.dockerignore
+
+# Large neural network binary weights
+*.onnx
+backend/models/*.onnx
+!backend/models/NOTICE.txt

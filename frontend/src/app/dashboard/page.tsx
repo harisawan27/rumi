@@ -801,7 +801,10 @@ export default function DashboardPage() {
   // Uses a sequential promise chain (audioChainRef) so chunks always schedule
   // in arrival order — no race on nextPlayTimeRef regardless of WS batching.
   // audioGenRef lets stopAllAudio() cancel chunks still waiting in the chain.
-  function playAudio(b64: string) {
+  function playAudio(b64: string, serverGenId?: number) {
+    if (serverGenId !== undefined && serverGenId < audioGenRef.current) {
+      return; // Discard stale audio from prior generation immediately
+    }
     const myGen = audioGenRef.current;
 
     // Decode PCM synchronously before entering the chain — keeps chain slots short.
@@ -815,7 +818,7 @@ export default function DashboardPage() {
 
     audioChainRef.current = audioChainRef.current.then(async () => {
       // Chunk was cancelled by stopAllAudio() while waiting in the chain
-      if (audioGenRef.current !== myGen) return;
+      if (audioGenRef.current !== myGen || (serverGenId !== undefined && serverGenId < audioGenRef.current)) return;
 
       try {
         if (!playCtxRef.current) playCtxRef.current = new AudioContext({ sampleRate: 24000 });
@@ -825,7 +828,7 @@ export default function DashboardPage() {
         // Safe here because the chain serialises calls — no concurrent awaits.
         if (ctx.state === "suspended") await ctx.resume();
 
-        if (audioGenRef.current !== myGen) return; // cancelled during resume
+        if (audioGenRef.current !== myGen || (serverGenId !== undefined && serverGenId < audioGenRef.current)) return;
 
         const buffer = ctx.createBuffer(1, float32.length, 24000);
         buffer.copyToChannel(float32, 0);
@@ -862,17 +865,14 @@ export default function DashboardPage() {
       const emotionMap: Record<string, typeof rumiEmotion> = { A: "concerned", B: "thinking", C: "concerned", E: "happy", G: "neutral" };
       setRumiEmotion(emotionMap[m.trigger] ?? "neutral");
     } else if (msg.type === "audio_interrupt") {
-      // Stop all playing audio immediately (synchronous source.stop — no async close).
-      // Closing AudioContext was the bug: close() is async so old audio kept playing
-      // while new audio started on a fresh context → two voices simultaneously.
+      if (msg.generation_id !== undefined && msg.generation_id > audioGenRef.current) {
+        audioGenRef.current = msg.generation_id;
+      }
       stopAllAudio();
       window.speechSynthesis.cancel();
     } else if (msg.type === "audio_response") {
-      // No frontend suppress window — the backend's inline _receive_loop check
-      // already kills stale audio before it reaches us. A frontend window
-      // (previously 500ms) was blocking the VALID new response from playing.
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
-      playAudio((msg as { type: string; data: string }).data);
+      playAudio(msg.data, msg.generation_id);
     } else if (msg.type === "canvas_history") {
       const m = msg as { type: string; items: { query: string; title: string; content: string; content_type: string; timestamp: string }[] };
       const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });

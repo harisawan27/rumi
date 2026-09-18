@@ -106,14 +106,50 @@ def auth_verify(body: VerifyRequest):
 
 def _check_guest_mode_restriction(uid: str) -> None:
     """Security & Privacy guard: Rejects access to sensitive owner profile/canvas data
-    if the physical session is currently in Guest Mode.
+    if the session is currently in Guest Mode or presence is unverified in distributed state.
     """
+    # 1. Local process fast-path: if local SessionManager is locked in guest mode, reject immediately
     mgr = _session_managers.get(uid)
     if mgr and getattr(mgr, "is_guest_mode", False):
         raise HTTPException(
             status_code=403,
             detail="GUEST_PROTECTED: Active session is locked in Guest Mode.",
         )
+
+    # 2. Distributed presence check across backend instances
+    try:
+        from src.session.presence_manager import presence_manager
+        presence = presence_manager.get_presence(uid)
+        if presence:
+            mode = presence.get("mode")
+            if mode == "guest":
+                raise HTTPException(
+                    status_code=403,
+                    detail="GUEST_PROTECTED: Distributed session is locked in Guest Mode.",
+                )
+            if mode == "owner":
+                until_str = presence.get("owner_verified_until")
+                if until_str:
+                    from datetime import datetime, timezone
+                    until = datetime.fromisoformat(until_str)
+                    if until.tzinfo is None:
+                        until = until.replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) > until:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="GUEST_PROTECTED: Owner presence verification has expired.",
+                        )
+            elif mode in ("away", "unknown"):
+                if mgr and mgr.status == "active":
+                    raise HTTPException(
+                        status_code=403,
+                        detail="GUEST_PROTECTED: Active session presence is unverified or user is away.",
+                    )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("_check_guest_mode_restriction: presence check error: %s", exc)
+
 
 
 @app.get("/identity")
@@ -997,7 +1033,11 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
             data = await websocket.receive_text()
             msg = json.loads(data)
             if msg.get("type") == "pong":
-                pass
+                try:
+                    from src.session.presence_manager import presence_manager
+                    presence_manager.record_session_heartbeat(uid, session_id)
+                except Exception:
+                    pass
             elif msg.get("type") == "frame":
                 import base64
                 frame_bytes = base64.b64decode(msg["data"])
@@ -1052,21 +1092,9 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 asyncio.create_task(mgr._fire_trigger_a())
 
             elif msg.get("type") == "audio_interrupt":
-                # Frontend-initiated barge-in. All three are SYNCHRONOUS.
-                # Critically: _voice_gen += 1 here prevents the cancelled voice_query's
-                # finally block from resetting _is_responding=False. Without this,
-                # the gen-guard fires True (old gen still matches) → _is_responding=False
-                # → watchman fires in the 1-2s gap before user_text arrives → double speak.
-                mgr._suppress_audio = True
-                mgr._is_responding = True
-                mgr._voice_gen += 1
-                if mgr._speak_task and not mgr._speak_task.done():
-                    mgr._speak_task.cancel()
-                # Also cancel greeting — it wakes at 1.5s and can fire after suppression
-                # opens, producing a second simultaneous audio stream.
-                if mgr._greeting_task and not mgr._greeting_task.done():
-                    mgr._greeting_task.cancel()
-                logger.info("ws_observe: audio_interrupt from frontend — suppressed + cancelled")
+                # Frontend-initiated manual interruption.
+                gen_id = mgr.interrupt_audio("frontend_audio_interrupt")
+                logger.info("ws_observe: audio_interrupt from frontend — suppressed + cancelled (gen=%d)", gen_id)
             elif msg.get("type") == "user_text":
                 # Web Speech API transcript — Flash generates text (single source of truth),
                 # Live speaks it verbatim, canvas opens 1500ms later (voice-first UX).
@@ -1078,37 +1106,15 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                     import time as _time
                     _t0 = _time.perf_counter()
 
-                    # All three lines are SYNCHRONOUS — before any yield.
-                    #
-                    # _suppress_audio=True: catches all in-flight audio tasks.
-                    # _is_responding=True:  blocks watchman's _speak() immediately.
-                    # _voice_gen += 1:      THE KEY FIX — by claiming the next gen slot
-                    #   here, the old voice_query's finally sees (_voice_gen != my_gen)
-                    #   and skips its _is_responding=False reset. Without this, the old
-                    #   task's finally fires during the `await websocket.send_text` below
-                    #   and resets _is_responding=False, letting watchman fire between
-                    #   the old task ending and the new one starting → two Gemini calls.
-                    mgr._suppress_audio = True
-                    mgr._is_responding = True
-                    mgr._voice_gen += 1
+                    # Preemptively interrupt previous audio and claim next generation slot
+                    new_gen = mgr.interrupt_audio("new_user_text")
 
-                    # Cancel greeting task — it sleeps 1.5s then fires; if user speaks
-                    # within that window (or if greeting audio overlaps the user query),
-                    # it creates a second concurrent Gemini audio stream. ROOT CAUSE of
-                    # double-speak when user talks shortly after session starts.
-                    if mgr._greeting_task and not mgr._greeting_task.done():
-                        mgr._greeting_task.cancel()
-
-                    # Cancel any active speak task — works for both barge-in and normal flow
-                    if mgr._speak_task and not mgr._speak_task.done():
-                        logger.info("ws_observe: cancelling active speak task for new query")
-                        mgr._speak_task.cancel()
-
-                    # Tell frontend to clear its audio buffer (this await yields the event
-                    # loop — the old voice_query's CancelledError fires here, but its
-                    # gen-guard now sees a mismatch and skips _is_responding=False).
+                    # Tell frontend to clear its audio buffer with the new generation id
                     try:
-                        await websocket.send_text(json.dumps({"type": "audio_interrupt"}))
+                        await websocket.send_text(json.dumps({
+                            "type": "audio_interrupt",
+                            "generation_id": new_gen,
+                        }))
                     except Exception:
                         pass
 
