@@ -59,6 +59,28 @@ class GeminiLiveClient:
 
     async def connect(self, system_prompt: str) -> None:
         self._system_prompt = system_prompt
+        # Configurable VAD settings (server-side conversational turn authority)
+        silence_duration_ms = int(os.getenv("VOICE_END_SILENCE_MS", "1200"))
+        start_sensitivity_name = os.getenv("VOICE_START_SENSITIVITY", "START_SENSITIVITY_HIGH")
+        end_sensitivity_name = os.getenv("VOICE_END_SENSITIVITY", "END_SENSITIVITY_LOW")
+        prefix_padding_ms = int(os.getenv("VOICE_PREFIX_PADDING_MS", "100"))
+
+        start_sensitivity = getattr(
+            types.StartSensitivity, start_sensitivity_name, types.StartSensitivity.START_SENSITIVITY_HIGH
+        )
+        end_sensitivity = getattr(
+            types.EndSensitivity, end_sensitivity_name, types.EndSensitivity.END_SENSITIVITY_LOW
+        )
+
+        realtime_input_config = types.RealtimeInputConfig(
+            automatic_activity_detection=types.AutomaticActivityDetection(
+                start_of_speech_sensitivity=start_sensitivity,
+                end_of_speech_sensitivity=end_sensitivity,
+                prefix_padding_ms=prefix_padding_ms,
+                silence_duration_ms=silence_duration_ms,
+            )
+        )
+
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             system_instruction=system_prompt,
@@ -67,6 +89,7 @@ class GeminiLiveClient:
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
                 )
             ),
+            realtime_input_config=realtime_input_config,
         )
 
         last_exc = None

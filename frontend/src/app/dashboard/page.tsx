@@ -19,6 +19,7 @@ import InterventionCard from "@/components/InterventionCard";
 import PauseButton from "@/components/PauseButton";
 import RumiFace from "@/components/RumiFace";
 import ArtifactCanvas, { type CanvasContent, type CanvasExchange } from "@/components/ArtifactCanvas";
+import { TurnAccumulator } from "@/services/turnAccumulator";
 
 interface ActiveIntervention {
   interactionId: string;
@@ -46,13 +47,28 @@ export default function DashboardPage() {
   const [identityVerified, setIdentityVerified] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
   const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
-  const [detection, setDetection] = useState<{ state: string; confidence: number; cues: string[]; emotions: Record<string, number> } | null>(null);
+  const [detection, setDetection] = useState<{
+    state: string;
+    confidence: number;
+    cues: string[];
+    emotions: Record<string, number>;
+    face_detected?: boolean;
+    detector_status?: string;
+  } | null>(null);
   const [showCameraPopup, setShowCameraPopup] = useState(false);
   const [showEmotionPopup, setShowEmotionPopup] = useState(false);
   const [screenActive, setScreenActive] = useState(false);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement | null>(null);
   const screenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // ── Conversational Turn Accumulator & Auto-Restart Guards ────────────────
+  const turnAccumulatorRef = useRef<TurnAccumulator>(new TurnAccumulator());
+  const isStartingRecRef = useRef(false);
+  const isManualStopRef = useRef(false);
+  const isUnmountedRef = useRef(false);
+  const turnDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const VOICE_END_SILENCE_MS = 1200; // Natural pause tolerance (default 1200ms)
 
   // ── Canvas state ────────────────────────────────────────────────────────────
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -206,6 +222,8 @@ export default function DashboardPage() {
     init();
 
     return () => {
+      isUnmountedRef.current = true;
+      if (turnDebounceTimerRef.current) clearTimeout(turnDebounceTimerRef.current);
       shouldReconnectRef.current = false;
       wsRef.current?.close();
       videoStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -417,6 +435,40 @@ export default function DashboardPage() {
     try { rec.start(); } catch { /* ignore race */ }
   }
 
+  function commitConversationalTurn() {
+    if (turnDebounceTimerRef.current) {
+      clearTimeout(turnDebounceTimerRef.current);
+      turnDebounceTimerRef.current = null;
+    }
+    const text = turnAccumulatorRef.current.commit();
+    if (!text) {
+      setTranscript("");
+      setRumiEmotion("neutral");
+      setIsTalking(false);
+      isTalkingRef.current = false;
+      return;
+    }
+
+    try { recognitionRef.current?.stop(); } catch {}
+
+    isTalkingRef.current = false;
+    setIsTalking(false);
+
+    const lower = text.toLowerCase();
+    const shouldAutoAttach = AUTO_ATTACH_KEYWORDS.some(kw => lower.includes(kw));
+    if (shouldAutoAttach && captureFrameRef.current) {
+      captureFrameRef.current().then(image => sendToRumi(text, image));
+    } else {
+      sendToRumi(text);
+    }
+
+    setTimeout(() => {
+      if (micEnabledRef.current && !isTalkingRef.current && !speakingRef.current && !isUnmountedRef.current) {
+        startWakeWordListener();
+      }
+    }, 400);
+  }
+
   function startListeningWithRef() {
     const SpeechRecognition =
       (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition })
@@ -429,93 +481,142 @@ export default function DashboardPage() {
       return;
     }
 
-    transcriptRef.current = "";
+    isManualStopRef.current = false;
     const rec = new SpeechRecognition();
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = "en-US";
     recognitionRef.current = rec;
 
-    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
-    let hasFinalResult = false; // becomes true once user completes a word
-    const resetSilenceTimer = () => {
-      if (silenceTimer) clearTimeout(silenceTimer);
-      // After first final result, user has clearly spoken — cut wait to 1000ms
-      const delay = hasFinalResult ? 1000 : 1800;
-      silenceTimer = setTimeout(() => rec.stop(), delay);
-    };
-
     rec.onstart = () => {
+      isStartingRecRef.current = false;
       isTalkingRef.current = true;
       setIsTalking(true);
-      setTranscript("");
+      // Retain already accumulated text without wiping
+      setTranscript(turnAccumulatorRef.current.getDisplayText());
       setRumiEmotion("thinking");
     };
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
-      resetSilenceTimer();
-      let display = "";
+      const chunks = [];
       for (let i = 0; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          // Only accumulate results we haven't seen before (e.resultIndex marks the new ones)
-          if (i >= e.resultIndex) {
-            transcriptRef.current += e.results[i][0].transcript + " ";
-            hasFinalResult = true; // user finished a word → tighten silence window
-          }
-          display += e.results[i][0].transcript + " ";
-        } else {
-          display += e.results[i][0].transcript;
-        }
+        chunks.push({
+          isFinal: e.results[i].isFinal,
+          transcript: e.results[i][0].transcript,
+        });
       }
-      setTranscript(display.trim());
+      const display = turnAccumulatorRef.current.handleSpeechResults(chunks);
+      setTranscript(display);
+
+      // Reset conversational turn debounce timer on incoming speech
+      if (turnDebounceTimerRef.current) clearTimeout(turnDebounceTimerRef.current);
+      turnDebounceTimerRef.current = setTimeout(() => {
+        commitConversationalTurn();
+      }, VOICE_END_SILENCE_MS);
     };
 
     rec.onend = () => {
-      if (silenceTimer) clearTimeout(silenceTimer);
+      isStartingRecRef.current = false;
+      turnAccumulatorRef.current.handleSegmentEnd();
+
+      // Guarded auto-restart check (User Correction 3)
+      const isTurnOngoing = Boolean(turnDebounceTimerRef.current && turnAccumulatorRef.current.hasContent());
+      const canRestart = (
+        !isUnmountedRef.current &&
+        !isManualStopRef.current &&
+        micEnabledRef.current &&
+        !speakingRef.current &&
+        !isStartingRecRef.current &&
+        wsRef.current?.readyState === WebSocket.OPEN
+      );
+
+      if (isTurnOngoing && canRestart) {
+        // Recognizer stopped mid-utterance during a natural pause — auto-restart smoothly
+        isStartingRecRef.current = true;
+        setTimeout(() => {
+          if (!isUnmountedRef.current && !speakingRef.current && micEnabledRef.current && !isManualStopRef.current) {
+            try {
+              startListeningWithRef();
+            } catch {
+              isStartingRecRef.current = false;
+            }
+          } else {
+            isStartingRecRef.current = false;
+          }
+        }, 60);
+        return;
+      }
+
+      // If no turn timer active or cannot restart:
+      if (turnDebounceTimerRef.current) {
+        clearTimeout(turnDebounceTimerRef.current);
+        turnDebounceTimerRef.current = null;
+      }
       isTalkingRef.current = false;
       setIsTalking(false);
-      const text = transcriptRef.current.trim();
-      transcriptRef.current = "";
-      if (text) {
-        // Auto-attach: if user says "show you" / "what is this" etc., capture camera frame
-        const lower = text.toLowerCase();
-        const shouldAutoAttach = AUTO_ATTACH_KEYWORDS.some(kw => lower.includes(kw));
-        if (shouldAutoAttach && captureFrameRef.current) {
-          // captureFrame returns null when camera is off — sendToRumi handles null gracefully
-          captureFrameRef.current().then(image => sendToRumi(text, image));
-        } else {
+
+      if (turnAccumulatorRef.current.hasContent() && !isManualStopRef.current) {
+        const text = turnAccumulatorRef.current.commit();
+        if (text) {
           sendToRumi(text);
+        } else {
+          setTranscript("");
+          setRumiEmotion("neutral");
         }
       } else {
+        turnAccumulatorRef.current.reset();
         setTranscript("");
         setRumiEmotion("neutral");
       }
-      // Resume wake word standby after main listener finishes —
-      // but NOT while Rumi is speaking (the speaking useEffect will start
-      // the main listener directly when speaking stops, without a wake word).
+
       setTimeout(() => {
-        if (micEnabledRef.current && !isTalkingRef.current && !speakingRef.current) startWakeWordListener();
+        if (micEnabledRef.current && !isTalkingRef.current && !speakingRef.current && !isUnmountedRef.current) {
+          startWakeWordListener();
+        }
       }, 400);
     };
 
     rec.onerror = (e: SpeechRecognitionErrorEvent) => {
-      if (silenceTimer) clearTimeout(silenceTimer);
+      isStartingRecRef.current = false;
+      if (e.error === "no-speech" || e.error === "aborted") {
+        return;
+      }
+      console.warn("SpeechRecognition error:", e.error);
+      if (turnDebounceTimerRef.current) {
+        clearTimeout(turnDebounceTimerRef.current);
+        turnDebounceTimerRef.current = null;
+      }
       isTalkingRef.current = false;
       setIsTalking(false);
       setIsProcessing(false);
       setRumiEmotion("neutral");
-      setTranscript("");
-      transcriptRef.current = "";
-      if (e.error !== "no-speech" && e.error !== "aborted") {
-        console.warn("SpeechRecognition error:", e.error);
-      }
     };
 
-    rec.start();
+    try {
+      rec.start();
+    } catch {
+      isStartingRecRef.current = false;
+    }
   }
 
-  function stopListening() {
-    recognitionRef.current?.stop();
+  function stopListening(commit = true) {
+    isManualStopRef.current = true;
+    if (turnDebounceTimerRef.current) {
+      clearTimeout(turnDebounceTimerRef.current);
+      turnDebounceTimerRef.current = null;
+    }
+    if (commit && turnAccumulatorRef.current.hasContent()) {
+      const text = turnAccumulatorRef.current.commit();
+      recognitionRef.current?.stop();
+      if (text) sendToRumi(text);
+    } else {
+      turnAccumulatorRef.current.reset();
+      recognitionRef.current?.abort();
+      setTranscript("");
+      setRumiEmotion("neutral");
+      setIsTalking(false);
+      isTalkingRef.current = false;
+    }
   }
 
   // ── VAD barge-in ─────────────────────────────────────────────────────────
@@ -725,7 +826,7 @@ export default function DashboardPage() {
     if (isTalkingRef.current) {
       stopListening();
     } else {
-      // Stop wake word standby before starting main listener
+      isManualStopRef.current = false;
       stopWakeWordListener();
       startListeningWithRef();
     }
@@ -927,8 +1028,12 @@ export default function DashboardPage() {
       }
       const newEmotions = d.landmarks ?? {};
       setDetection(prev => ({
-        state: d.state, confidence: d.confidence, cues: d.cues ?? [],
+        state: d.state,
+        confidence: d.confidence,
+        cues: d.cues ?? [],
         emotions: Object.keys(newEmotions).length > 0 ? newEmotions : (prev?.emotions ?? {}),
+        face_detected: d.face_detected !== undefined ? d.face_detected : (Object.keys(newEmotions).length > 0),
+        detector_status: d.detector_status ?? "ready",
       }));
     } else if (msg.type === "memory_updated") {
       const m = msg as { type: string; message: string };
@@ -1129,10 +1234,16 @@ export default function DashboardPage() {
               <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
 
               {/* Zone: head → expression panel */}
-              <div className="body-zone zone-head" onClick={() => setShowEmotionPopup(p => !p)} />
+              <div className="body-zone zone-head" onClick={() => {
+                setShowCameraPopup(false);
+                setShowEmotionPopup(p => !p);
+              }} />
 
               {/* Zone: chest → camera panel */}
-              <div className="body-zone zone-chest" onClick={() => setShowCameraPopup(p => !p)} />
+              <div className="body-zone zone-chest" onClick={() => {
+                setShowEmotionPopup(false);
+                setShowCameraPopup(p => !p);
+              }} />
 
               {/* ── Expression HUD panel ─────────────────────────────────── */}
               {showEmotionPopup && (
@@ -1144,7 +1255,7 @@ export default function DashboardPage() {
                     <span className="hud-title">Expression Analysis</span>
                     <button className="hud-close" onClick={(e) => { e.stopPropagation(); setShowEmotionPopup(false); }}>✕</button>
                   </div>
-                  {dominantEmotion && (
+                  {dominantEmotion && detection?.face_detected !== false && cameraEnabled && (
                     <div className="hud-dominant">
                       <span style={{ color: EMOTION_COLORS[dominantEmotion[0]] ?? "var(--teal)" }}>
                         {dominantEmotion[0].toUpperCase()}
@@ -1153,15 +1264,23 @@ export default function DashboardPage() {
                     </div>
                   )}
                   <div className="hud-divider" />
-                  {emotionEntries.length > 0 ? emotionEntries.map(([emotion, score]) => (
-                    <div key={emotion} className="hud-row">
-                      <span className="hud-label">{emotion}</span>
-                      <div className="hud-bar-track">
-                        <div className="hud-bar-fill" style={{ width: `${Math.round(score * 100)}%`, background: EMOTION_COLORS[emotion] ?? "var(--teal)" }} />
+                  {!cameraEnabled ? (
+                    <p className="hud-empty">Camera unavailable</p>
+                  ) : detection?.detector_status === "unavailable" ? (
+                    <p className="hud-empty">Expression detection unavailable</p>
+                  ) : detection?.detector_status === "loading" ? (
+                    <p className="hud-empty">Loading expression model...</p>
+                  ) : emotionEntries.length > 0 && detection?.face_detected !== false ? (
+                    emotionEntries.map(([emotion, score]) => (
+                      <div key={emotion} className="hud-row">
+                        <span className="hud-label">{emotion}</span>
+                        <div className="hud-bar-track">
+                          <div className="hud-bar-fill" style={{ width: `${Math.round(score * 100)}%`, background: EMOTION_COLORS[emotion] ?? "var(--teal)" }} />
+                        </div>
+                        <span className="hud-value">{Math.round(score * 100)}</span>
                       </div>
-                      <span className="hud-value">{Math.round(score * 100)}</span>
-                    </div>
-                  )) : (
+                    ))
+                  ) : (
                     <p className="hud-empty">No face detected</p>
                   )}
                 </div>

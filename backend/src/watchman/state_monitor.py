@@ -24,6 +24,8 @@ class StateResult:
     confidence: float
     cues: list = field(default_factory=list)
     landmarks: dict = field(default_factory=dict)
+    face_detected: bool = False
+    detector_status: str = "loading"
 
 
 class StateMonitor:
@@ -70,6 +72,7 @@ class StateMonitor:
         self._on_owner_returned   = None  # set via set_owner_returned_callback()
         # Current face label — "owner" | "known:Name:relationship" | "guest" | "nobody"
         self._last_face_label: str = "nobody"
+        self._last_expression_time = 0.0
 
     def set_uid(self, uid: str) -> None:
         """Store uid so face checker can query known people from Firestore."""
@@ -94,6 +97,45 @@ class StateMonitor:
     def update_frame(self, frame_bytes: bytes) -> None:
         """Called by WS handler on every incoming camera frame from the frontend."""
         self._current_frame = frame_bytes
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.process_incoming_frame(frame_bytes))
+        except RuntimeError:
+            pass
+
+    async def process_incoming_frame(self, frame_bytes: bytes) -> Optional[dict]:
+        """Throttled local expression inference on incoming camera frames (~2.5 Hz max)."""
+        import time as _time
+        now = _time.monotonic()
+        if now - self._last_expression_time < 0.4:
+            return None
+        self._last_expression_time = now
+        try:
+            obs = self._local.observe(frame_bytes)
+            if self._last_result:
+                if obs.face_detected or obs.landmarks:
+                    self._last_result.landmarks = obs.landmarks
+                    self._last_result.face_detected = obs.face_detected
+                self._last_result.detector_status = obs.detector_status
+            conf = obs.frustration_score if obs.event == "frustrated" else round(1.0 - max(obs.frustration_score, obs.idle_score), 2)
+            payload = {
+                "type": "detection_update",
+                "state": obs.event,
+                "confidence": conf,
+                "cues": obs.cues,
+                "landmarks": obs.landmarks,
+                "face_detected": obs.face_detected,
+                "detector_status": obs.detector_status,
+            }
+            if self._websocket:
+                try:
+                    await self._websocket.send_text(json.dumps(payload))
+                except Exception:
+                    pass
+            return payload
+        except Exception as exc:
+            logger.debug("StateMonitor: process_incoming_frame error: %s", exc)
+            return None
 
     def update_screen_frame(self, frame_bytes: bytes) -> None:
         """Called by WS handler when frontend sends a screen capture frame."""
@@ -131,7 +173,9 @@ class StateMonitor:
                 state="idle",
                 confidence=round(local_obs.idle_score, 2),
                 cues=["No movement detected"],
-                landmarks={},
+                landmarks=local_obs.landmarks,
+                face_detected=local_obs.face_detected,
+                detector_status=local_obs.detector_status,
             )
             self._last_result = result
             return result
@@ -149,7 +193,9 @@ class StateMonitor:
                     state=data.get("state", "neutral"),
                     confidence=float(data.get("confidence", 0.5)),
                     cues=data.get("cues", []),
-                    landmarks=data.get("emotions", {}),
+                    landmarks=data.get("emotions") or local_obs.landmarks,
+                    face_detected=bool(data.get("emotions") or local_obs.face_detected),
+                    detector_status=local_obs.detector_status,
                 )
                 self._last_result = result
                 logger.info(
@@ -171,6 +217,8 @@ class StateMonitor:
             confidence=round(confidence, 2),
             cues=local_obs.cues,
             landmarks=local_obs.landmarks,
+            face_detected=local_obs.face_detected,
+            detector_status=local_obs.detector_status,
         )
         self._last_result = result
         return result
@@ -217,6 +265,8 @@ class StateMonitor:
                             "confidence": result.confidence,
                             "cues": result.cues,
                             "landmarks": result.landmarks,
+                            "face_detected": result.face_detected,
+                            "detector_status": result.detector_status,
                         }))
                     except Exception:
                         pass

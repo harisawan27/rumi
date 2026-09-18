@@ -111,7 +111,7 @@ export type WsMessage =
   | { type: "audio_interrupt"; generation_id?: number }
   | { type: "canvas_history"; items: { query?: string; title: string; content: string; content_type?: string; timestamp?: string }[] }
   | { type: "text_response"; title: string; content: string; content_type?: string; append?: boolean }
-  | { type: "detection_update"; state: string; confidence: number; cues?: string[]; landmarks?: Record<string, number> }
+  | { type: "detection_update"; state: string; confidence: number; cues?: string[]; landmarks?: Record<string, number>; face_detected?: boolean; detector_status?: string }
   | { type: "memory_updated"; fields: string[]; message: string }
   | { type: "guest_detected"; name?: string; photo_url?: string; confidence?: number }
   | { type: "owner_returned" }

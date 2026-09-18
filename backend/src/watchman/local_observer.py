@@ -2,7 +2,7 @@ import logging
 import sys
 import types
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List, Tuple
 
 import cv2
 import numpy as np
@@ -17,6 +17,8 @@ class LocalObservation:
     idle_score: float
     cues: list = field(default_factory=list)
     landmarks: dict = field(default_factory=dict)
+    face_detected: bool = False
+    detector_status: str = "loading"  # "ready" | "loading" | "unavailable"
 
 
 class LocalObserver:
@@ -24,7 +26,8 @@ class LocalObserver:
 
     Layer 1 of the robot-style perception stack:
     - FER (CNN trained on AffectNet) → classifies emotions from face
-    - Frame diff                      → detects idle / static screen
+    - YuNet fallback                 → robust face bounding-box locator if Haar misses
+    - Frame diff                     → detects idle / static screen
 
     Frustration score = weighted sum of angry + sad + disgust probabilities.
     Only fires ADK Agent when score is sustained above threshold for 30s.
@@ -35,26 +38,38 @@ class LocalObserver:
     def __init__(self):
         self._fer = None
         self._fer_loaded = False
+        self._detector_status = "loading"
+        self._detector_error: Optional[str] = None
         self._prev_gray: Optional[np.ndarray] = None
         import threading
         threading.Thread(target=self._load_fer, daemon=True).start()
 
     def _load_fer(self) -> None:
         try:
-            # pkg_resources was removed from setuptools 82+ as a top-level import.
-            # FER uses it for version lookup AND resource_filename (model path).
-            # Inject a minimal stub that satisfies both without requiring setuptools shim.
-            if "pkg_resources" not in sys.modules:
-                import importlib.util, os
+            # Check pkg_resources natively (e.g. setuptools<82)
+            try:
+                import pkg_resources
+            except ImportError:
+                # Python standard library compatibility shim for setuptools>=82
+                import importlib.metadata
+                import importlib.util
+                import os
 
-                def _resource_filename(pkg_name, resource_path):
+                class _Distribution:
+                    def __init__(self, name: str):
+                        try:
+                            self.version = importlib.metadata.version(name)
+                        except Exception:
+                            self.version = "22.5.1"
+
+                def _resource_filename(pkg_name: str, resource_path: str) -> str:
                     spec = importlib.util.find_spec(pkg_name)
                     if spec and spec.origin:
                         return os.path.join(os.path.dirname(spec.origin), resource_path)
                     return resource_path
 
                 stub = types.ModuleType("pkg_resources")
-                stub.get_distribution = lambda n: type("D", (), {"version": "0.0"})()
+                stub.get_distribution = lambda n: _Distribution(n)
                 stub.DistributionNotFound = Exception
                 stub.resource_filename = _resource_filename
                 sys.modules["pkg_resources"] = stub
@@ -62,38 +77,77 @@ class LocalObserver:
             from fer.fer import FER
             self._fer = FER(mtcnn=False)
             self._fer_loaded = True
+            self._detector_status = "ready"
             logger.info("LocalObserver: FER emotion detector loaded")
         except Exception as exc:
+            self._detector_status = "unavailable"
+            self._detector_error = str(exc)
             logger.warning(
                 "LocalObserver: fer unavailable (%s) — emotion detection disabled", exc
             )
+
+    def _find_face_rectangles(self, frame: np.ndarray) -> list:
+        """Find face bounding boxes using YuNet fallback if available."""
+        try:
+            from src.vision.face_identity_service import face_identity_service
+            embedder = getattr(face_identity_service, "embedder", None)
+            if embedder and embedder.is_available() and embedder._detector is not None:
+                h, w, _ = frame.shape
+                embedder._detector.setInputSize((w, h))
+                _, faces = embedder._detector.detect(frame)
+                if faces is not None and len(faces) > 0:
+                    rects = []
+                    for f in faces:
+                        # [x, y, w, h]
+                        rects.append((int(f[0]), int(f[1]), int(f[2]), int(f[3])))
+                    return rects
+        except Exception as exc:
+            logger.debug("LocalObserver: YuNet face detection check failed: %s", exc)
+        return []
 
     def has_face(self, frame_bytes: bytes) -> bool:
         """Return True if at least one face is detected in the frame.
 
         Used as a free, local pre-check before calling the Gemini face-matcher
-        API. If FER is not yet loaded, returns True (fail-safe: let Gemini decide).
+        API. If FER is not yet loaded, checks YuNet or returns True (fail-safe).
         """
-        if not self._fer_loaded or self._fer is None:
-            return True  # fail-safe — don't block the API check during startup
         try:
             nparr = np.frombuffer(frame_bytes, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is None:
                 return False
-            results = self._fer.detect_emotions(frame)
-            return len(results) > 0
+
+            if self._fer_loaded and self._fer is not None:
+                results = self._fer.detect_emotions(frame)
+                if len(results) > 0:
+                    return True
+
+            # Check YuNet
+            if len(self._find_face_rectangles(frame)) > 0:
+                return True
+
+            return False if self._fer_loaded else True
         except Exception:
             return True  # fail-safe on error
 
     def observe(self, frame_bytes: bytes) -> LocalObservation:
-        """Analyse a JPEG frame locally. No API call ever."""
+        """Analyse a JPEG frame locally. Zero API cost."""
         nparr = np.frombuffer(frame_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
-            return LocalObservation(event="neutral", frustration_score=0.0, idle_score=0.0)
+            return LocalObservation(
+                event="neutral",
+                frustration_score=0.0,
+                idle_score=0.0,
+                face_detected=False,
+                detector_status=self._detector_status,
+            )
 
-        frustration_score, cues, emotions = self._score_frustration(frame) if self._fer_loaded else (0.0, [], {})
+        if self._fer_loaded:
+            frustration_score, cues, emotions, face_detected = self._score_frustration(frame)
+        else:
+            frustration_score, cues, emotions, face_detected = 0.0, [], {}, False
+
         idle_score = self._score_idle(frame)
 
         if frustration_score >= self._FRUSTRATION_THRESHOLD:
@@ -109,14 +163,28 @@ class LocalObserver:
             idle_score=round(idle_score, 2),
             cues=cues,
             landmarks=emotions,
+            face_detected=face_detected,
+            detector_status=self._detector_status,
         )
 
-    def _score_frustration(self, frame: np.ndarray) -> tuple:
-        """Score frustration using FER's CNN emotion classifier."""
+    def _score_frustration(self, frame: np.ndarray) -> Tuple[float, list, dict, bool]:
+        """Score frustration using FER's CNN emotion classifier.
+
+        Returns:
+            (frustration_score, cues, emotions_dict, face_detected)
+        """
         try:
+            # 1. Try FER's default detection (Haar cascade)
             results = self._fer.detect_emotions(frame)
+
+            # 2. If Haar cascade misses a face, fallback to YuNet bounding box
             if not results:
-                return 0.0, [], {}
+                yunet_rects = self._find_face_rectangles(frame)
+                if yunet_rects:
+                    results = self._fer.detect_emotions(frame, face_rectangles=yunet_rects)
+
+            if not results:
+                return 0.0, [], {}, False
 
             face = max(results, key=lambda r: r["box"][2] * r["box"][3])
             emotions = face["emotions"]
@@ -134,11 +202,11 @@ class LocalObserver:
                 emotions.get("angry", 0), emotions.get("sad", 0),
                 emotions.get("happy", 0), emotions.get("neutral", 0), score,
             )
-            return min(score, 1.0), cues, {e: round(v, 2) for e, v in emotions.items()}
+            return min(score, 1.0), cues, {e: round(v, 2) for e, v in emotions.items()}, True
 
         except Exception as exc:
             logger.debug("LocalObserver: FER scoring error: %s", exc)
-            return 0.0, [], {}
+            return 0.0, [], {}, False
 
     def _score_idle(self, frame: np.ndarray) -> float:
         """Frame diff: 0.0 = active movement, 1.0 = completely static."""
