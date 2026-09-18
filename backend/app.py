@@ -165,6 +165,8 @@ app = gr.mount_gradio_app(fastapi_app, demo, path="/")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 7860))
+    # Hugging Face Spaces exposes port 7860 publicly.
+    # Note: Gradio 5 SSR internally binds to 7861 and sets PORT=7861, so we MUST bind to 7860.
+    port = int(os.getenv("APP_PORT", 7860))
     logger.info("Starting Rumi Core on port %d...", port)
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
