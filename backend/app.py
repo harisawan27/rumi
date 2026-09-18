@@ -219,9 +219,14 @@ demo.queue()
 # Entrypoint for Hugging Face Spaces (ZeroGPU + Gradio)
 # ---------------------------------------------------------------------------
 
+# Disable Gradio 5 Server-Side Rendering (SSR) Node.js proxy so Python Uvicorn
+# handles all HTTP and WebSocket requests directly on port 7860 without SvelteKit interception.
+os.environ["GRADIO_SSR_MODE"] = "false"
+
 if __name__ == "__main__":
     logger.info("Starting Rumi Core on port 7860 via demo.launch()...")
     # In ZeroGPU, demo.launch() triggers the dynamic GPU broker handshake
     # and exposes both the Gradio UI and all mounted FastAPI routes on 0.0.0.0:7860.
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(server_name="0.0.0.0", server_port=7860, ssr_mode=False)
+
 
