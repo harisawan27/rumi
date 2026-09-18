@@ -13,9 +13,15 @@ from src.auth.firebase_auth import verify_id_token, AuthError  # noqa: E402
 
 app = FastAPI(title="Project Rumi — Rumi Core", version="0.1.0")
 
+frontend_origins = ["http://localhost:3000", "http://localhost:3001", "http://localhost:8000", "http://localhost:7860"]
+frontend_env = os.getenv("FRONTEND_URL", "")
+if frontend_env:
+    frontend_origins.extend([origin.strip() for origin in frontend_env.split(",") if origin.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", os.getenv("FRONTEND_URL", "")],
+    allow_origins=frontend_origins,
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

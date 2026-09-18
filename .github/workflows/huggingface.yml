@@ -1,0 +1,34 @@
+name: Deploy Backend to Hugging Face Space
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  deploy-to-huggingface:
+    name: Deploy to Hugging Face Space
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for Hugging Face Trusted Publishers (OIDC)
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Hugging Face CLI
+        run: |
+          curl -LsSf https://hf.co/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Hugging Face CLI
+        run: |
+          hf --version || huggingface-cli --version
+
+      - name: Upload backend to Hugging Face Space
+        env:
+          HF_OIDC_RESOURCE: spaces/harisawan07/rumi
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          hf upload harisawan07/rumi ./backend . --repo-type=space --commit-message "Deploy backend from commit ${GITHUB_SHA::7}"

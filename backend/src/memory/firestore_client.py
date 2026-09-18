@@ -18,18 +18,46 @@ def _init_app() -> None:
     bucket = os.getenv("FIREBASE_STORAGE_BUCKET")
     options = {"storageBucket": bucket} if bucket else {}
 
-    # Cloud Run: service account JSON passed as base64-encoded env var
+    # Service account JSON passed as base64-encoded or raw JSON env var
     sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
     if sa_json:
-        sa_dict = json.loads(base64.b64decode(sa_json).decode())
+        sa_json = sa_json.strip()
+        try:
+            if sa_json.startswith("{"):
+                sa_dict = json.loads(sa_json)
+            else:
+                sa_dict = json.loads(base64.b64decode(sa_json).decode("utf-8"))
+        except Exception:
+            # Fallback to direct json parse
+            sa_dict = json.loads(sa_json)
         cred = credentials.Certificate(sa_dict)
         firebase_admin.initialize_app(cred, options)
         return
 
-    # Local dev: service account JSON file path
-    sa_path = os.environ["FIREBASE_SERVICE_ACCOUNT_PATH"]
-    cred = credentials.Certificate(sa_path)
-    firebase_admin.initialize_app(cred, options)
+    # Local dev: service account JSON file path or auto-discovery
+    sa_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
+    if not sa_path:
+        for candidate in [
+            "firebase-service-account.json",
+            "firebase-sa.json",
+            "backend/firebase-service-account.json",
+            os.path.join(os.path.dirname(__file__), "..", "..", "firebase-service-account.json"),
+        ]:
+            if os.path.isfile(candidate):
+                sa_path = candidate
+                break
+
+    if sa_path and os.path.isfile(sa_path):
+        cred = credentials.Certificate(sa_path)
+        firebase_admin.initialize_app(cred, options)
+    else:
+        # Fallback to default application credentials if available
+        try:
+            firebase_admin.initialize_app(options=options)
+        except Exception as exc:
+            raise RuntimeError(
+                "Firebase initialization failed: FIREBASE_SERVICE_ACCOUNT_JSON or valid FIREBASE_SERVICE_ACCOUNT_PATH required."
+            ) from exc
 
 
 def get_db() -> Client:

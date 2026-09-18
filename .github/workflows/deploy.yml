@@ -1,8 +1,7 @@
-name: Deploy Rumi
+name: Legacy Deploy Rumi (GCP)
 
+# Legacy GCP / Firebase deployment workflow (triggered manually)
 on:
-  push:
-    branches: [master]
   workflow_dispatch:
 
 jobs:

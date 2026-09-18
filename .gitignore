@@ -1,55 +1,100 @@
-# Environment
+# ===========================================================================
+# Environment Variables & Secrets (CRITICAL: NEVER COMMIT)
+# ===========================================================================
 .env
 .env.local
 .env.*.local
+.env*.local
+*.env
+!*.env.example
 
-# Firebase / GCP service account keys (secrets — never commit)
+# Service Account Keys & Credentials
+*service-account*.json
+*service_account*.json
+firebase-service-account.json
 backend/firebase-service-account.json
+firebase-sa*.json
+firebase-sa*.txt
+gcp-sa-key*.json
+gcp-sa*.json
 *.json.key
-gcp-sa-key.json
-firebase-sa.json
+*.key
+*.pem
+*.p12
 
+# ===========================================================================
+# Firebase CLI & Cache
+# ===========================================================================
+.firebase/
+.firebaserc.local
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+
+# ===========================================================================
 # Python
+# ===========================================================================
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
+.Python
 .venv/
 venv/
+ENV/
 env/
 dist/
 build/
 *.egg-info/
+.installed.cfg
+*.egg
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.mypy_cache/
 
-# Node / Next.js
+# ===========================================================================
+# Node / Next.js / TypeScript
+# ===========================================================================
 node_modules/
+frontend/node_modules/
+.next/
 frontend/.next/
+out/
 frontend/out/
+build/
 frontend/build/
+dist/
 frontend/dist/
+*.tsbuildinfo
+frontend/*.tsbuildinfo
+
+# Logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# OS
+# ===========================================================================
+# IDE & Local Tooling
+# ===========================================================================
+.vscode/
+.idea/
+*.iml
+*.iws
+.claude/settings.local.json
 .DS_Store
 Thumbs.db
 *.tmp
 *.swp
 
-# IDE
-.vscode/
-.idea/
-*.iml
-
-# Docker
-*.dockerignore
-
-# Cloud Build / GCP
+# ===========================================================================
+# Cloud & Terraform
+# ===========================================================================
 .terraform/
 *.tfstate*
+
+*.dockerignore
