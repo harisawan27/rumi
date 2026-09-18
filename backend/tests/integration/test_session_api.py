@@ -117,3 +117,38 @@ def test_distributed_expired_owner_presence_blocks_access(client):
         resp = test_client.get("/identity")
         assert resp.status_code == 403
         assert "GUEST_PROTECTED" in resp.json().get("detail", "")
+
+
+def test_sensitive_endpoint_bypasses_positive_cache_on_remote_guest_write(client):
+    """Test that /identity bypasses local positive cache and rejects when Firestore has guest mode."""
+    test_client, mgr, uid = client
+
+    from src.session.presence_manager import presence_manager
+    from datetime import datetime, timezone, timedelta
+
+    # Set up local cache with valid owner authorization
+    now = datetime.now(timezone.utc)
+    valid_until = now + timedelta(seconds=30)
+    presence_manager._cache[uid] = {
+        "data": {"mode": "owner", "owner_verified_until": valid_until.isoformat()},
+        "cached_at": now,
+        "until": valid_until,
+    }
+
+    # Verify that get_presence(uid, bypass_cache=False) would have returned owner from cache
+    cached_data = presence_manager.get_presence(uid, bypass_cache=False)
+    assert cached_data["mode"] == "owner"
+
+    # But mock Firestore doc returns guest mode (written by remote instance)
+    mock_snap = MagicMock()
+    mock_snap.exists = True
+    mock_snap.to_dict.return_value = {"mode": "guest", "owner_verified_until": None}
+
+    with patch.object(presence_manager, "_get_doc_ref") as mock_ref:
+        mock_ref.return_value.get.return_value = mock_snap
+
+        # Sensitive endpoint call to /identity MUST call get_presence(uid, bypass_cache=True)
+        # and therefore immediately return 403 GUEST_PROTECTED!
+        resp = test_client.get("/identity")
+        assert resp.status_code == 403
+        assert "GUEST_PROTECTED" in resp.json().get("detail", "")

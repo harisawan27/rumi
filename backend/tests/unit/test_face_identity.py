@@ -230,3 +230,36 @@ async def test_inference_exception_fails_safe():
 
     assert result.status == FaceVerificationStatus.VERIFICATION_UNAVAILABLE
     assert result.faces_detected == 0
+
+
+@pytest.mark.asyncio
+async def test_embedder_unavailable_fails_closed_verification_unavailable():
+    """Verify that when models fail to load, identify() fails closed without raising."""
+    embedder = MagicMock()
+    embedder.is_available.return_value = False
+    embedder.init_error = "ONNX model not found"
+
+    service = FaceIdentityService(embedder=embedder)
+    with patch("src.utils.observability.log_structured_event") as mock_log:
+        result = await service.identify(b"frame", uid="user_123")
+        assert result.status == FaceVerificationStatus.VERIFICATION_UNAVAILABLE
+        assert result.faces_detected == 0
+        mock_log.assert_called_once()
+        assert mock_log.call_args[0][0] == "FACE_IDENTIFICATION_ERROR"
+        assert mock_log.call_args[0][1]["error"] == "MODEL_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_inference_exception_logs_structured_error():
+    """Verify inference exceptions log structured events and return VERIFICATION_UNAVAILABLE."""
+    embedder = MagicMock()
+    embedder.is_available.return_value = True
+    embedder.detect_and_embed.side_effect = ValueError("Corrupted image buffer")
+
+    service = FaceIdentityService(embedder=embedder)
+    with patch("src.utils.observability.log_structured_event") as mock_log:
+        result = await service.identify(b"frame", uid="user_123")
+        assert result.status == FaceVerificationStatus.VERIFICATION_UNAVAILABLE
+        mock_log.assert_called_once()
+        assert mock_log.call_args[0][0] == "FACE_IDENTIFICATION_ERROR"
+        assert mock_log.call_args[0][1]["error"] == "INFERENCE_FAILED"

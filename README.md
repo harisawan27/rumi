@@ -92,9 +92,11 @@ Every 10 seconds, Rumi checks the person in front of the camera against the owne
 
 **Empty frame / Away Mode:** If the owner steps away from the camera, Rumi transitions to an away state without terminating background observation. An empty frame does not trigger guest lock — only the sustained presence of an unrecognized face activates guest mode.
 
-**Known people:** When a registered friend or colleague sits down, Rumi matches them against their stored reference photo, greets them warmly by name, and keeps personal owner notes private.
+**Multiple Faces / Shoulder-Surfing Protection:** When multiple faces appear simultaneously in frame, Rumi conservatively removes owner-private authorization and enters protected guest mode to protect private data. (Rumi does not perform full multi-person tracking; it conservatively locks private access).
 
-**When a guest sits down:** The interface blurs and displays a locked *Guest Mode* banner. Crucially, access control is enforced authoritatively on the backend: all sensitive REST endpoints (`/identity`, `/known-people`, `/canvas/history`, `/session-summaries`) return HTTP 403 Forbidden until the owner's face is verified again. Guests can converse with Rumi on general topics, but owner data remains inaccessible.
+**Biometric Face Identification & Performance:** Visual presence verification runs locally via OpenCV YuNet (face detection) and SFace (128-d face embedding), requiring 1 local detection inference + 1 local embedding inference followed by $O(N)$ in-memory cosine comparisons across $N$ enrolled profiles. This completely replaces previous $O(N)$ remote multimodal API calls with $<15\text{ms}$ local CPU inference.
+
+**When a guest sits down:** The interface blurs and displays a locked *Guest Mode* banner. Crucially, access control is enforced authoritatively on the backend: all sensitive REST endpoints (`/identity`, `/known-people`, `/canvas/history`, `/session-summaries`) bypass caching to query distributed Firestore presence directly and return HTTP 403 Forbidden until fresh owner facial verification is confirmed. Guests can converse with Rumi on general topics, but owner data remains inaccessible.
 
 **When you return:** The canvas unblurs instantly. The *Identity Verified* badge reappears. Rumi's face expression shifts to *happy* for three seconds, then resets. The session continues exactly where it left off.
 

@@ -2,11 +2,52 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Only the authenticated Haris account can read/write their own data
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null
-                         && request.auth.uid == userId
-                         && request.auth.uid == "Ig70VVVXq3hFkqWBPrIlxjAbO1v2";
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      // User root document (profile, settings, last_memory_extraction_at)
+      allow read, write: if isOwner(userId);
+
+      // 1. Biometric face embeddings: strictly backend-only (Firebase Admin SDK).
+      // Client SDK users cannot directly read or write raw embedding vectors.
+      match /face_embeddings/{document=**} {
+        allow read, write: if false;
+      }
+
+      // 2. Ephemeral presence: backend-authoritative authorization state.
+      // Client SDK may read presence to inspect guest lock status in UI,
+      // but is strictly forbidden from writing or forging presence records.
+      match /presence/{document=**} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      // 3. Permitted user subcollections for client SDK access
+      match /sessions/{sessionId} {
+        allow read, write: if isOwner(userId);
+
+        match /interactions/{interactionId} {
+          allow read, write: if isOwner(userId);
+        }
+      }
+
+      match /session_summaries/{summaryId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /memory_candidates/{candidateId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /known_people/{personId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      match /canvas_history/{canvasId} {
+        allow read, write: if isOwner(userId);
+      }
     }
 
     // Deny all other access

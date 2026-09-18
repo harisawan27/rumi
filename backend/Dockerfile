@@ -13,6 +13,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
+COPY models/ ./models/
+
+# Download and verify OpenCV face recognition models during container build
+RUN python -m src.vision.download_models --models-dir /app/models
 
 EXPOSE 8080
 

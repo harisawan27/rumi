@@ -68,57 +68,51 @@ class OpenCVFaceEmbedder(BaseFaceEmbedder):
         self.yunet_path = os.path.join(self.models_dir, "face_detection_yunet_2023mar.onnx")
         self.sface_path = os.path.join(self.models_dir, "face_recognition_sface_2021dec.onnx")
 
-        self._ensure_models_exist()
-
         self._detector = None
         self._recognizer = None
-        self._load_models()
+        self.init_error: Optional[str] = None
 
-    def _ensure_models_exist(self) -> None:
-        """Verify models exist on disk with matching sha256, or download them safely."""
-        self._check_or_download(self.yunet_path, YUNET_URL, YUNET_SHA256, "YuNet")
-        self._check_or_download(self.sface_path, SFACE_URL, SFACE_SHA256, "SFace")
+        self._ensure_and_load_models()
 
-    def _check_or_download(self, path: str, url: str, expected_sha256: str, name: str) -> None:
-        if os.path.isfile(path):
-            with open(path, "rb") as f:
-                h = hashlib.sha256(f.read()).hexdigest()
-            if h == expected_sha256:
-                return
-            logger.warning("OpenCVFaceEmbedder: %s sha256 mismatch (%s != %s), redownloading", name, h, expected_sha256)
+    def is_available(self) -> bool:
+        """Return True if both detector and recognizer are loaded and ready."""
+        return bool(self._detector is not None and self._recognizer is not None)
 
+    def _ensure_and_load_models(self) -> None:
+        """Verify models on disk, provisioning them via download_models if needed."""
         try:
-            logger.info("OpenCVFaceEmbedder: downloading %s from %s", name, url)
-            with httpx.Client(timeout=120.0, follow_redirects=True) as client:
-                with client.stream("GET", url) as resp:
-                    resp.raise_for_status()
-                    with open(path, "wb") as f:
-                        for chunk in resp.iter_bytes():
-                            f.write(chunk)
-            with open(path, "rb") as f:
-                h = hashlib.sha256(f.read()).hexdigest()
-            if h != expected_sha256:
-                logger.warning("OpenCVFaceEmbedder: downloaded %s sha256 mismatch (%s)", name, h)
-            else:
-                logger.info("OpenCVFaceEmbedder: successfully verified %s", name)
+            from src.vision.download_models import ensure_models
+            ensure_models(models_dir=self.models_dir, fail_fast=False)
         except Exception as exc:
-            logger.warning("OpenCVFaceEmbedder: could not download %s: %s", name, exc)
+            self.init_error = f"Model provisioning error: {exc}"
+            logger.warning("OpenCVFaceEmbedder: %s", self.init_error)
 
-    def _load_models(self) -> None:
         try:
             if os.path.isfile(self.yunet_path):
                 self._detector = cv2.FaceDetectorYN.create(
                     self.yunet_path, "", (320, 320), score_threshold=0.6, nms_threshold=0.3
                 )
+            else:
+                self.init_error = f"Missing YuNet model: {self.yunet_path}"
+
             if os.path.isfile(self.sface_path):
                 self._recognizer = cv2.FaceRecognizerSF.create(self.sface_path, "")
-            logger.info("OpenCVFaceEmbedder: initialized YuNet detector and SFace recognizer")
+            else:
+                self.init_error = f"Missing SFace model: {self.sface_path}"
+
+            if self.is_available():
+                logger.info("OpenCVFaceEmbedder: initialized YuNet detector and SFace recognizer")
+            else:
+                logger.warning("OpenCVFaceEmbedder: model initialization failed (%s)", self.init_error)
         except Exception as exc:
-            logger.warning("OpenCVFaceEmbedder: model initialization failed: %s", exc)
+            self.init_error = f"OpenCV model initialization error: {exc}"
+            self._detector = None
+            self._recognizer = None
+            logger.warning("OpenCVFaceEmbedder: %s", self.init_error)
 
     def detect_and_embed(self, frame_bytes: bytes) -> tuple[int, Optional[np.ndarray]]:
-        if not self._detector or not self._recognizer:
-            return 0, None
+        if not self.is_available():
+            raise RuntimeError(f"OpenCVFaceEmbedder unavailable: {self.init_error or 'models not loaded'}")
 
         nparr = np.frombuffer(frame_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -158,13 +152,21 @@ class OpenCVFaceEmbedder(BaseFaceEmbedder):
 class FaceIdentityService:
     """Dedicated face identity and verification service.
 
-    Features:
-    - Replaces O(N) Gemini multimodal comparison loops with local 128-d face embeddings.
-    - Matches against owner and known people via cosine similarity.
-    - Enforces conservative multi-face policy:
-        0 faces -> NO_FACE
-        1 face  -> identify
-        2+ faces -> MULTIPLE_FACES
+    Architecture & Complexity:
+    - Face detection: 1 local model inference (YuNet)
+    - Face embedding: 1 local model inference (SFace)
+    - Identity matching: O(N) cosine comparisons over N enrolled embeddings in memory
+    Replaces O(N) remote multimodal Gemini Vision calls with 1 local embedding inference
+    plus O(N) in-memory vector comparisons.
+
+    Policy:
+    - 0 faces: NO_FACE
+    - 1 face: Identify against owner and enrolled known people
+    - 2+ faces: MULTIPLE_FACES — Multiple simultaneous faces conservatively remove
+      owner-private authorization / enter protected guest state. Note: Rumi does not
+      identify individual faces in multi-face scenes; it conservatively locks private access
+      to protect owner privacy.
+    - Model failure / exception: Fail closed (VERIFICATION_UNAVAILABLE). Never treat failure as OWNER.
     - Persists reference embeddings in users/{uid}/face_embeddings/{person_id}.
     - Lazy migration for existing photos without stored embeddings.
     """
@@ -266,9 +268,33 @@ class FaceIdentityService:
         owner_name: str = "Owner",
     ) -> FaceIdentityResult:
         """Identify face in frame against owner and known people."""
+        if hasattr(self.embedder, "is_available") and not self.embedder.is_available():
+            init_err = getattr(self.embedder, "init_error", "models not loaded")
+            try:
+                from src.utils.observability import log_structured_event
+                log_structured_event("FACE_IDENTIFICATION_ERROR", {
+                    "error": "MODEL_UNAVAILABLE",
+                    "details": str(init_err)[:100],
+                })
+            except Exception:
+                pass
+            return FaceIdentityResult(
+                status=FaceVerificationStatus.VERIFICATION_UNAVAILABLE,
+                confidence=0.0,
+                faces_detected=0,
+            )
+
         try:
             num_faces, emb = self.embedder.detect_and_embed(frame_bytes)
         except Exception as exc:
+            try:
+                from src.utils.observability import log_structured_event
+                log_structured_event("FACE_IDENTIFICATION_ERROR", {
+                    "error": "INFERENCE_FAILED",
+                    "details": str(exc)[:100],
+                })
+            except Exception:
+                pass
             logger.error("FaceIdentityService: inference failed: %s", exc)
             return FaceIdentityResult(
                 status=FaceVerificationStatus.VERIFICATION_UNAVAILABLE,

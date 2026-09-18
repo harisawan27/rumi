@@ -159,16 +159,21 @@ class PresenceManager:
         self.set_away_mode(uid, session_id)
         self._cache.pop(uid, None)
 
-    def get_presence(self, uid: str) -> Optional[dict]:
-        """Fetch raw presence document for uid, with short local cache."""
+    def get_presence(self, uid: str, bypass_cache: bool = False) -> Optional[dict]:
+        """Fetch raw presence document for uid, with short local cache.
+
+        If bypass_cache is True, ignores the positive owner cache to guarantee reading
+        the most up-to-date distributed state from Firestore (e.g. for sensitive routes).
+        """
         now = datetime.now(timezone.utc)
-        cached = self._cache.get(uid)
-        if cached:
-            cached_at = cached.get("cached_at")
-            mode = cached.get("data", {}).get("mode")
-            max_age = POSITIVE_CACHE_TTL_SECONDS if mode == "owner" else NEGATIVE_CACHE_TTL_SECONDS
-            if cached_at and (now - cached_at).total_seconds() < max_age:
-                return cached.get("data")
+        if not bypass_cache:
+            cached = self._cache.get(uid)
+            if cached:
+                cached_at = cached.get("cached_at")
+                mode = cached.get("data", {}).get("mode")
+                max_age = POSITIVE_CACHE_TTL_SECONDS if mode == "owner" else NEGATIVE_CACHE_TTL_SECONDS
+                if cached_at and (now - cached_at).total_seconds() < max_age:
+                    return cached.get("data")
 
         try:
             doc = self._get_doc_ref(uid).get()
@@ -193,12 +198,17 @@ class PresenceManager:
             logger.warning("PresenceManager: get_presence failed for %s: %s", uid, exc)
             return None
 
-    def is_owner_authorized(self, uid: str, local_guest_mode: bool = False) -> bool:
+    def is_owner_authorized(
+        self,
+        uid: str,
+        local_guest_mode: bool = False,
+        bypass_cache: bool = False,
+    ) -> bool:
         """Determine if caller has verified owner authorization.
 
         Security checks:
         1. If local session is marked as guest -> immediately False (0ms).
-        2. Read shared Firestore presence document.
+        2. If bypass_cache is True, bypasses positive owner cache and reads directly from Firestore.
         3. If mode != 'owner' -> False.
         4. If now > owner_verified_until -> False (expired verification).
         5. Any error / missing record -> False (fail-safe).
@@ -208,22 +218,23 @@ class PresenceManager:
 
         now = datetime.now(timezone.utc)
 
-        # Fast cache check
-        cached = self._cache.get(uid)
-        if cached:
-            mode = cached.get("data", {}).get("mode")
-            cached_at = cached.get("cached_at")
-            # If cached as negative (guest/away/unknown) within 5 seconds, reject fast
-            if mode != "owner" and cached_at and (now - cached_at).total_seconds() < NEGATIVE_CACHE_TTL_SECONDS:
-                return False
-            # If cached as owner within 2 seconds, check expiry
-            if mode == "owner" and cached_at and (now - cached_at).total_seconds() < POSITIVE_CACHE_TTL_SECONDS:
-                until = cached.get("until")
-                if until and now <= until:
-                    return True
+        if not bypass_cache:
+            # Fast cache check
+            cached = self._cache.get(uid)
+            if cached:
+                mode = cached.get("data", {}).get("mode")
+                cached_at = cached.get("cached_at")
+                # If cached as negative (guest/away/unknown) within 5 seconds, reject fast
+                if mode != "owner" and cached_at and (now - cached_at).total_seconds() < NEGATIVE_CACHE_TTL_SECONDS:
+                    return False
+                # If cached as owner within 2 seconds, check expiry
+                if mode == "owner" and cached_at and (now - cached_at).total_seconds() < POSITIVE_CACHE_TTL_SECONDS:
+                    until = cached.get("until")
+                    if until and now <= until:
+                        return True
 
         # Consult distributed Firestore document
-        data = self.get_presence(uid)
+        data = self.get_presence(uid, bypass_cache=bypass_cache)
         if not data:
             return False
 

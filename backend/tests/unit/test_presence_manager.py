@@ -167,3 +167,34 @@ def test_stale_local_owner_state_cannot_override_shared_guest():
         # Must re-read Firestore because positive cache TTL (2s) expired -> sees guest -> rejects!
         is_auth = pm.is_owner_authorized(uid)
         assert is_auth is False
+
+
+def test_positive_cache_window_and_bypass_cache_forces_refresh():
+    """Verify that bypass_cache=True forces an immediate read from Firestore even within the 2s cache window."""
+    pm = PresenceManager()
+    uid = "user_cache_test"
+
+    now = datetime.now(timezone.utc)
+    valid_until = now + timedelta(seconds=30)
+    # Cache positive owner record updated 0.5s ago (within 2s window)
+    pm._cache[uid] = {
+        "data": {"mode": "owner", "owner_verified_until": valid_until.isoformat()},
+        "cached_at": now - timedelta(seconds=0.5),
+        "until": valid_until,
+    }
+
+    # Firestore has changed to guest mode on another instance
+    mock_client = MagicMock()
+    mock_doc = MagicMock()
+    mock_snap = MagicMock()
+    mock_snap.exists = True
+    mock_snap.to_dict.return_value = {"mode": "guest", "owner_verified_until": None}
+    mock_doc.get.return_value = mock_snap
+    mock_client.collection.return_value.document.return_value.collection.return_value.document.return_value = mock_doc
+
+    with patch("src.session.presence_manager.get_db", return_value=mock_client):
+        # Ordinary call within 2s positive cache window reads from cache (stale window)
+        assert pm.is_owner_authorized(uid, bypass_cache=False) is True
+
+        # Sensitive call with bypass_cache=True bypasses cache, sees guest mode, and rejects immediately (0s window)
+        assert pm.is_owner_authorized(uid, bypass_cache=True) is False

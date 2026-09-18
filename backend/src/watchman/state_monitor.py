@@ -381,6 +381,8 @@ class StateMonitor:
                 return
 
             # ── 4. Unknown face or Multiple faces ────────────────────────────
+            # Multiple simultaneous faces conservatively remove owner-private authorization /
+            # enter protected guest state without individual face tracking.
             self._last_face_label = "guest"
             self._non_owner_streak += 1
             logger.debug("StateMonitor: non_owner_streak=%d (status=%s, faces=%d)",

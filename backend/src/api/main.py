@@ -62,6 +62,15 @@ async def _startup():
     else:
         logger.info("[RUMI CORE] Multi-user mode active — identity layer ready.")
 
+    # Verify or provision OpenCV face models on startup
+    try:
+        from src.vision.download_models import ensure_models
+        ensure_models(fail_fast=True)
+        logger.info("[RUMI CORE] Face recognition models verified successfully.")
+    except Exception as exc:
+        logger.critical("[RUMI CORE] Model integrity verification failed: %s", exc)
+        raise
+
 
 @app.get("/health")
 def health():
@@ -107,6 +116,7 @@ def auth_verify(body: VerifyRequest):
 def _check_guest_mode_restriction(uid: str) -> None:
     """Security & Privacy guard: Rejects access to sensitive owner profile/canvas data
     if the session is currently in Guest Mode or presence is unverified in distributed state.
+    Sensitive REST routes bypass positive caching to eliminate stale-authorization windows.
     """
     # 1. Local process fast-path: if local SessionManager is locked in guest mode, reject immediately
     mgr = _session_managers.get(uid)
@@ -116,10 +126,10 @@ def _check_guest_mode_restriction(uid: str) -> None:
             detail="GUEST_PROTECTED: Active session is locked in Guest Mode.",
         )
 
-    # 2. Distributed presence check across backend instances
+    # 2. Distributed presence check across backend instances (bypasses positive cache for sensitive endpoints)
     try:
         from src.session.presence_manager import presence_manager
-        presence = presence_manager.get_presence(uid)
+        presence = presence_manager.get_presence(uid, bypass_cache=True)
         if presence:
             mode = presence.get("mode")
             if mode == "guest":
@@ -139,12 +149,16 @@ def _check_guest_mode_restriction(uid: str) -> None:
                             status_code=403,
                             detail="GUEST_PROTECTED: Owner presence verification has expired.",
                         )
-            elif mode in ("away", "unknown"):
-                if mgr and mgr.status == "active":
+                else:
                     raise HTTPException(
                         status_code=403,
-                        detail="GUEST_PROTECTED: Active session presence is unverified or user is away.",
+                        detail="GUEST_PROTECTED: Owner presence unverified.",
                     )
+            elif mode in ("away", "unknown"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="GUEST_PROTECTED: Active session presence is unverified or user is away.",
+                )
     except HTTPException:
         raise
     except Exception as exc:
