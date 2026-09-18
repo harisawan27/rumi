@@ -78,11 +78,19 @@ async def compare_faces(
             _types.Part(text=prompt),
         ]
 
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-        )
-        raw = (response.text or "").strip()
+        raw = ""
+        for model in ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                )
+                raw = (response.text or "").strip()
+                if raw:
+                    break
+            except Exception as exc:
+                logger.warning("face_matcher (%s) failed: %s", model, exc)
+                continue
 
         # Strip markdown fences if present
         if raw.startswith("```"):
@@ -92,6 +100,7 @@ async def compare_faces(
             raw = raw.strip()
 
         parsed = json.loads(raw)
+
         face_detected = bool(parsed.get("face_detected", True))
         confidence    = float(parsed.get("confidence", 0.5))
         is_owner      = face_detected and parsed.get("is_same_person", True) and confidence >= _OWNER_THRESHOLD

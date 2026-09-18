@@ -18,9 +18,14 @@ from src.memory.firestore_client import get_db
 
 logger = logging.getLogger(__name__)
 
-MODEL = "gemini-2.0-flash"
+MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+]
 
 EXTRACT_PROMPT = """\
+
 You are a memory manager for Rumi, a proactive AI companion.
 
 After each session you receive:
@@ -119,24 +124,28 @@ class MemoryExtractor:
             summary=summary or "(no summary available)",
         )
 
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=MODEL, contents=prompt
-            )
-            raw = response.text.strip()
-            # Strip markdown code fences if present
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            patch = json.loads(raw.strip())
-        except Exception as exc:
-            logger.warning("MemoryExtractor: Gemini call failed: %s", exc)
-            return {}
+        patch = None
+        for model in MODELS:
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=model, contents=prompt
+                )
+                raw = (response.text or "").strip()
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                patch = json.loads(raw.strip())
+                if patch and isinstance(patch, dict):
+                    break
+            except Exception as exc:
+                logger.warning("MemoryExtractor (%s) failed: %s", model, exc)
+                continue
 
         if not patch or not isinstance(patch, dict):
             logger.info("MemoryExtractor: nothing new learned this session")
             return {}
+
 
         # Apply patch to Firestore
         try:

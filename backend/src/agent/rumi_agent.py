@@ -22,9 +22,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-AGENT_MODEL = "gemini-2.5-flash"
+AGENT_MODEL = "gemini-3.5-flash-lite"
 
 RUMI_INSTRUCTION = """\
+
 You are Rumi — the Identity Layer. You witness and understand the human before you.
 Named after the great Sufi poet, your mandate is not to respond but to arrive:
 to observe, to understand, and to speak only what is true and needed.

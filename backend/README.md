@@ -21,7 +21,7 @@ This Hugging Face Space serves as the central AI core backend, powered by **Grad
 - **Frontend Target**: Vercel (`https://*.vercel.app`)
 - **Real-time Protocol**: WebSockets (`wss://<space-id>.hf.space/ws/observe`)
 - **ZeroGPU Acceleration**: On-demand NVIDIA GPU allocation for vision analysis, tensor operations, and emotion recognition.
-- **Multimodal AI**: Google Gemini 2.5 Flash / Gemini Multimodal Live API.
+- **Multimodal AI**: Google Gemini 3.8 Live (Live API) / Gemini 3.5 Flash Lite (Vision, Canvas, Reasoning)
 - **Memory & Identity**: Firebase Firestore with persistent contextual sessions.
 
 ## 🔌 Core Endpoints

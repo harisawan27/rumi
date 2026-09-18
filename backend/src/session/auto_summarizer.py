@@ -8,9 +8,14 @@ from src.memory.firestore_client import get_db
 
 logger = logging.getLogger(__name__)
 
-AUTO_SUMMARIZER_MODEL = "gemini-2.0-flash"
+AUTO_SUMMARIZER_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+]
 
 AUTO_SUMMARIZER_PROMPT_TEMPLATE = """\
+
 You are a concise session summarizer for Rumi. Given the following interaction log
 from a session with {name}, write EXACTLY 2 sentences summarizing:
 1. The key emotional or cognitive states detected.
@@ -76,16 +81,25 @@ class AutoSummarizer:
             interaction_log_json=json.dumps(safe_interactions, ensure_ascii=False, indent=2)
         )
 
-        response = await self._client.aio.models.generate_content(
-            model=AUTO_SUMMARIZER_MODEL, contents=prompt
-        )
-        text = response.text.strip()
+        text = ""
+        for model in AUTO_SUMMARIZER_MODELS:
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=model, contents=prompt
+                )
+                text = (response.text or "").strip()
+                if text:
+                    break
+            except Exception as exc:
+                logger.warning("AutoSummarizer (%s) failed: %s", model, exc)
+                continue
 
         # Validate: must be exactly 2 sentences
         sentences = [s.strip() for s in text.split(".") if s.strip()]
         if len(sentences) < 2:
             logger.warning("AutoSummarizer: response has fewer than 2 sentences — using as-is")
-        return text
+        return text or f"{name} completed an active session with Rumi."
+
 
     async def save_summary(
         self,

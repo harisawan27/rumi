@@ -397,6 +397,8 @@ def delete_known_person_route(person_id: str, uid: str = Depends(get_current_uid
 # Canvas helpers (Phase 3 + 5)
 # ---------------------------------------------------------------------------
 
+FLASH_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash")
+
 def _make_genai_client():
     """Return a genai Client using Vertex AI when GOOGLE_CLOUD_PROJECT is set,
     otherwise fall back to GEMINI_API_KEY. Mirrors live_client.py auth logic."""
@@ -497,7 +499,7 @@ Reply: {{"tool": "add_known_person", "person_name": "<name>", "relationship": "<
 
 If NEITHER action matches, reply exactly: {{"tool": null}}"""
 
-    for model in ("gemini-2.0-flash", "gemini-2.5-flash"):
+    for model in FLASH_MODELS:
         try:
             response = await client.aio.models.generate_content(model=model, contents=prompt)
             raw = (response.text or "").strip()
@@ -598,7 +600,7 @@ When canvas_needed=true:
         parts.append(_types.Part(inline_data=_types.Blob(data=_b64.b64decode(image_b64), mime_type="image/jpeg")))
     parts.append(_types.Part(text=full_prompt))
 
-    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+    for model in FLASH_MODELS:
         try:
             response = await client.aio.models.generate_content(model=model, contents=parts)
             raw = (response.text or "").strip()
@@ -679,7 +681,7 @@ async def _identify_face(text: str, image_b64: str, system_prompt: str) -> str:
         _types.Part(inline_data=_types.Blob(data=frame_bytes, mime_type="image/jpeg")),
         _types.Part(text=prompt),
     ]
-    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+    for model in FLASH_MODELS:
         try:
             response = await client.aio.models.generate_content(model=model, contents=contents)
             result = (response.text or "").strip()
@@ -708,7 +710,7 @@ async def _recite_poem(text: str, system_prompt: str) -> str:
         "A brief warm line before or after is fine. "
         "Do NOT mention canvas, screen, writing, or displaying anything."
     )
-    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+    for model in FLASH_MODELS:
         try:
             response = await client.aio.models.generate_content(
                 model=model, contents=[_types.Part(text=prompt)],
@@ -739,7 +741,7 @@ async def _flash_text_only(text: str, system_prompt: str = "") -> str:
         "write it beautifully formatted. If it is a question or task, give a thorough "
         "step-by-step answer with headings. Be the Sufi-Engineer — precise and soulful."
     )
-    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+    for model in FLASH_MODELS:
         try:
             logger.info("_flash_text_only: trying %s for: %.60s", model, text)
             client = _make_genai_client()
@@ -801,7 +803,7 @@ async def _flash_with_image(text: str, image_b64: str, system_prompt: str = "") 
         _types.Part(inline_data=_types.Blob(data=image_bytes, mime_type="image/jpeg")),
         _types.Part(text=text_prompt),
     ]
-    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+    for model in FLASH_MODELS:
         try:
             response = await client.aio.models.generate_content(
                 model=model, contents=contents
@@ -842,7 +844,7 @@ async def _flash_followup(text: str, context: list, image_b64: str | None, syste
         parts.append(_types.Part(inline_data=_types.Blob(data=_b64.b64decode(image_b64), mime_type="image/jpeg")))
     parts.append(_types.Part(text=text_prompt))
 
-    for model in ("gemini-2.5-flash", "gemini-2.0-flash"):
+    for model in FLASH_MODELS:
         try:
             response = await client.aio.models.generate_content(model=model, contents=parts)
             result = (response.text or "").strip()

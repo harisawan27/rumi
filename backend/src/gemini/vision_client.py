@@ -7,7 +7,11 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-VISION_MODEL = "gemini-2.5-flash"
+VISION_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+]
 
 POSTURE_ANALYSIS_PROMPT = """\
 You are analysing a live camera frame of a person at their desk or computer.
@@ -36,7 +40,7 @@ cues: 2–4 brief visible observations that led to this classification.\
 class VisionClient:
     """Gemini-powered vision for Watchman posture and emotion analysis.
 
-    Uses Gemini 2.5 Flash (generate_content) for structured frame analysis.
+    Uses Gemini 3.5 Flash Lite (with 3.1 Flash Lite fallback) for structured frame analysis.
     Called every 3 watchman cycles (~15s) — one API call per observation.
     PRIVACY_CHECK: frames sent ephemerally, never persisted.
     """
@@ -73,30 +77,33 @@ class VisionClient:
             "- neutral: present but no clear signal\n\n"
             "screen_context: briefly describe what app/file/content is visible on screen."
         )
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=VISION_MODEL,
-                contents=[types.Content(parts=[camera_part, screen_part, types.Part.from_text(prompt)])],
-            )
-            text = response.text.strip()
-            if text.startswith("```"):
-                text = "\n".join(text.split("\n")[1:])
-                if text.endswith("```"):
-                    text = text[:-3].strip()
-            data = json.loads(text)
-            data.setdefault("state", "neutral")
-            data.setdefault("confidence", 0.5)
-            data.setdefault("cues", [])
-            data.setdefault("emotions", {})
-            data.setdefault("screen_context", "")
-            logger.info(
-                "VisionClient(+screen): state=%s screen=%s",
-                data["state"], data.get("screen_context", "")[:60],
-            )
-            return data
-        except Exception as exc:
-            logger.warning("VisionClient.analyse_frame_with_screen failed: %s — falling back to camera only", exc)
-            return await self.analyse_frame(camera_bytes)
+        for model in VISION_MODELS:
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=model,
+                    contents=[types.Content(parts=[camera_part, screen_part, types.Part.from_text(prompt)])],
+                )
+                text = response.text.strip()
+                if text.startswith("```"):
+                    text = "\n".join(text.split("\n")[1:])
+                    if text.endswith("```"):
+                        text = text[:-3].strip()
+                data = json.loads(text)
+                data.setdefault("state", "neutral")
+                data.setdefault("confidence", 0.5)
+                data.setdefault("cues", [])
+                data.setdefault("emotions", {})
+                data.setdefault("screen_context", "")
+                logger.info(
+                    "VisionClient(+screen, model=%s): state=%s screen=%s",
+                    model, data["state"], data.get("screen_context", "")[:60],
+                )
+                return data
+            except Exception as exc:
+                logger.warning("VisionClient.analyse_frame_with_screen (%s) failed: %s", model, exc)
+                continue
+
+        return await self.analyse_frame(camera_bytes)
 
     async def analyse_frame(self, frame_bytes: bytes) -> dict:
         """Send a JPEG frame for Gemini-powered state analysis.
@@ -105,36 +112,40 @@ class VisionClient:
         Falls back to neutral on any error — never blocks the watchman loop.
         """
         image_part = types.Part.from_bytes(data=frame_bytes, mime_type="image/jpeg")
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=VISION_MODEL,
-                contents=[
-                    types.Content(parts=[
-                        image_part,
-                        types.Part.from_text(POSTURE_ANALYSIS_PROMPT),
-                    ])
-                ],
-            )
-            text = response.text.strip()
-            # Strip markdown fences if model adds them
-            if text.startswith("```"):
-                text = "\n".join(text.split("\n")[1:])
-                if text.endswith("```"):
-                    text = text[:-3].strip()
-            data = json.loads(text)
-            # Normalise — ensure all expected keys exist
-            data.setdefault("state", "neutral")
-            data.setdefault("confidence", 0.5)
-            data.setdefault("cues", [])
-            data.setdefault("emotions", {})
-            logger.info(
-                "VisionClient: state=%s confidence=%.2f cues=%s",
-                data["state"], data["confidence"], data["cues"],
-            )
-            return data
-        except json.JSONDecodeError as exc:
-            logger.warning("VisionClient: JSON parse failed (%s) — neutral fallback", exc)
-            return {"state": "neutral", "confidence": 0.0, "cues": [], "emotions": {}}
-        except Exception as exc:
-            logger.warning("VisionClient: analyse_frame failed: %s", exc)
-            return {"state": "neutral", "confidence": 0.0, "cues": [], "emotions": {}}
+        for model in VISION_MODELS:
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=model,
+                    contents=[
+                        types.Content(parts=[
+                            image_part,
+                            types.Part.from_text(POSTURE_ANALYSIS_PROMPT),
+                        ])
+                    ],
+                )
+                text = response.text.strip()
+                # Strip markdown fences if model adds them
+                if text.startswith("```"):
+                    text = "\n".join(text.split("\n")[1:])
+                    if text.endswith("```"):
+                        text = text[:-3].strip()
+                data = json.loads(text)
+                # Normalise — ensure all expected keys exist
+                data.setdefault("state", "neutral")
+                data.setdefault("confidence", 0.5)
+                data.setdefault("cues", [])
+                data.setdefault("emotions", {})
+                logger.info(
+                    "VisionClient (model=%s): state=%s confidence=%.2f cues=%s",
+                    model, data["state"], data["confidence"], data["cues"],
+                )
+                return data
+            except json.JSONDecodeError as exc:
+                logger.warning("VisionClient (%s): JSON parse failed (%s)", model, exc)
+                continue
+            except Exception as exc:
+                logger.warning("VisionClient: analyse_frame (%s) failed: %s", model, exc)
+                continue
+
+        return {"state": "neutral", "confidence": 0.0, "cues": [], "emotions": {}}
+

@@ -8,8 +8,12 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-# Gemini 2.5 Flash Native Audio — supports bidiGenerateContent (Live API)
-LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
+# Gemini Live API models with fallback (bidiGenerateContent)
+LIVE_MODELS = [
+    "gemini-3.8-live",
+    "gemini-3.1-flash-live-preview",
+    "gemini-2.5-flash-native-audio-latest",
+]
 
 # Sentinel to signal turn complete in the response queue
 _TURN_COMPLETE = object()
@@ -42,6 +46,7 @@ class GeminiLiveClient:
         self._session_ctx = None
         self._system_prompt: Optional[str] = None
         self._connected = False
+        self._active_model = None
         # Single queue for all Gemini responses
         self._response_queue: asyncio.Queue = asyncio.Queue()
         self._receive_task: Optional[asyncio.Task] = None
@@ -63,14 +68,28 @@ class GeminiLiveClient:
                 )
             ),
         )
-        self._session_ctx = self._client.aio.live.connect(
-            model=LIVE_MODEL, config=config
-        )
-        self._session = await self._session_ctx.__aenter__()
-        self._connected = True
+
+        last_exc = None
+        for model_name in LIVE_MODELS:
+            try:
+                self._session_ctx = self._client.aio.live.connect(
+                    model=model_name, config=config
+                )
+                self._session = await self._session_ctx.__aenter__()
+                self._connected = True
+                self._active_model = model_name
+                logger.info("GeminiLiveClient: session connected to %s, receive loop started", model_name)
+                break
+            except Exception as exc:
+                logger.warning("GeminiLiveClient: failed to connect with %s: %s", model_name, exc)
+                last_exc = exc
+
+        if not self._connected:
+            raise last_exc or RuntimeError("GeminiLiveClient: failed to connect to any live model")
+
         # Start the single receive loop
         self._receive_task = asyncio.create_task(self._receive_loop())
-        logger.info("GeminiLiveClient: session connected, receive loop started")
+
 
     async def _receive_loop(self) -> None:
         """Single loop that drains ALL responses from Gemini.
