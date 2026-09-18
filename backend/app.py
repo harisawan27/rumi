@@ -1,4 +1,26 @@
 import os
+
+# Prevent premature CUDA initialization by external libraries before spaces loads
+os.environ.setdefault("NUMBA_DISABLE_CUDA", "1")
+
+# Must import spaces at the top level for ZeroGPU environment
+try:
+    import spaces
+except ImportError:
+    class _DummySpaces:
+        def GPU(self, *args, **kwargs):
+            if len(args) == 1 and callable(args[0]):
+                return args[0]
+            def decorator(func):
+                return func
+            return decorator
+    spaces = _DummySpaces()
+
+# Top-level dummy GPU function to satisfy ZeroGPU startup scanner
+@spaces.GPU(duration=1)
+def dummy_gpu():
+    return None
+
 import sys
 import json
 import logging
@@ -13,21 +35,6 @@ backend_dir = os.path.dirname(os.path.abspath(__file__))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
-# ZeroGPU support: import spaces safely
-# In Hugging Face ZeroGPU environments, `spaces` provides dynamic GPU allocation.
-# In local dev or standard CPU, fallback to a harmless decorator pass-through.
-try:
-    import spaces
-except ImportError:
-    class _DummySpaces:
-        def GPU(self, *args, **kwargs):
-            if len(args) == 1 and callable(args[0]) and not kwargs:
-                return args[0]
-            def decorator(func):
-                return func
-            return decorator
-    spaces = _DummySpaces()
-
 import torch
 import gradio as gr
 
@@ -39,8 +46,8 @@ from src.api.main import app as fastapi_app
 # ZeroGPU-Accelerated Functions
 # ---------------------------------------------------------------------------
 
-@spaces.GPU
-def zerogpu_diagnostic_tensor_check(n: float):
+@spaces.GPU(duration=60)
+def zerogpu_diagnostic_tensor_check(n: float = 42.0):
     """Dynamically allocated on ZeroGPU when invoked."""
     is_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if is_cuda else "cpu")
@@ -97,6 +104,10 @@ theme = gr.themes.Soft(
 )
 
 with gr.Blocks(theme=theme, title="Project Rumi — AI Core Backend") as demo:
+    # Explicitly bind the dummy GPU function so the ZeroGPU event scanner detects it immediately
+    dummy_btn = gr.Button(visible=False)
+    dummy_btn.click(fn=dummy_gpu)
+
     gr.Markdown(
         """
         # 🪞 Project Rumi — Backend Control & ZeroGPU Engine
@@ -151,7 +162,7 @@ with gr.Blocks(theme=theme, title="Project Rumi — AI Core Backend") as demo:
                 """
             )
 
-# Enable queueing for Gradio
+# Enable queueing for Gradio (essential for ZeroGPU event routing)
 demo.queue()
 
 # Mount Gradio onto the existing FastAPI application
@@ -165,8 +176,7 @@ app = gr.mount_gradio_app(fastapi_app, demo, path="/")
 
 if __name__ == "__main__":
     import uvicorn
-    # Hugging Face Spaces exposes port 7860 publicly.
-    # Note: Gradio 5 SSR internally binds to 7861 and sets PORT=7861, so we MUST bind to 7860.
+    # Hugging Face Spaces public entrypoint is port 7860.
     port = int(os.getenv("APP_PORT", 7860))
     logger.info("Starting Rumi Core on port %d...", port)
     uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
