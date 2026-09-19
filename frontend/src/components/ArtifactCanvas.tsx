@@ -145,16 +145,40 @@ function FollowUpBar({ onFollowUp, isFollowingUp }: {
       (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
     if (!SR) return;
     const rec = new SR();
-    rec.continuous = false;
-    rec.interimResults = false;
+    rec.continuous = true;
+    rec.interimResults = true;
     rec.lang = "en-US";
+    let accumulated = "";
+    let pauseTimer: NodeJS.Timeout | null = null;
+
     rec.onstart = () => setListening(true);
     rec.onend = () => setListening(false);
     rec.onresult = (e: SpeechRecognitionEvent) => {
-      const t = e.results[0]?.[0]?.transcript?.trim();
-      if (t) send(t);
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        if (res.isFinal) {
+          accumulated += (accumulated ? " " : "") + res[0].transcript.trim();
+        } else {
+          interim += res[0].transcript;
+        }
+      }
+      const currentCombined = (accumulated + (interim ? " " + interim : "")).trim();
+      if (currentCombined) setText(currentCombined);
+
+      if (pauseTimer) clearTimeout(pauseTimer);
+      pauseTimer = setTimeout(() => {
+        const finalTurn = (accumulated + (interim ? " " + interim : "")).trim();
+        if (finalTurn) {
+          try { rec.stop(); } catch {}
+          send(finalTurn);
+        }
+      }, 1200);
     };
-    rec.onerror = () => setListening(false);
+    rec.onerror = () => {
+      if (pauseTimer) clearTimeout(pauseTimer);
+      setListening(false);
+    };
     rec.start();
   }
 
@@ -192,7 +216,7 @@ function FollowUpBar({ onFollowUp, isFollowingUp }: {
         <button
           onClick={() => fileRef.current?.click()}
           title="Attach file or image"
-          style={{ background: "none", border: "1px solid rgba(34,211,238,0.18)", borderRadius: 7, padding: "6px 7px", cursor: "pointer", color: "var(--muted)", flexShrink: 0, display: "flex", alignItems: "center", transition: "all 0.15s" }}
+          style={{ background: "none", border: "1px solid rgba(34,211,238,0.18)", borderRadius: 7, padding: "6px 7px", cursor: "pointer", color: "var(--muted)", flexShrink: 0, display: "flex", alignItems: "center", transition: "all 0.15s", minWidth: 36, minHeight: 36, justifyContent: "center" }}
           onMouseEnter={e => { e.currentTarget.style.color = "var(--teal)"; e.currentTarget.style.borderColor = "rgba(34,211,238,0.4)"; }}
           onMouseLeave={e => { e.currentTarget.style.color = "var(--muted)"; e.currentTarget.style.borderColor = "rgba(34,211,238,0.18)"; }}
         >
@@ -202,16 +226,16 @@ function FollowUpBar({ onFollowUp, isFollowingUp }: {
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(text); } }}
-          placeholder={listening ? "Listening…" : "Ask a follow-up…"}
-          disabled={isFollowingUp || listening}
-          style={{ flex: 1, background: "rgba(34,211,238,0.04)", border: "1px solid rgba(34,211,238,0.15)", borderRadius: 8, padding: "7px 11px", fontSize: "0.8rem", color: "var(--text)", outline: "none", transition: "border-color 0.15s" }}
+          placeholder={listening ? "Listening (pause to send)…" : "Ask a follow-up…"}
+          disabled={isFollowingUp}
+          style={{ flex: 1, background: "rgba(34,211,238,0.04)", border: "1px solid rgba(34,211,238,0.15)", borderRadius: 8, padding: "8px 12px", fontSize: "0.8rem", color: "var(--text)", outline: "none", transition: "border-color 0.15s" }}
           onFocus={e => (e.target.style.borderColor = "rgba(34,211,238,0.4)")}
           onBlur={e => (e.target.style.borderColor = "rgba(34,211,238,0.15)")}
         />
         <button
           onClick={() => send(text)}
           disabled={!text.trim() || isFollowingUp}
-          style={{ background: text.trim() ? "rgba(34,211,238,0.12)" : "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 7, padding: "6px 10px", cursor: text.trim() ? "pointer" : "default", color: text.trim() ? "var(--teal)" : "var(--muted)", flexShrink: 0, display: "flex", alignItems: "center", transition: "all 0.15s" }}
+          style={{ background: text.trim() ? "rgba(34,211,238,0.12)" : "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 7, padding: "6px 12px", cursor: text.trim() ? "pointer" : "default", color: text.trim() ? "var(--teal)" : "var(--muted)", flexShrink: 0, display: "flex", alignItems: "center", transition: "all 0.15s", minHeight: 36 }}
         >
           {isFollowingUp ? (
             <span style={{ width: 13, height: 13, border: "2px solid rgba(201,168,76,0.3)", borderTopColor: "var(--gold)", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite" }} />
@@ -223,7 +247,7 @@ function FollowUpBar({ onFollowUp, isFollowingUp }: {
           onClick={startVoice}
           disabled={isFollowingUp}
           title="Voice follow-up"
-          style={{ background: listening ? "rgba(34,211,238,0.15)" : "none", border: `1px solid ${listening ? "rgba(34,211,238,0.5)" : "rgba(34,211,238,0.18)"}`, borderRadius: 7, padding: "6px 7px", cursor: "pointer", color: listening ? "var(--teal)" : "var(--muted)", flexShrink: 0, display: "flex", alignItems: "center", transition: "all 0.15s", boxShadow: listening ? "0 0 12px rgba(34,211,238,0.25)" : "none" }}
+          style={{ background: listening ? "rgba(34,211,238,0.15)" : "none", border: `1px solid ${listening ? "rgba(34,211,238,0.5)" : "rgba(34,211,238,0.18)"}`, borderRadius: 7, padding: "6px 9px", cursor: "pointer", color: listening ? "var(--teal)" : "var(--muted)", flexShrink: 0, display: "flex", alignItems: "center", transition: "all 0.15s", boxShadow: listening ? "0 0 12px rgba(34,211,238,0.25)" : "none", minWidth: 36, minHeight: 36, justifyContent: "center" }}
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z"/>
@@ -258,21 +282,27 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
   ] as const;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "rgba(4,8,15,0.55)", backdropFilter: "blur(28px)", WebkitBackdropFilter: "blur(28px)", borderLeft: "1px solid rgba(34,211,238,0.1)", position: "relative", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "rgba(4,8,15,0.7)", backdropFilter: "blur(28px)", WebkitBackdropFilter: "blur(28px)", borderLeft: "1px solid rgba(34,211,238,0.1)", position: "relative", overflow: "hidden" }}>
 
       {corners.map((c, i) => <div key={i} style={{ position: "absolute", width: 14, height: 14, ...c.style }} />)}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 16px", borderBottom: "1px solid rgba(34,211,238,0.07)", flexShrink: 0, background: "rgba(4,8,15,0.3)" }}>
-        <div style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 8px var(--teal)", flexShrink: 0, animation: "statusPulse 2s ease-in-out infinite" }} />
-        <span style={{ fontSize: "0.52rem", letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--teal)", fontWeight: 500, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {content ? `[RUMI CORE] :: ${content.title}` : "[RUMI CORE] :: Projecting..."}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid rgba(34,211,238,0.08)", flexShrink: 0, background: "rgba(4,8,15,0.4)" }}>
+        <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 8px var(--teal)", flexShrink: 0, animation: "statusPulse 2s ease-in-out infinite" }} />
+        <span style={{ fontSize: "0.75rem", letterSpacing: "0.06em", color: "var(--text)", fontWeight: 500, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {content ? content.title : "Rumi's Canvas"}
         </span>
         {content && content.exchanges.length > 1 && (
-          <span style={{ fontSize: "0.48rem", color: "var(--muted)", background: "rgba(34,211,238,0.07)", border: "1px solid rgba(34,211,238,0.15)", borderRadius: 99, padding: "2px 7px" }}>
-            {content.exchanges.length} exchanges
+          <span style={{ fontSize: "0.6rem", color: "var(--teal)", background: "rgba(34,211,238,0.08)", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 99, padding: "2px 8px" }}>
+            {content.exchanges.length} turns
           </span>
         )}
-        <button onClick={onDismiss} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: "0.7rem", padding: "2px 5px", lineHeight: 1, borderRadius: 3, transition: "color 0.15s" }} onMouseEnter={e => (e.currentTarget.style.color = "var(--text)")} onMouseLeave={e => (e.currentTarget.style.color = "var(--muted)")}>✕</button>
+        <button
+          onClick={onDismiss}
+          style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: "0.85rem", padding: "6px 10px", lineHeight: 1, borderRadius: 6, transition: "color 0.15s", minWidth: 36, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onMouseEnter={e => (e.currentTarget.style.color = "var(--text)")}
+          onMouseLeave={e => (e.currentTarget.style.color = "var(--muted)")}
+          aria-label="Close Canvas"
+        >✕</button>
       </div>
 
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "clamp(12px,3vw,22px) clamp(14px,3vw,24px) 16px" }}>
@@ -281,13 +311,19 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
             <ExchangeBlock key={idx} ex={ex} isLatest={isLatest && idx === content.exchanges.length - 1} />
           ))
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 20, opacity: 0.22 }}>
-            <div style={{ position: "relative", width: 56, height: 56, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div style={{ position: "absolute", inset: 0, border: "1px solid rgba(34,211,238,0.6)", borderRadius: "50%", animation: "canvasPing 2.4s ease-out infinite" }} />
-              <div style={{ position: "absolute", inset: 8, border: "1px solid rgba(34,211,238,0.4)", borderRadius: "50%", animation: "canvasPing 2.4s ease-out 0.7s infinite" }} />
-              <div style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--teal)" }} />
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 14, padding: 24, textAlign: "center" }}>
+            <div style={{ width: 48, height: 48, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(34,211,238,0.06)", border: "1px solid rgba(34,211,238,0.18)", color: "var(--teal)" }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="9" y1="3" x2="9" y2="21" />
+              </svg>
             </div>
-            <p style={{ fontSize: "0.58rem", color: "var(--muted)", letterSpacing: "0.2em", textTransform: "uppercase", margin: 0 }}>Awaiting projection</p>
+            <h4 style={{ fontFamily: "var(--font-cormorant), serif", color: "var(--gold)", fontSize: "1.25rem", margin: 0, fontWeight: 400 }}>
+              Rumi&apos;s Canvas
+            </h4>
+            <p style={{ fontSize: "0.78rem", color: "var(--text-2)", lineHeight: 1.6, maxWidth: 260, margin: 0 }}>
+              Ideas, plans, code and longer answers will appear here when they&apos;re useful.
+            </p>
           </div>
         )}
       </div>
@@ -295,10 +331,10 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
       {content && onFollowUp && <FollowUpBar onFollowUp={onFollowUp} isFollowingUp={isFollowingUp} />}
 
       {total > 1 && onNavigate && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px", borderTop: "1px solid rgba(34,211,238,0.07)", flexShrink: 0, background: "rgba(4,8,15,0.3)" }}>
-          <button onClick={() => onNavigate(historyIndex - 1)} disabled={historyIndex === 0} style={{ background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 5, color: historyIndex === 0 ? "var(--muted)" : "var(--teal)", cursor: historyIndex === 0 ? "default" : "pointer", padding: "3px 8px", fontSize: "0.72rem", opacity: historyIndex === 0 ? 0.35 : 1 }}>←</button>
-          <p style={{ flex: 1, margin: 0, fontSize: "0.5rem", color: "var(--muted)", letterSpacing: "0.12em", textAlign: "center" }}>{historyIndex + 1} / {total}</p>
-          <button onClick={() => onNavigate(historyIndex + 1)} disabled={isLatest} style={{ background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 5, color: isLatest ? "var(--muted)" : "var(--teal)", cursor: isLatest ? "default" : "pointer", padding: "3px 8px", fontSize: "0.72rem", opacity: isLatest ? 0.35 : 1 }}>→</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderTop: "1px solid rgba(34,211,238,0.08)", flexShrink: 0, background: "rgba(4,8,15,0.4)" }}>
+          <button onClick={() => onNavigate(historyIndex - 1)} disabled={historyIndex === 0} style={{ background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 6, color: historyIndex === 0 ? "var(--muted)" : "var(--teal)", cursor: historyIndex === 0 ? "default" : "pointer", padding: "5px 12px", fontSize: "0.75rem", opacity: historyIndex === 0 ? 0.35 : 1, minHeight: 32 }}>← Previous</button>
+          <p style={{ flex: 1, margin: 0, fontSize: "0.6rem", color: "var(--muted)", letterSpacing: "0.12em", textAlign: "center" }}>{historyIndex + 1} of {total}</p>
+          <button onClick={() => onNavigate(historyIndex + 1)} disabled={isLatest} style={{ background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 6, color: isLatest ? "var(--muted)" : "var(--teal)", cursor: isLatest ? "default" : "pointer", padding: "5px 12px", fontSize: "0.75rem", opacity: isLatest ? 0.35 : 1, minHeight: 32 }}>Next →</button>
         </div>
       )}
 

@@ -13,142 +13,78 @@ interface Project {
 interface FormData {
   name: string;
   full_name: string;
-  age: string;
   location: string;
   roles: string[];
   projects: Project[];
-  interests: string[];
   immediate_goal: string;
   long_term_goal: string;
-  driving_fear: string;
   work_style: string;
-  focus_breakers: string[];
   communication_preference: string;
+  wellness_trigger: string;
+  // Optional expandable fields
+  interests: string[];
+  focus_breakers: string[];
   faith: string;
   salah_awareness: string;
   turkish_goal: string;
-  wellness_trigger: string;
 }
 
-const EMPTY_PROJECT: Project = { name: "", status: "", context: "" };
-
-const STEP_TITLES = [
-  "Who are you?",
-  "What are you building?",
-  "What drives you?",
-  "How do you work?",
+const TONE_PRESETS = [
+  {
+    id: "gentle",
+    label: "Gentle & Inspiring",
+    desc: "Gentle but firm — inspire through wisdom, not nagging.",
+  },
+  {
+    id: "direct",
+    label: "Direct & Concise",
+    desc: "Direct, focused on execution, minimal pleasantries.",
+  },
+  {
+    id: "reflective",
+    label: "Thoughtful & Ambient",
+    desc: "Warm, reflective companion that observes and prompts when appropriate.",
+  },
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// All sub-components defined OUTSIDE OnboardingPage.
-// Defining them inside causes React to treat them as new types on every render
-// → unmount/remount → mobile keyboard closes after each keystroke.
-// ─────────────────────────────────────────────────────────────────────────────
+const ROLE_SUGGESTIONS = [
+  "Engineer",
+  "Designer",
+  "Founder",
+  "Researcher",
+  "Writer",
+  "Student",
+];
 
-function Input({ label, value, onChange, placeholder, type = "text" }: {
-  label: string;
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  placeholder?: string;
-  type?: string;
-}) {
-  return (
-    <label className="flex flex-col gap-1.5">
-      <span className="uppercase-label">{label}</span>
-      <input
-        type={type}
-        className="rumi-input"
-        placeholder={placeholder}
-        value={value}
-        onChange={onChange}
-      />
-    </label>
-  );
-}
-
-function Textarea({ label, value, onChange, placeholder, rows = 3 }: {
-  label: string;
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-  placeholder?: string;
-  rows?: number;
-}) {
-  return (
-    <label className="flex flex-col gap-1.5">
-      <span className="uppercase-label">{label}</span>
-      <textarea
-        rows={rows}
-        className="rumi-input"
-        placeholder={placeholder}
-        value={value}
-        onChange={onChange}
-      />
-    </label>
-  );
-}
-
-function TagInput({ tags, onAdd, onRemove, placeholder }: {
-  tags: string[];
-  onAdd: (v: string) => void;
-  onRemove: (v: string) => void;
-  placeholder: string;
-}) {
-  const [val, setVal] = useState("");
-  return (
-    <div>
-      <div className="flex gap-2 flex-wrap mb-2 min-h-[28px]">
-        {tags.map((t) => (
-          <span key={t} className="rumi-tag">
-            {t}
-            <button onClick={() => onRemove(t)} style={{ color: "var(--gold-dim)", marginLeft: 2, lineHeight: 1 }}>
-              &times;
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <input
-          className="rumi-input flex-1"
-          placeholder={placeholder}
-          value={val}
-          onChange={(e) => setVal(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onAdd(val); setVal(""); } }}
-        />
-        <button type="button" onClick={() => { onAdd(val); setVal(""); }} className="btn-ghost"
-          style={{ padding: "0.5rem 0.875rem", fontSize: "0.8125rem" }}>
-          Add
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
+const STEP_TITLES = [
+  "Identity",
+  "Focus",
+  "Companion Style",
+];
 
 export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [form, setForm] = useState<FormData>({
     name: "",
     full_name: "",
-    age: "",
     location: "",
     roles: [],
-    projects: [{ ...EMPTY_PROJECT }],
-    interests: [],
+    projects: [{ name: "", status: "", context: "" }],
     immediate_goal: "",
     long_term_goal: "",
-    driving_fear: "",
     work_style: "",
+    communication_preference: TONE_PRESETS[0].desc,
+    wellness_trigger: "Suggest a chai or hydration break after long focus sprints.",
+    interests: [],
     focus_breakers: [],
-    communication_preference: "Gentle but firm — inspire through wisdom, not nagging.",
     faith: "",
     salah_awareness: "",
     turkish_goal: "",
-    wellness_trigger: "Suggest a chai or doodh patti break.",
   });
 
   function setField(key: keyof FormData) {
@@ -156,208 +92,357 @@ export default function OnboardingPage() {
       setForm((f) => ({ ...f, [key]: e.target.value }));
   }
 
-  function addTag(field: "roles" | "interests" | "focus_breakers", value: string) {
-    const v = value.trim();
-    if (!v) return;
-    setForm((f) => ({ ...f, [field]: [...new Set([...f[field], v])] }));
-  }
-
-  function removeTag(field: "roles" | "interests" | "focus_breakers", value: string) {
-    setForm((f) => ({ ...f, [field]: f[field].filter((t) => t !== value) }));
-  }
-
-  function updateProject(i: number, key: keyof Project, value: string) {
+  function toggleRole(role: string) {
     setForm((f) => {
-      const projects = [...f.projects];
-      projects[i] = { ...projects[i], [key]: value };
-      return { ...f, projects };
+      const exists = f.roles.includes(role);
+      const roles = exists ? f.roles.filter((r) => r !== role) : [...f.roles, role];
+      return { ...f, roles };
     });
   }
 
   async function handleSubmit() {
+    if (!form.name.trim()) {
+      setError("Please provide a name so Rumi knows what to call you.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       await verifyAuth();
       const payload = {
         ...form,
-        age: form.age ? Number(form.age) : undefined,
         projects: form.projects.filter((p) => p.name.trim()),
       };
       await saveIdentity(payload);
       router.push("/dashboard");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save");
+      setError(e instanceof Error ? e.message : "Failed to save profile");
       setSaving(false);
     }
   }
 
   const isLastStep = step === STEP_TITLES.length - 1;
 
-  const steps = [
-    // Step 0 — Personal (required)
-    <div key="personal" className="flex flex-col gap-4">
-      <Input label="First name — what Rumi calls you *" value={form.name}
-        onChange={setField("name")} placeholder="e.g. Haris" />
-      <Input label="Full name" value={form.full_name}
-        onChange={setField("full_name")} placeholder="e.g. Muhammad Haris Awan" />
-      <Input label="Age" value={form.age}
-        onChange={setField("age")} type="number" placeholder="e.g. 18" />
-      <Input label="City / Country" value={form.location}
-        onChange={setField("location")} placeholder="e.g. Karachi, Pakistan" />
-      <div className="flex flex-col gap-1.5">
-        <span className="uppercase-label">Your roles (Enter to add)</span>
-        <TagInput tags={form.roles} onAdd={(v) => addTag("roles", v)}
-          onRemove={(v) => removeTag("roles", v)} placeholder="e.g. Full Stack Developer" />
-      </div>
-    </div>,
-
-    // Step 1 — Projects (optional)
-    <div key="projects" className="flex flex-col gap-5">
-      {form.projects.map((p, i) => (
-        <div key={i} className="flex flex-col gap-3 rounded-xl p-4"
-          style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
-          <div className="flex items-center justify-between">
-            <span className="uppercase-label" style={{ color: "var(--gold)" }}>Project {i + 1}</span>
-            {form.projects.length > 1 && (
-              <button onClick={() => setForm((f) => ({ ...f, projects: f.projects.filter((_, j) => j !== i) }))}
-                className="text-xs transition" style={{ color: "var(--muted)" }}
-                onMouseEnter={e => (e.currentTarget.style.color = "var(--error)")}
-                onMouseLeave={e => (e.currentTarget.style.color = "var(--muted)")}>
-                Remove
-              </button>
-            )}
-          </div>
-          <input className="rumi-input" placeholder="Project name (e.g. DoneKaro)"
-            value={p.name} onChange={(e) => updateProject(i, "name", e.target.value)} />
-          <input className="rumi-input" placeholder="Current status (e.g. MVP complete)"
-            value={p.status} onChange={(e) => updateProject(i, "status", e.target.value)} />
-          <input className="rumi-input" placeholder="What's the pain point right now?"
-            value={p.context} onChange={(e) => updateProject(i, "context", e.target.value)} />
-        </div>
-      ))}
-      {form.projects.length < 5 && (
-        <button onClick={() => setForm((f) => ({ ...f, projects: [...f.projects, { ...EMPTY_PROJECT }] }))}
-          className="btn-ghost w-full" style={{ borderStyle: "dashed" }}>
-          + Add another project
-        </button>
-      )}
-    </div>,
-
-    // Step 2 — Drive (optional)
-    <div key="drive" className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <span className="uppercase-label">Interests & passions (Enter to add)</span>
-        <TagInput tags={form.interests} onAdd={(v) => addTag("interests", v)}
-          onRemove={(v) => removeTag("interests", v)} placeholder="e.g. Rumi, Turkish culture, Chess" />
-      </div>
-      <Textarea label="Immediate goal (this week / month)" value={form.immediate_goal}
-        onChange={setField("immediate_goal")} placeholder="e.g. Win the Google Gemini Challenge" />
-      <Textarea label="Long-term goal" value={form.long_term_goal}
-        onChange={setField("long_term_goal")} placeholder="e.g. Build WEBXES into a US/Pakistan LLC" />
-      <Textarea label="Biggest fear" value={form.driving_fear}
-        onChange={setField("driving_fear")} placeholder="e.g. Being generic, fading without global impact" />
-    </div>,
-
-    // Step 3 — Work style (optional)
-    <div key="work" className="flex flex-col gap-4">
-      <Textarea label="How do you work best?" value={form.work_style}
-        onChange={setField("work_style")} placeholder="e.g. Late-night deep work sprints, SDD methodology" />
-      <div className="flex flex-col gap-1.5">
-        <span className="uppercase-label">What breaks your focus? (Enter to add)</span>
-        <TagInput tags={form.focus_breakers} onAdd={(v) => addTag("focus_breakers", v)}
-          onRemove={(v) => removeTag("focus_breakers", v)} placeholder="e.g. Doom-scrolling, noise" />
-      </div>
-      <Textarea label="How should Rumi talk to you?" value={form.communication_preference}
-        onChange={setField("communication_preference")} placeholder="e.g. Gentle but firm — inspire, don't nag" />
-      <Input label="Faith / religion (optional)" value={form.faith}
-        onChange={setField("faith")} placeholder="e.g. Practicing Muslim" />
-      <Textarea label="Prayer schedule Rumi should respect" value={form.salah_awareness}
-        onChange={setField("salah_awareness")} placeholder="e.g. Asr and Maghrib — suggest breaks around them" rows={2} />
-      <Textarea label="Language or cultural goal" value={form.turkish_goal}
-        onChange={setField("turkish_goal")} placeholder="e.g. 343-day Duolingo Turkish streak" rows={2} />
-      <Textarea label="Preferred break" value={form.wellness_trigger}
-        onChange={setField("wellness_trigger")} placeholder="e.g. Doodh patti and 5 minutes away from screen" rows={2} />
-    </div>,
-  ];
-
   return (
-    <main className="dot-grid noise-overlay min-h-screen flex flex-col items-center justify-start py-12 px-4"
-      style={{ background: "var(--bg)" }}>
+    <main
+      className="dot-grid noise-overlay min-h-screen flex flex-col items-center justify-start py-10 px-4"
+      style={{ background: "var(--bg)" }}
+    >
       <div className="w-full max-w-lg animate-fade-up">
-
-        {/* Header */}
-        <div className="mb-8 text-center">
-          <h1 className="font-display text-gold" style={{ fontSize: "2.5rem", fontWeight: 300, letterSpacing: "0.04em" }}>
-            Meet Rumi
+        {/* Brand Header */}
+        <div className="mb-6 text-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono uppercase tracking-wider mb-3"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--gold)" }}>
+            ✦ Meet Your Ambient Companion
+          </div>
+          <h1
+            className="font-display text-gold"
+            style={{ fontSize: "2.25rem", fontWeight: 300, letterSpacing: "0.04em" }}
+          >
+            Welcome to Rumi
           </h1>
-          <p className="mt-2 text-sm" style={{ color: "var(--text-2)" }}>
-            Let&apos;s learn who you are so every interaction feels personal.
+          <p className="mt-1.5 text-sm" style={{ color: "var(--text-2)" }}>
+            A quick setup so every moment feels attuned to who you are. (Takes under 60s)
           </p>
         </div>
 
-        {/* Progress bar */}
-        <div className="flex gap-2 mb-8">
+        {/* Step Progress */}
+        <div className="flex gap-2 mb-6">
           {STEP_TITLES.map((title, i) => (
-            <div key={i} className="flex-1 flex flex-col gap-1.5">
-              <div className="h-0.5 rounded-full transition-all duration-300"
-                style={{ background: i <= step ? "linear-gradient(90deg, var(--gold), var(--gold-dim))" : "var(--border)" }} />
-              <span className="text-xs hidden sm:block transition-colors duration-200"
-                style={{ color: i === step ? "var(--gold)" : "var(--muted)", fontSize: "0.65rem", letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                {title}
+            <div key={title} className="flex-1 flex flex-col gap-1.5">
+              <div
+                className="h-1 rounded-full transition-all duration-300"
+                style={{
+                  background:
+                    i <= step
+                      ? "linear-gradient(90deg, var(--gold), var(--teal))"
+                      : "var(--border)",
+                }}
+              />
+              <span
+                className="text-xs transition-colors duration-200"
+                style={{
+                  color: i === step ? "var(--gold)" : "var(--muted)",
+                  fontSize: "0.7rem",
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                }}
+              >
+                {i + 1}. {title}
               </span>
             </div>
           ))}
         </div>
 
-        {/* Step title (mobile) */}
-        <h2 className="text-lg font-medium mb-5 sm:hidden" style={{ color: "var(--text)" }}>
-          {STEP_TITLES[step]}
-        </h2>
+        {/* Form Card */}
+        <div className="rumi-card mb-5 p-6 rounded-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          {/* STEP 0: IDENTITY */}
+          {step === 0 && (
+            <div className="flex flex-col gap-4">
+              <div>
+                <label className="flex flex-col gap-1.5">
+                  <span className="uppercase-label font-mono text-xs text-gold">What should Rumi call you? *</span>
+                  <input
+                    type="text"
+                    className="rumi-input text-base"
+                    placeholder="e.g. Haris"
+                    value={form.name}
+                    onChange={setField("name")}
+                    autoFocus
+                  />
+                </label>
+              </div>
 
-        {/* Step content */}
-        <div className="rumi-card mb-5">{steps[step]}</div>
+              <div>
+                <label className="flex flex-col gap-1.5">
+                  <span className="uppercase-label font-mono text-xs text-muted">City / Location</span>
+                  <input
+                    type="text"
+                    className="rumi-input"
+                    placeholder="e.g. Karachi, Pakistan"
+                    value={form.location}
+                    onChange={setField("location")}
+                  />
+                </label>
+              </div>
 
-        {error && <p className="text-sm mb-4" style={{ color: "var(--error)" }}>{error}</p>}
+              <div>
+                <span className="uppercase-label font-mono text-xs text-muted block mb-2">What best describes your roles?</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {ROLE_SUGGESTIONS.map((role) => {
+                    const active = form.roles.includes(role);
+                    return (
+                      <button
+                        key={role}
+                        type="button"
+                        onClick={() => toggleRole(role)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-mono transition-all duration-150"
+                        style={{
+                          background: active ? "var(--gold)" : "var(--surface-2)",
+                          color: active ? "#000" : "var(--text-2)",
+                          border: active ? "1px solid var(--gold)" : "1px solid var(--border)",
+                        }}
+                      >
+                        {role} {active ? "✓" : "+"}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
 
-        {/* Navigation */}
+          {/* STEP 1: FOCUS */}
+          {step === 1 && (
+            <div className="flex flex-col gap-4">
+              <div>
+                <label className="flex flex-col gap-1.5">
+                  <span className="uppercase-label font-mono text-xs text-gold">Primary focus / project right now</span>
+                  <input
+                    type="text"
+                    className="rumi-input text-base"
+                    placeholder="e.g. Shipping Project Rumi, building DoneKaro"
+                    value={form.projects[0]?.name || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setForm((f) => ({
+                        ...f,
+                        projects: [{ ...f.projects[0], name: val }],
+                      }));
+                    }}
+                    autoFocus
+                  />
+                </label>
+              </div>
+
+              <div>
+                <label className="flex flex-col gap-1.5">
+                  <span className="uppercase-label font-mono text-xs text-muted">What is your immediate goal?</span>
+                  <textarea
+                    rows={2}
+                    className="rumi-input text-sm"
+                    placeholder="e.g. Finish the Google Gemini challenge with zero regressions"
+                    value={form.immediate_goal}
+                    onChange={setField("immediate_goal")}
+                  />
+                </label>
+              </div>
+
+              <div>
+                <label className="flex flex-col gap-1.5">
+                  <span className="uppercase-label font-mono text-xs text-muted">How do you like to work?</span>
+                  <input
+                    type="text"
+                    className="rumi-input text-sm"
+                    placeholder="e.g. Late-night deep work sprints, minimal interruptions"
+                    value={form.work_style}
+                    onChange={setField("work_style")}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2: COMPANION STYLE */}
+          {step === 2 && (
+            <div className="flex flex-col gap-5">
+              <div>
+                <span className="uppercase-label font-mono text-xs text-gold block mb-2">How should Rumi speak to you?</span>
+                <div className="flex flex-col gap-2">
+                  {TONE_PRESETS.map((preset) => {
+                    const active = form.communication_preference === preset.desc;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setForm((f) => ({ ...f, communication_preference: preset.desc }))}
+                        className="text-left p-3 rounded-xl transition-all duration-150 flex flex-col gap-1"
+                        style={{
+                          background: active ? "rgba(201, 168, 76, 0.08)" : "var(--surface-2)",
+                          border: active ? "1px solid var(--gold)" : "1px solid var(--border)",
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium" style={{ color: active ? "var(--gold)" : "var(--text)" }}>
+                            {preset.label}
+                          </span>
+                          {active && <span className="text-xs text-gold font-mono">Selected</span>}
+                        </div>
+                        <span className="text-xs text-muted">{preset.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="flex flex-col gap-1.5">
+                  <span className="uppercase-label font-mono text-xs text-muted">Wellness break reminder cue</span>
+                  <input
+                    type="text"
+                    className="rumi-input text-sm"
+                    placeholder="e.g. Suggest a doodh patti break and stretch"
+                    value={form.wellness_trigger}
+                    onChange={setField("wellness_trigger")}
+                  />
+                </label>
+              </div>
+
+              {/* Advanced optional section toggle */}
+              <div className="pt-2 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="text-xs font-mono text-muted hover:text-gold transition-colors flex items-center gap-1.5"
+                >
+                  <span>{showAdvanced ? "▾ Hide additional personal context" : "▸ Add optional personal context (faith, language, goals)"}</span>
+                </button>
+
+                {showAdvanced && (
+                  <div className="mt-4 flex flex-col gap-3.5 animate-fade-up">
+                    <label className="flex flex-col gap-1">
+                      <span className="uppercase-label font-mono text-xs text-muted">Faith / Prayer Awareness</span>
+                      <input
+                        type="text"
+                        className="rumi-input text-xs"
+                        placeholder="e.g. Practicing Muslim — aware of Asr and Maghrib prayer times"
+                        value={form.salah_awareness}
+                        onChange={setField("salah_awareness")}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="uppercase-label font-mono text-xs text-muted">Language or Cultural Focus</span>
+                      <input
+                        type="text"
+                        className="rumi-input text-xs"
+                        placeholder="e.g. Daily Turkish practice"
+                        value={form.turkish_goal}
+                        onChange={setField("turkish_goal")}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div
+            className="mb-4 p-3 rounded-xl text-xs font-mono"
+            style={{ background: "rgba(224, 82, 82, 0.1)", border: "1px solid var(--error)", color: "var(--error)" }}
+          >
+            {error}
+          </div>
+        )}
+
+        {/* Action Buttons */}
         <div className="flex gap-3">
           {step > 0 && (
-            <button onClick={() => setStep((s) => s - 1)} className="btn-ghost flex-1">
+            <button
+              type="button"
+              onClick={() => setStep((s) => s - 1)}
+              className="btn-ghost flex-1 py-3 text-sm font-mono"
+            >
               Back
             </button>
           )}
+
           {isLastStep ? (
-            <button onClick={handleSubmit} disabled={saving || !form.name.trim()} className="btn-primary flex-1">
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={saving || !form.name.trim()}
+              className="btn-primary flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2"
+            >
               {saving ? (
                 <>
-                  <span style={{ display: "inline-block", width: 14, height: 14, borderRadius: "50%",
-                    border: "2px solid currentColor", borderTopColor: "transparent", animation: "spin 0.7s linear infinite" }} />
-                  Saving…
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 14,
+                      height: 14,
+                      borderRadius: "50%",
+                      border: "2px solid currentColor",
+                      borderTopColor: "transparent",
+                      animation: "spin 0.7s linear infinite",
+                    }}
+                  />
+                  <span>Launching…</span>
                 </>
-              ) : "Launch Rumi"}
+              ) : (
+                <span>Launch Rumi</span>
+              )}
             </button>
           ) : (
-            <button onClick={() => setStep((s) => s + 1)}
-              disabled={step === 0 && !form.name.trim()} className="btn-primary flex-1">
+            <button
+              type="button"
+              onClick={() => setStep((s) => s + 1)}
+              disabled={step === 0 && !form.name.trim()}
+              className="btn-primary flex-1 py-3 text-sm font-medium"
+            >
               Continue
             </button>
           )}
         </div>
 
-        {/* Skip option for optional steps */}
-        {step > 0 && (
-          <button onClick={handleSubmit} disabled={saving}
-            className="w-full mt-3 text-sm transition-colors"
-            style={{ color: "var(--muted)", background: "none", border: "none", cursor: "pointer", padding: "0.25rem" }}
-            onMouseEnter={e => (e.currentTarget.style.color = "var(--text-2)")}
-            onMouseLeave={e => (e.currentTarget.style.color = "var(--muted)")}>
-            Skip and go to dashboard →
+        {/* Fast launch shortcut if name is entered */}
+        {form.name.trim().length > 0 && !isLastStep && (
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={saving}
+            className="w-full mt-3 text-xs font-mono transition-colors text-center py-2"
+            style={{ color: "var(--muted)" }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--gold)")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
+          >
+            Skip rest & meet Rumi now →
           </button>
         )}
 
-        <p className="text-center mt-4 text-xs" style={{ color: "var(--muted)" }}>
-          You can edit all of this later in your profile.
+        <p className="text-center mt-4 text-xs font-mono" style={{ color: "var(--muted)" }}>
+          You can refine your memories and privacy settings at any time in the Memory Center.
         </p>
       </div>
 

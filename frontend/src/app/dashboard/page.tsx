@@ -13,6 +13,7 @@ import {
   getCanvasHistory,
   type InterventionMessage,
   type WsMessage,
+  getMemoryCandidates,
 } from "@/services/session";
 import { ObservationState } from "@/components/ObservationIndicator";
 import InterventionCard from "@/components/InterventionCard";
@@ -20,6 +21,10 @@ import PauseButton from "@/components/PauseButton";
 import RumiFace from "@/components/RumiFace";
 import ArtifactCanvas, { type CanvasContent, type CanvasExchange } from "@/components/ArtifactCanvas";
 import { TurnAccumulator } from "@/services/turnAccumulator";
+import RumiStatusMenu from "@/components/RumiStatusMenu";
+import MobileNavigation, { type MobileTab } from "@/components/MobileNavigation";
+import MobileSheet from "@/components/MobileSheet";
+import ConversationTimeline from "@/components/ConversationTimeline";
 
 interface ActiveIntervention {
   interactionId: string;
@@ -80,6 +85,15 @@ export default function DashboardPage() {
   // ── Override command state ──────────────────────────────────────────────────
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [overrideText, setOverrideText] = useState("");
+
+  // ── Experience v1 states ────────────────────────────────────────────────────
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activeMobileTab, setActiveMobileTab] = useState<MobileTab>("rumi");
+  const [pendingCandidatesCount, setPendingCandidatesCount] = useState(0);
+  const [isMobileDevice, setIsMobileDevice] = useState(false);
+  const [supportsScreenShare, setSupportsScreenShare] = useState(false);
+  const [isTabHidden, setIsTabHidden] = useState(false);
+  const [showGuidance, setShowGuidance] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -347,6 +361,69 @@ export default function DashboardPage() {
   useEffect(() => {
     if (overrideOpen) setTimeout(() => overrideInputRef.current?.focus(), 40);
   }, [overrideOpen]);
+
+  // ── Experience v1: Device detection & Screen Share support ──────────────────
+  useEffect(() => {
+    const checkDevice = () => {
+      const mobile = window.innerWidth < 640;
+      setIsMobileDevice(mobile);
+      if (typeof navigator !== "undefined" && navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === "function") {
+        setSupportsScreenShare(!mobile);
+      }
+    };
+    checkDevice();
+    window.addEventListener("resize", checkDevice);
+    return () => window.removeEventListener("resize", checkDevice);
+  }, []);
+
+  // ── Experience v1: Document visibility (Correction 6) ──────────────────────
+  // Pauses expensive rendering/animations when tab is hidden, without killing
+  // WebSocket presence/safety streams or heartbeat.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsTabHidden(document.visibilityState === "hidden");
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  // ── Experience v1: Fetch pending memory candidates for badge ────────────────
+  useEffect(() => {
+    getMemoryCandidates()
+      .then((candidates) => setPendingCandidatesCount(candidates.length))
+      .catch(() => {});
+  }, []);
+
+  // ── Experience v1: First-use guidance tooltip ──────────────────────────────
+  useEffect(() => {
+    const seen = localStorage.getItem("rumi_guidance_seen");
+    if (!seen) {
+      setShowGuidance(true);
+    }
+  }, []);
+
+  function dismissGuidance() {
+    setShowGuidance(false);
+    localStorage.setItem("rumi_guidance_seen", "1");
+  }
+
+  // ── Experience v1: Empathic connection for proactive interventions ──────────
+  useEffect(() => {
+    if (intervention) {
+      if (intervention.trigger === "A" || intervention.trigger === "C") {
+        setRumiEmotion("concerned");
+      } else if (intervention.trigger === "B") {
+        setRumiEmotion("happy");
+      } else {
+        setRumiEmotion("thinking");
+      }
+      const timer = setTimeout(() => {
+        setInterventionQueue((q) => q.filter((i) => i.interactionId !== intervention.interactionId));
+        setRumiEmotion("neutral");
+      }, 60000);
+      return () => clearTimeout(timer);
+    }
+  }, [intervention]);
 
   // ── Speech Recognition ────────────────────────────────────────────────────
   const transcriptRef = useRef<string>("");
@@ -884,6 +961,9 @@ export default function DashboardPage() {
       return next;
     });
     setCanvasOpen(true);
+    if (isMobileDevice) {
+      setActiveMobileTab("canvas");
+    }
   }
 
   // ── Audio interrupt helper ────────────────────────────────────────────────
@@ -1114,458 +1194,752 @@ export default function DashboardPage() {
       {/* Hidden video — always in DOM so captureFrame works */}
       <video ref={videoRef} autoPlay muted playsInline style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", top: 0, left: 0 }} />
 
-      {/* Navbar */}
-      <nav className="glass sticky top-0 z-20 flex items-center justify-between px-5 py-3"
+      {/* Navbar — Clean, calm and consolidated */}
+      <nav className="glass sticky top-0 z-20 flex items-center justify-between px-4 sm:px-6 py-3"
         style={{ borderLeft: "none", borderRight: "none", borderTop: "none" }}>
         <div className="flex items-center gap-2.5">
           <div className="w-2 h-2 rounded-full" style={{
             backgroundColor: stateColor,
             boxShadow: `0 0 8px ${stateColor}`,
-            animation: observationState === "active" ? "statusPulse 2s ease-in-out infinite" : "none",
+            animation: observationState === "active" && !isTabHidden ? "statusPulse 2s ease-in-out infinite" : "none",
           }} />
           <img src="/rumi-logo.svg" alt="Rumi" style={{ width: 22, height: 22, objectFit: "contain", filter: "brightness(0) saturate(100%) invert(75%) sepia(40%) saturate(500%) hue-rotate(5deg) brightness(95%)" }} />
           <span className="font-display text-gold" style={{ fontSize: "1.25rem", fontWeight: 400, letterSpacing: "0.06em" }}>
             Rumi
           </span>
         </div>
-        <div className="hidden sm:flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full" style={{
-            background: "var(--surface-2)", border: "1px solid var(--border)",
-            fontSize: "0.7rem", letterSpacing: "0.15em", textTransform: "uppercase", color: stateColor,
-          }}>
-            {observationState === "active" ? "Observing" : observationState === "degraded" ? "Degraded" : "Paused"}
-          </div>
-          {/* Identity Verified badge — appears when owner face is confirmed */}
-          {identityVerified && !guestMode && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: 4,
-              padding: "3px 8px", borderRadius: 99,
-              background: "rgba(34,211,238,0.1)", border: "1px solid rgba(34,211,238,0.4)",
-              animation: "fadeSlideUp 0.3s ease both",
-            }}>
-              <svg width="8" height="8" viewBox="0 0 24 24" fill="var(--teal)"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
-              <span style={{ fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--teal)", fontWeight: 600 }}>Identity Verified</span>
-            </div>
-          )}
-          {/* Guest Mode badge — replaces verified badge when guest detected */}
-          {guestMode && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: 4,
-              padding: "3px 10px", borderRadius: 99,
-              background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.5)",
-              animation: "fadeSlideUp 0.3s ease both",
-            }}>
-              <svg width="8" height="8" viewBox="0 0 24 24" fill="#ef4444"><path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5L12 2zm-1 8h2v4h-2zm0-4h2v2h-2z"/></svg>
-              <span style={{ fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#ef4444", fontWeight: 700 }}>Guest Mode</span>
-            </div>
-          )}
-          {/* Privacy status — persistent badges when cam/mic are off */}
-          {!cameraEnabled && (
-            <button onClick={handleCameraToggle} title="Camera is OFF — Rumi cannot see you. Click to enable." style={{
-              display: "flex", alignItems: "center", gap: 4,
-              padding: "3px 8px", borderRadius: 99, cursor: "pointer",
-              background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.5)",
-            }}>
-              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round">
-                <line x1="1" y1="1" x2="23" y2="23"/>
-                <path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4M2 2l4 4"/>
-              </svg>
-              <span style={{ fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#ef4444", fontWeight: 600 }}>Cam Off</span>
-            </button>
-          )}
-          {!micEnabled && (
-            <button onClick={handleMicDeviceToggle} title="Mic is OFF — Rumi cannot hear you. Click to enable." style={{
-              display: "flex", alignItems: "center", gap: 4,
-              padding: "3px 8px", borderRadius: 99, cursor: "pointer",
-              background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.5)",
-            }}>
-              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round">
-                <line x1="1" y1="1" x2="23" y2="23"/>
-                <path d="M9 9v3a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6M17 16.95A7 7 0 015 12v-2m14 0v2a7 7 0 01-.11 1.23M12 19v3M8 23h8"/>
-              </svg>
-              <span style={{ fontSize: "0.62rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "#ef4444", fontWeight: 600 }}>Mic Off</span>
-            </button>
-          )}
-          {/* Canvas indicator — shows new split-screen feature is active */}
-          <div
-            onClick={() => canvasOpen ? handleCanvasDismiss() : setCanvasOpen(true)}
-            style={{
-              display: "flex", alignItems: "center", gap: 5,
-              padding: "3px 10px", borderRadius: 99, cursor: "pointer",
-              background: canvasOpen ? "rgba(34,211,238,0.12)" : "rgba(34,211,238,0.06)",
-              border: `1px solid ${canvasOpen ? "rgba(34,211,238,0.4)" : "rgba(34,211,238,0.2)"}`,
-              transition: "all 0.2s",
-            }}
+
+        {/* Center / Right controls */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Consolidated Level 3 Status Menu */}
+          <RumiStatusMenu
+            observationState={observationState}
+            cameraStatus={
+              !cameraEnabled
+                ? "disabled"
+                : observationState === "active"
+                ? (isTabHidden ? "available" : "observing")
+                : observationState === "paused"
+                ? "paused"
+                : "available"
+            }
+            micStatus={
+              !micEnabled
+                ? "disabled"
+                : isTalking
+                ? "listening"
+                : wakeListening
+                ? "wake_listening"
+                : "available"
+            }
+            guestMode={guestMode}
+            identityVerified={identityVerified}
+            memoryCandidatesCount={pendingCandidatesCount}
+            onToggleCamera={handleCameraToggle}
+            onToggleMic={handleMicDeviceToggle}
+            onOpenMemoryCenter={() => router.push("/profile")}
+          />
+
+          {/* Desktop Artifact Canvas Toggle */}
+          <button
+            type="button"
+            onClick={() => setCanvasOpen(o => !o)}
+            className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono transition-all ${
+              canvasOpen ? "bg-teal/15 text-teal border border-teal/40" : "bg-surface-2 text-muted hover:text-text border border-border"
+            }`}
+            title="Toggle Artifact Canvas"
           >
-            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" strokeWidth="2.5" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-            <span style={{ fontSize: "0.6rem", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--teal)", fontWeight: 500 }}>
-              {canvasOpen ? "Canvas On" : "Canvas"}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <a href="/profile" className="btn-icon" title="Your memory">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+            </svg>
+            <span>Canvas</span>
+            {canvasHistory.length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-teal" />}
+          </button>
+
+          {/* Desktop History Drawer Toggle */}
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(h => !h)}
+            className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono transition-all ${
+              historyOpen ? "bg-gold/15 text-gold border border-gold/40" : "bg-surface-2 text-muted hover:text-text border border-border"
+            }`}
+            title="Conversation History"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            <span>History</span>
+          </button>
+
+          {/* Memory & Privacy Center */}
+          <a href="/profile" className="btn-icon relative" title="Memory & Privacy Center">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" />
             </svg>
+            {pendingCandidatesCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-gold animate-pulse" />
+            )}
           </a>
+
+          {/* Pause / Resume button */}
           {sessionId && (
             <PauseButton sessionId={sessionId} observationState={observationState} onStateChange={setObservationState} />
           )}
         </div>
       </nav>
 
-      {/* ── App body: fluid two-zone layout ─────────────────────────────────── */}
-      <div className={`app-body${canvasOpen ? " canvas-open" : ""}`} style={{ position: "relative" }}>
+      {/* ── Main Workspace Body ─────────────────────────────────────────── */}
+      {isMobileDevice ? (
+        /* Mobile Dedicated Tab View */
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative pb-16">
+          {/* TAB 1: Rumi Core */}
+          {activeMobileTab === "rumi" && (
+            <div className="flex-1 flex flex-col items-center justify-start gap-3 p-4 overflow-y-auto">
+              {/* First-use gentle guidance */}
+              {showGuidance && (
+                <div
+                  className="w-full max-w-sm px-3.5 py-2 rounded-xl flex items-center gap-2 text-xs font-mono animate-fade-up"
+                  style={{
+                    background: "rgba(201,168,76,0.08)",
+                    border: "1px solid rgba(201,168,76,0.3)",
+                    color: "var(--gold)",
+                  }}
+                >
+                  <span className="text-sm">✦</span>
+                  <span className="flex-1 text-[11px] leading-tight">
+                    Tap face for expressions · Tap chest for camera · Tap mic to speak
+                  </span>
+                  <button onClick={dismissGuidance} className="text-muted hover:text-gold px-1 font-bold">✕</button>
+                </div>
+              )}
 
-        {/* ZONE 1 — Rumi Core */}
-        <div className="rumi-zone">
-          <div className="rumi-stage">
+              {/* Greeting */}
+              {name ? (
+                <p className="rumi-greeting">Hi, {name}</p>
+              ) : (
+                <div style={{ height: 22, width: 100, borderRadius: 6, background: "var(--surface-2)", animation: "statusPulse 1.5s ease-in-out infinite" }} />
+              )}
 
-            {/* Greeting */}
-            {name ? (
-              <p className="rumi-greeting">Hi, {name}</p>
-            ) : (
-              <div style={{ height: 22, width: 100, borderRadius: 6, background: "var(--surface-2)", animation: "statusPulse 1.5s ease-in-out infinite" }} />
-            )}
+              {/* Robot with clickable zones */}
+              <div className="robot-wrap" style={{ position: "relative", display: "inline-block" }}>
+                <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
+                <div className="body-zone zone-head" onClick={() => { setShowCameraPopup(false); setShowEmotionPopup(p => !p); }} />
+                <div className="body-zone zone-chest" onClick={() => { setShowEmotionPopup(false); setShowCameraPopup(p => !p); }} />
+              </div>
 
-            {/* Robot — clickable body zones */}
-            <div className="robot-wrap" style={{ position: "relative", display: "inline-block" }}>
-              <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
+              {/* Zone hints */}
+              <div className="flex items-center gap-3 justify-center text-xs font-mono text-muted">
+                <span className="zone-tag" onClick={() => setShowEmotionPopup(p => !p)}>
+                  Tap face for expressions
+                </span>
+                <span>·</span>
+                <span className="zone-tag" onClick={() => setShowCameraPopup(p => !p)}>
+                  Tap chest for camera
+                </span>
+              </div>
 
-              {/* Zone: head → expression panel */}
-              <div className="body-zone zone-head" onClick={() => {
-                setShowCameraPopup(false);
-                setShowEmotionPopup(p => !p);
-              }} />
+              {/* State description */}
+              <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: 0, textAlign: "center" }}>
+                {speaking ? "Rumi is speaking…" : isProcessing ? "Rumi is thinking…"
+                  : isTalking ? "Listening — stop talking to send"
+                  : observationState === "active" ? "Witnessing. Understanding."
+                  : observationState === "degraded" ? "Camera unavailable — text mode"
+                  : "Observation paused"}
+              </p>
 
-              {/* Zone: chest → camera panel */}
-              <div className="body-zone zone-chest" onClick={() => {
-                setShowEmotionPopup(false);
-                setShowCameraPopup(p => !p);
-              }} />
+              {/* Begin Observation button if paused */}
+              {sessionReady && observationState === "paused" && (
+                <div className="text-center mt-2">
+                  <button
+                    onClick={() => {
+                      setObservationState("active");
+                      if (sessionId) {
+                        const token = sessionStorage.getItem("id_token");
+                        const url = `${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000"}/session/${sessionId}/resume`;
+                        fetch(url, { method: "PUT", headers: { Authorization: `Bearer ${token}` } });
+                      }
+                    }}
+                    className="btn-primary"
+                    style={{ fontSize: "0.9rem", padding: "0.65rem 2rem" }}
+                  >
+                    Begin Observation
+                  </button>
+                  <p className="mt-1 text-xs text-muted">Rumi will start watching when you&apos;re ready</p>
+                </div>
+              )}
 
-              {/* ── Expression HUD panel ─────────────────────────────────── */}
-              {showEmotionPopup && (
-                <div className="hud-panel popup-head">
-                  <div className="hud-corner tl"/><div className="hud-corner tr"/>
-                  <div className="hud-corner bl"/><div className="hud-corner br"/>
-                  <div className="hud-header">
-                    <span className="hud-live-dot" />
-                    <span className="hud-title">Expression Analysis</span>
-                    <button className="hud-close" onClick={(e) => { e.stopPropagation(); setShowEmotionPopup(false); }}>✕</button>
-                  </div>
-                  {dominantEmotion && detection?.face_detected !== false && cameraEnabled && (
-                    <div className="hud-dominant">
-                      <span style={{ color: EMOTION_COLORS[dominantEmotion[0]] ?? "var(--teal)" }}>
-                        {dominantEmotion[0].toUpperCase()}
-                      </span>
-                      <span className="hud-dominant-score">{Math.round(dominantEmotion[1] * 100)}%</span>
+              {/* Talk controls */}
+              {observationState !== "paused" && (
+                <div className="flex flex-col items-center gap-2 select-none mt-2">
+                  {(isTalking || isProcessing) && transcript && (
+                    <div className="px-4 py-1.5 rounded-full bg-surface-2 border border-teal/20 max-w-[280px] text-center">
+                      <p className="text-xs text-text italic leading-snug">&ldquo;{transcript}&rdquo;</p>
                     </div>
                   )}
-                  <div className="hud-divider" />
-                  {!cameraEnabled ? (
-                    <p className="hud-empty">Camera unavailable</p>
-                  ) : detection?.detector_status === "unavailable" ? (
-                    <p className="hud-empty">Expression detection unavailable</p>
-                  ) : detection?.detector_status === "loading" ? (
-                    <p className="hud-empty">Loading expression model...</p>
-                  ) : emotionEntries.length > 0 && detection?.face_detected !== false ? (
-                    emotionEntries.map(([emotion, score]) => (
-                      <div key={emotion} className="hud-row">
-                        <span className="hud-label">{emotion}</span>
-                        <div className="hud-bar-track">
-                          <div className="hud-bar-fill" style={{ width: `${Math.round(score * 100)}%`, background: EMOTION_COLORS[emotion] ?? "var(--teal)" }} />
-                        </div>
-                        <span className="hud-value">{Math.round(score * 100)}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="hud-empty">No face detected</p>
+                  {isTalking && !isTabHidden && (
+                    <div className="flex items-end gap-0.5" style={{ height: 20 }}>
+                      {[3,5,8,5,10,6,4,9,6,3].map((h,i) => (
+                        <div key={i} style={{ width: 3, borderRadius: 2, backgroundColor: "var(--teal)", height: h*2, animation: `waveBar 0.6s ease-in-out ${i*0.06}s infinite alternate` }} />
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleMicToggle}
+                    disabled={speaking}
+                    aria-label={isTalking ? "Stop and send" : "Talk to Rumi"}
+                    style={{
+                      width: 64, height: 64, borderRadius: "50%",
+                      border: `2px solid ${isTalking ? "var(--teal)" : isProcessing ? "var(--gold-dim)" : "var(--border-2)"}`,
+                      background: isTalking ? "rgba(34,211,238,0.12)" : isProcessing ? "rgba(201,168,76,0.08)" : "var(--surface)",
+                      color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : "var(--muted)",
+                      boxShadow: isTalking ? "0 0 24px rgba(34,211,238,0.4), 0 0 48px rgba(34,211,238,0.15)" : isProcessing ? "0 0 20px rgba(201,168,76,0.2)" : "none",
+                      transform: isTalking ? "scale(0.95)" : "scale(1)", transition: "all 0.2s ease",
+                      cursor: speaking ? "default" : "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}
+                  >
+                    {isProcessing ? (
+                      <span style={{ display: "inline-block", width: 20, height: 20, borderRadius: "50%", border: "2.5px solid var(--gold-dim)", borderTopColor: "var(--gold)", animation: "spin 0.8s linear infinite" }} />
+                    ) : speaking ? (
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02z" /></svg>
+                    ) : (
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z" />
+                        <path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z" />
+                      </svg>
+                    )}
+                  </button>
+                  <p style={{ margin: 0, fontSize: "0.72rem", color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)" }}>
+                    {isTalking ? "Tap to finish" : isProcessing ? "Sending to Rumi…" : speaking ? "Rumi is speaking" : "Tap to speak"}
+                  </p>
+                  {(isProcessing || speaking) && (
+                    <button
+                      onClick={handleCancel}
+                      className="mt-1 px-3 py-1 rounded-full text-xs font-mono border border-gold/30 text-muted hover:text-gold"
+                    >
+                      ✕ Cancel
+                    </button>
+                  )}
+                  {!isTalking && !isProcessing && !speaking && (
+                    <button
+                      onClick={() => setOverrideOpen(true)}
+                      className="min-h-[44px] px-4 py-2 rounded-full text-xs font-mono flex items-center gap-1.5 text-muted hover:text-teal bg-surface-2 border border-border"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <rect x="2" y="4" width="20" height="16" rx="2" />
+                        <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M6 16h12" />
+                      </svg>
+                      <span>Type command</span>
+                    </button>
                   )}
                 </div>
               )}
+            </div>
+          )}
 
-              {/* ── Camera HUD panel ────────────────────────────────────── */}
-              {showCameraPopup && (
-                <div className="hud-panel popup-chest">
-                  <div className="hud-corner tl"/><div className="hud-corner tr"/>
-                  <div className="hud-corner bl"/><div className="hud-corner br"/>
-                  <div className="hud-header">
-                    {observationState === "active" && cameraEnabled && <span className="hud-live-dot" />}
-                    <span className="hud-title">Camera Preview</span>
-                    <button className="hud-close" onClick={(e) => { e.stopPropagation(); setShowCameraPopup(false); }}>✕</button>
-                  </div>
-                  <div className="hud-video-wrap" style={{ borderColor: observationState === "active" ? "var(--teal)" : "var(--border)", boxShadow: observationState === "active" ? "0 0 10px rgba(34,211,238,0.15)" : "none" }}>
-                    <video ref={cameraPopupVideoRef} autoPlay muted playsInline
-                      style={{ width: "100%", height: "100%", objectFit: "cover", display: cameraEnabled ? "block" : "none" }} />
-                    {!cameraEnabled && (
-                      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, background: "rgba(4,8,15,0.92)" }}>
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round">
-                          <line x1="1" y1="1" x2="23" y2="23"/>
-                          <path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4"/>
-                        </svg>
-                        <span style={{ fontSize: "0.65rem", letterSpacing: "0.15em", textTransform: "uppercase", color: "#ef4444", fontWeight: 700 }}>Camera Off</span>
-                        <span style={{ fontSize: "0.58rem", color: "var(--muted)", textAlign: "center", lineHeight: 1.4, padding: "0 8px" }}>Rumi cannot see you</span>
-                      </div>
-                    )}
-                    {observationState === "active" && cameraEnabled && (
-                      <div style={{ position: "absolute", top: 6, left: 6, width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 6px rgba(34,211,238,0.9)", animation: "statusPulse 2s ease-in-out infinite" }} />
-                    )}
-                  </div>
-                  <div className="hud-divider" />
-                  <div className="hud-controls">
-                    <button onClick={handleCameraToggle} className={`hud-ctrl-btn ${cameraEnabled ? "active-teal" : "active-red"}`} title={cameraEnabled ? "Disable camera — Rumi will stop seeing you" : "Enable camera"}>
-                      {cameraEnabled ? (
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M18 10.5V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-4.5l4 4v-11l-4 4z"/></svg>
-                      ) : (
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4"/></svg>
-                      )}
-                      <span>{cameraEnabled ? "Cam On" : "Cam Off — not seeing"}</span>
-                    </button>
-                    <button onClick={handleMicDeviceToggle} className={`hud-ctrl-btn ${micEnabled ? "active-gold" : "active-red"}`} title={micEnabled ? "Disable mic — Rumi will stop listening" : "Enable mic"}>
-                      {micEnabled ? (
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z"/><path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z"/></svg>
-                      ) : (
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6M17 16.95A7 7 0 015 12v-2m14 0v2a7 7 0 01-.11 1.23M12 19v3M8 23h8"/></svg>
-                      )}
-                      <span>{micEnabled ? "Mic On" : "Mic Off — not hearing"}</span>
-                    </button>
-                  </div>
+          {/* TAB 2: Canvas (Full-width dedicated mobile experience) */}
+          {activeMobileTab === "canvas" && (
+            <div className="flex-1 min-h-0 flex flex-col p-3 overflow-hidden">
+              <ArtifactCanvas
+                content={canvasContent}
+                onDismiss={() => { handleCanvasDismiss(); setActiveMobileTab("rumi"); }}
+                history={canvasHistory}
+                historyIndex={canvasIndex}
+                onNavigate={setCanvasIndex}
+                onFollowUp={handleFollowUp}
+                isFollowingUp={isFollowingUp}
+              />
+            </div>
+          )}
+
+          {/* TAB 3: History (Full-width dedicated mobile experience) */}
+          {activeMobileTab === "history" && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <ConversationTimeline
+                isOpen={true}
+                onClose={() => setActiveMobileTab("rumi")}
+                guestMode={guestMode}
+                isMobileView={true}
+              />
+            </div>
+          )}
+
+          {/* Mobile Sheets for Camera & Expression */}
+          <MobileSheet
+            isOpen={showEmotionPopup}
+            onClose={() => setShowEmotionPopup(false)}
+            title="Expression Analysis"
+          >
+            <div className="p-4 flex flex-col gap-3">
+              {dominantEmotion && detection?.face_detected !== false && cameraEnabled && (
+                <div className="flex items-center justify-between p-3 rounded-xl bg-surface-2 border border-border">
+                  <span className="text-sm font-semibold uppercase tracking-wider" style={{ color: EMOTION_COLORS[dominantEmotion[0]] ?? "var(--teal)" }}>
+                    {dominantEmotion[0]}
+                  </span>
+                  <span className="text-sm font-mono text-muted">{Math.round(dominantEmotion[1] * 100)}%</span>
                 </div>
               )}
+              {!cameraEnabled ? (
+                <p className="text-xs text-muted text-center py-4 font-mono">Camera unavailable</p>
+              ) : detection?.detector_status === "unavailable" ? (
+                <p className="text-xs text-muted text-center py-4 font-mono">Expression detection unavailable</p>
+              ) : detection?.detector_status === "loading" ? (
+                <p className="text-xs text-muted text-center py-4 font-mono">Loading expression model...</p>
+              ) : emotionEntries.length > 0 && detection?.face_detected !== false ? (
+                <div className="flex flex-col gap-2">
+                  {emotionEntries.map(([emotion, score]) => (
+                    <div key={emotion} className="flex items-center gap-3">
+                      <span className="w-16 text-xs text-muted font-mono capitalize">{emotion}</span>
+                      <div className="flex-1 h-2 bg-surface-2 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{ width: `${Math.round(score * 100)}%`, background: EMOTION_COLORS[emotion] ?? "var(--teal)" }}
+                        />
+                      </div>
+                      <span className="w-8 text-xs font-mono text-muted text-right">{Math.round(score * 100)}%</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted text-center py-4 font-mono">No face detected</p>
+              )}
             </div>
+          </MobileSheet>
 
-            {/* Zone hint */}
-            <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "center" }}>
-              <span className="zone-tag" onClick={() => setShowEmotionPopup(p => !p)}>
-                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-                Tap face for expressions
-              </span>
-              <span style={{ color: "var(--border)", fontSize: "0.5rem", opacity: 0.4 }}>·</span>
-              <span className="zone-tag" onClick={() => setShowCameraPopup(p => !p)}>
-                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-                Tap chest for camera
-              </span>
-            </div>
-
-            {/* Status */}
-            <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: 0, textAlign: "center" }}>
-              {speaking ? "Rumi is speaking…" : isProcessing ? "Rumi is thinking…"
-                : isTalking ? "Listening — stop talking to send"
-                : observationState === "active" ? "Witnessing. Understanding."
-                : observationState === "degraded" ? "Camera unavailable — text mode"
-                : "Observation paused"}
-            </p>
-
-            {/* Begin observation */}
-            {sessionReady && observationState === "paused" && (
-              <div style={{ textAlign: "center" }}>
-                <button
-                  onClick={() => {
-                    setObservationState("active");
-                    if (sessionId) {
-                      const token = sessionStorage.getItem("id_token");
-                      const url = `${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000"}/session/${sessionId}/resume`;
-                      fetch(url, { method: "PUT", headers: { Authorization: `Bearer ${token}` } });
+          <MobileSheet
+            isOpen={showCameraPopup}
+            onClose={() => setShowCameraPopup(false)}
+            title="Camera Preview"
+          >
+            <div className="p-4 flex flex-col gap-3">
+              <div className="relative aspect-video rounded-xl overflow-hidden bg-surface-2 border border-border">
+                <video
+                  ref={(el) => {
+                    if (el && liveStream && isMobileDevice && showCameraPopup) {
+                      el.srcObject = liveStream;
+                      el.play().catch(() => {});
                     }
                   }}
-                  className="btn-primary"
-                  style={{ fontSize: "0.9rem", padding: "0.65rem 2rem" }}
-                >
-                  Begin Observation
-                </button>
-                <p style={{ marginTop: 5, fontSize: "0.7rem", color: "var(--muted)" }}>Rumi will start watching when you&apos;re ready</p>
+                  autoPlay
+                  muted
+                  playsInline
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: cameraEnabled ? "block" : "none" }}
+                />
+                {!cameraEnabled && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round">
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                      <path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4" />
+                    </svg>
+                    <span className="text-xs font-mono text-error uppercase tracking-wider">Camera Off</span>
+                    <span className="text-[11px] text-muted">Rumi cannot see you</span>
+                  </div>
+                )}
               </div>
-            )}
-
-            {/* Talk controls */}
-            {observationState !== "paused" && (
-              <div className="select-none" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-                {/* Cinematic subtitle */}
-                {(isTalking || isProcessing) && transcript && (
-                  <div style={{
-                    padding: "5px 16px", borderBottom: "1px solid rgba(34,211,238,0.12)",
-                    background: "rgba(4,8,15,0.65)", backdropFilter: "blur(10px)",
-                    borderRadius: 20, maxWidth: 280, textAlign: "center",
-                  }}>
-                    <p style={{
-                      margin: 0, fontSize: "0.8rem",
-                      color: isTalking ? "var(--text)" : "var(--muted)",
-                      fontStyle: isProcessing ? "italic" : "normal",
-                      letterSpacing: "0.01em",
-                    }}>&ldquo;{transcript}&rdquo;</p>
-                  </div>
-                )}
-                {isTalking && (
-                  <div className="flex items-end gap-0.5" style={{ height: 20 }}>
-                    {[3,5,8,5,10,6,4,9,6,3].map((h,i) => (
-                      <div key={i} style={{ width: 3, borderRadius: 2, backgroundColor: "var(--teal)", height: h*2, animation: `waveBar 0.6s ease-in-out ${i*0.06}s infinite alternate` }} />
-                    ))}
-                  </div>
-                )}
+              <div className="flex gap-2">
                 <button
-                  onClick={handleMicToggle}
-                  disabled={speaking}
-                  aria-label={isTalking ? "Stop and send" : "Talk to Rumi"}
+                  onClick={handleCameraToggle}
+                  className="flex-1 min-h-[44px] py-2.5 px-4 rounded-xl text-xs font-mono font-medium border flex items-center justify-center gap-2"
                   style={{
-                    width: 64, height: 64, borderRadius: "50%",
-                    border: `2px solid ${isTalking ? "var(--teal)" : isProcessing ? "var(--gold-dim)" : "var(--border-2)"}`,
-                    background: isTalking ? "rgba(34,211,238,0.12)" : isProcessing ? "rgba(201,168,76,0.08)" : "var(--surface)",
-                    color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : "var(--muted)",
-                    boxShadow: isTalking ? "0 0 24px rgba(34,211,238,0.4), 0 0 48px rgba(34,211,238,0.15)" : isProcessing ? "0 0 20px rgba(201,168,76,0.2)" : "none",
-                    transform: isTalking ? "scale(0.95)" : "scale(1)", transition: "all 0.2s ease",
-                    cursor: speaking ? "default" : "pointer",
-                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: cameraEnabled ? "rgba(34,211,238,0.1)" : "rgba(239,68,68,0.1)",
+                    borderColor: cameraEnabled ? "rgba(34,211,238,0.3)" : "rgba(239,68,68,0.3)",
+                    color: cameraEnabled ? "var(--teal)" : "#ef4444",
                   }}
                 >
-                  {isProcessing ? (
-                    <span style={{ display: "inline-block", width: 20, height: 20, borderRadius: "50%", border: "2.5px solid var(--gold-dim)", borderTopColor: "var(--gold)", animation: "spin 0.8s linear infinite" }} />
-                  ) : speaking ? (
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02z" /></svg>
-                  ) : (
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z" />
-                      <path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z" />
-                    </svg>
-                  )}
+                  <span>{cameraEnabled ? "Camera Active (Tap to Disable)" : "Camera Off (Tap to Enable)"}</span>
                 </button>
-                {/* Status label — always directly under mic */}
-                <p style={{ margin: 0, fontSize: "0.72rem", color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)" }}>
-                  {isTalking ? "Tap or Space to send" : isProcessing ? "Sending to Rumi…" : speaking ? "Rumi is speaking" : "Tap to speak"}
-                </p>
-                {(isProcessing || speaking) && (
-                  <button
-                    onClick={handleCancel}
-                    style={{
-                      marginTop: 2, background: "transparent", border: "1px solid rgba(201,168,76,0.25)",
-                      borderRadius: 99, padding: "3px 14px", cursor: "pointer",
-                      color: "var(--muted)", fontSize: "0.68rem", letterSpacing: "0.04em",
-                    }}
-                  >
-                    ✕ Cancel
-                  </button>
+              </div>
+            </div>
+          </MobileSheet>
+
+          {/* Mobile Bottom Navigation */}
+          <MobileNavigation
+            activeTab={activeMobileTab}
+            onTabChange={(tab) => {
+              if (tab === "memory") router.push("/profile");
+              else setActiveMobileTab(tab);
+            }}
+            hasCanvasContent={canvasHistory.length > 0}
+          />
+        </div>
+      ) : (
+        /* Desktop Two-Zone Fluid Layout */
+        <div className={`app-body${canvasOpen ? " canvas-open" : ""}`} style={{ position: "relative" }}>
+          {/* ZONE 1 — Rumi Core */}
+          <div className="rumi-zone">
+            <div className="rumi-stage">
+              {/* Guidance tip on desktop */}
+              {showGuidance && (
+                <div
+                  className="mx-auto mb-1 px-3.5 py-1.5 rounded-full flex items-center gap-2 text-xs font-mono animate-fade-up"
+                  style={{
+                    background: "rgba(201,168,76,0.08)",
+                    border: "1px solid rgba(201,168,76,0.3)",
+                    color: "var(--gold)",
+                  }}
+                >
+                  <span style={{ fontSize: "0.85rem" }}>✦</span>
+                  <span className="text-[11px] leading-tight">
+                    Tap face for expressions · Tap chest for camera · Press Space to speak
+                  </span>
+                  <button onClick={dismissGuidance} className="text-muted hover:text-gold px-1 font-bold">✕</button>
+                </div>
+              )}
+
+              {/* Greeting */}
+              {name ? (
+                <p className="rumi-greeting">Hi, {name}</p>
+              ) : (
+                <div style={{ height: 22, width: 100, borderRadius: 6, background: "var(--surface-2)", animation: "statusPulse 1.5s ease-in-out infinite" }} />
+              )}
+
+              {/* Robot — Clickable body zones */}
+              <div className="robot-wrap" style={{ position: "relative", display: "inline-block" }}>
+                <RumiFace state={observationState} speaking={speaking} emotion={rumiEmotion} />
+
+                {/* Zone: head → expression panel */}
+                <div className="body-zone zone-head" onClick={() => {
+                  setShowCameraPopup(false);
+                  setShowEmotionPopup(p => !p);
+                }} />
+
+                {/* Zone: chest → camera panel */}
+                <div className="body-zone zone-chest" onClick={() => {
+                  setShowEmotionPopup(false);
+                  setShowCameraPopup(p => !p);
+                }} />
+
+                {/* ── Expression HUD panel (Desktop) ───────────────────────── */}
+                {showEmotionPopup && (
+                  <div className="hud-panel popup-head">
+                    <div className="hud-corner tl"/><div className="hud-corner tr"/>
+                    <div className="hud-corner bl"/><div className="hud-corner br"/>
+                    <div className="hud-header">
+                      <span className="hud-live-dot" />
+                      <span className="hud-title">Expression Analysis</span>
+                      <button className="hud-close" onClick={(e) => { e.stopPropagation(); setShowEmotionPopup(false); }}>✕</button>
+                    </div>
+                    {dominantEmotion && detection?.face_detected !== false && cameraEnabled && (
+                      <div className="hud-dominant">
+                        <span style={{ color: EMOTION_COLORS[dominantEmotion[0]] ?? "var(--teal)" }}>
+                          {dominantEmotion[0].toUpperCase()}
+                        </span>
+                        <span className="hud-dominant-score">{Math.round(dominantEmotion[1] * 100)}%</span>
+                      </div>
+                    )}
+                    <div className="hud-divider" />
+                    {!cameraEnabled ? (
+                      <p className="hud-empty">Camera unavailable</p>
+                    ) : detection?.detector_status === "unavailable" ? (
+                      <p className="hud-empty">Expression detection unavailable</p>
+                    ) : detection?.detector_status === "loading" ? (
+                      <p className="hud-empty">Loading expression model...</p>
+                    ) : emotionEntries.length > 0 && detection?.face_detected !== false ? (
+                      emotionEntries.map(([emotion, score]) => (
+                        <div key={emotion} className="hud-row">
+                          <span className="hud-label">{emotion}</span>
+                          <div className="hud-bar-track">
+                            <div className="hud-bar-fill" style={{ width: `${Math.round(score * 100)}%`, background: EMOTION_COLORS[emotion] ?? "var(--teal)" }} />
+                          </div>
+                          <span className="hud-value">{Math.round(score * 100)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="hud-empty">No face detected</p>
+                    )}
+                  </div>
                 )}
-                {/* Screen share button */}
-                {!isTalking && !isProcessing && !speaking && (
-                  <button
-                    onClick={screenActive ? stopScreenShare : startScreenShare}
-                    title={screenActive ? "Stop screen sharing" : "Share screen with Rumi"}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 5,
-                      background: screenActive ? "rgba(34,211,238,0.12)" : "rgba(34,211,238,0.06)",
-                      border: `1px solid ${screenActive ? "rgba(34,211,238,0.5)" : "rgba(34,211,238,0.18)"}`,
-                      borderRadius: 99, padding: "5px 14px", cursor: "pointer",
-                      color: screenActive ? "var(--teal)" : "var(--muted)", transition: "all 0.15s",
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
-                    </svg>
-                    <span style={{ fontSize: "0.72rem" }}>{screenActive ? "Sharing screen" : "Share screen"}</span>
-                    {screenActive && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", animation: "pulseRing 1.5s infinite" }} />}
-                  </button>
-                )}
-                {/* Type button — shown when idle */}
-                {!isTalking && !isProcessing && !speaking && (
-                  <button
-                    onClick={() => setOverrideOpen(true)}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 5,
-                      background: "rgba(34,211,238,0.06)", border: "1px solid rgba(34,211,238,0.18)",
-                      borderRadius: 99, padding: "5px 14px", cursor: "pointer",
-                      color: "var(--muted)", transition: "all 0.15s",
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.background = "rgba(34,211,238,0.12)"; e.currentTarget.style.color = "var(--teal)"; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = "rgba(34,211,238,0.06)"; e.currentTarget.style.color = "var(--muted)"; }}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="4" width="20" height="16" rx="2"/>
-                      <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M6 16h12"/>
-                    </svg>
-                    <span style={{ fontSize: "0.65rem", letterSpacing: "0.06em" }}>Type</span>
-                  </button>
-                )}
-                {/* Wake word standby indicator */}
-                {wakeListening && !isTalking && !isProcessing && !speaking && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <div style={{
-                      width: 5, height: 5, borderRadius: "50%",
-                      background: "var(--teal)", opacity: 0.55,
-                      animation: "statusPulse 2.4s ease-in-out infinite",
-                    }} />
-                    <span style={{ fontSize: "0.58rem", color: "var(--muted)", opacity: 0.7, letterSpacing: "0.06em" }}>
-                      Say &ldquo;Hey Rumi&rdquo;
-                    </span>
+
+                {/* ── Camera HUD panel (Desktop) ──────────────────────────── */}
+                {showCameraPopup && (
+                  <div className="hud-panel popup-chest">
+                    <div className="hud-corner tl"/><div className="hud-corner tr"/>
+                    <div className="hud-corner bl"/><div className="hud-corner br"/>
+                    <div className="hud-header">
+                      {observationState === "active" && cameraEnabled && <span className="hud-live-dot" />}
+                      <span className="hud-title">Camera Preview</span>
+                      <button className="hud-close" onClick={(e) => { e.stopPropagation(); setShowCameraPopup(false); }}>✕</button>
+                    </div>
+                    <div className="hud-video-wrap" style={{ borderColor: observationState === "active" ? "var(--teal)" : "var(--border)", boxShadow: observationState === "active" ? "0 0 10px rgba(34,211,238,0.15)" : "none" }}>
+                      <video ref={cameraPopupVideoRef} autoPlay muted playsInline
+                        style={{ width: "100%", height: "100%", objectFit: "cover", display: cameraEnabled ? "block" : "none" }} />
+                      {!cameraEnabled && (
+                        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, background: "rgba(4,8,15,0.92)" }}>
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round">
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                            <path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4"/>
+                          </svg>
+                          <span style={{ fontSize: "0.65rem", letterSpacing: "0.15em", textTransform: "uppercase", color: "#ef4444", fontWeight: 700 }}>Camera Off</span>
+                          <span style={{ fontSize: "0.58rem", color: "var(--muted)", textAlign: "center", lineHeight: 1.4, padding: "0 8px" }}>Rumi cannot see you</span>
+                        </div>
+                      )}
+                      {observationState === "active" && cameraEnabled && !isTabHidden && (
+                        <div style={{ position: "absolute", top: 6, left: 6, width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 6px rgba(34,211,238,0.9)", animation: "statusPulse 2s ease-in-out infinite" }} />
+                      )}
+                    </div>
+                    <div className="hud-divider" />
+                    <div className="hud-controls">
+                      <button onClick={handleCameraToggle} className={`hud-ctrl-btn ${cameraEnabled ? "active-teal" : "active-red"}`} title={cameraEnabled ? "Disable camera — Rumi will stop seeing you" : "Enable camera"}>
+                        {cameraEnabled ? (
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M18 10.5V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-4.5l4 4v-11l-4 4z"/></svg>
+                        ) : (
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.5 16.5H4a2 2 0 01-2-2V7a2 2 0 012-2h1.5M20 8.5V17a2 2 0 01-2 2h-.5M22 10.5l-4-4"/></svg>
+                        )}
+                        <span>{cameraEnabled ? "Cam On" : "Cam Off — not seeing"}</span>
+                      </button>
+                      <button onClick={handleMicDeviceToggle} className={`hud-ctrl-btn ${micEnabled ? "active-gold" : "active-red"}`} title={micEnabled ? "Disable mic — Rumi will stop listening" : "Enable mic"}>
+                        {micEnabled ? (
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z"/><path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z"/></svg>
+                        ) : (
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6M17 16.95A7 7 0 015 12v-2m14 0v2a7 7 0 01-.11 1.23M12 19v3M8 23h8"/></svg>
+                        )}
+                        <span>{micEnabled ? "Mic On" : "Mic Off — not hearing"}</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
-            )}
 
-          </div>
-        </div>
+              {/* Zone hints */}
+              <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "center" }}>
+                <span className="zone-tag" onClick={() => setShowEmotionPopup(p => !p)}>
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                  Tap face for expressions
+                </span>
+                <span style={{ color: "var(--border)", fontSize: "0.5rem", opacity: 0.4 }}>·</span>
+                <span className="zone-tag" onClick={() => setShowCameraPopup(p => !p)}>
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                  Tap chest for camera
+                </span>
+              </div>
 
-        {/* ZONE 2 — Artifact Canvas */}
-        <div className={`canvas-zone${canvasOpen ? " canvas-open" : ""}`} style={{
-          position: "relative",
-          filter: guestMode ? "blur(10px) saturate(0.2)" : "none",
-          transition: "filter 0.5s ease",
-          pointerEvents: guestMode ? "none" : "auto",
-        }}>
-          <ArtifactCanvas
-            content={canvasContent}
-            onDismiss={handleCanvasDismiss}
-            history={canvasHistory}
-            historyIndex={canvasIndex}
-            onNavigate={setCanvasIndex}
-            onFollowUp={handleFollowUp}
-            isFollowingUp={isFollowingUp}
-          />
-        </div>
+              {/* Status */}
+              <p style={{ fontSize: "0.78rem", color: "var(--muted)", margin: 0, textAlign: "center" }}>
+                {speaking ? "Rumi is speaking…" : isProcessing ? "Rumi is thinking…"
+                  : isTalking ? "Listening — stop talking to send"
+                  : observationState === "active" ? "Witnessing. Understanding."
+                  : observationState === "degraded" ? "Camera unavailable — text mode"
+                  : "Observation paused"}
+              </p>
 
-        {/* Guest Mode privacy overlay — covers everything when non-owner detected */}
-        {guestMode && (
-          <div style={{
-            position: "absolute", inset: 0, zIndex: 30,
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-            background: "rgba(4,8,15,0.55)", backdropFilter: "blur(2px)",
-            animation: "fadeSlideUp 0.4s ease both",
-            pointerEvents: "none",
-          }}>
-            <div style={{
-              display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
-              padding: "20px 32px", borderRadius: 16,
-              background: "rgba(4,8,15,0.8)", border: "1px solid rgba(239,68,68,0.3)",
-              boxShadow: "0 0 40px rgba(239,68,68,0.08)",
-            }}>
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round">
-                <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
-              </svg>
-              <span style={{ fontSize: "0.75rem", letterSpacing: "0.2em", textTransform: "uppercase", color: "#ef4444", fontWeight: 700 }}>Session Locked</span>
-              <span style={{ fontSize: "0.65rem", color: "var(--muted)", letterSpacing: "0.05em", textAlign: "center" }}>
-                Rumi has protected this workspace.<br/>Owner identity required to continue.
-              </span>
+              {/* Begin observation */}
+              {sessionReady && observationState === "paused" && (
+                <div style={{ textAlign: "center" }}>
+                  <button
+                    onClick={() => {
+                      setObservationState("active");
+                      if (sessionId) {
+                        const token = sessionStorage.getItem("id_token");
+                        const url = `${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000"}/session/${sessionId}/resume`;
+                        fetch(url, { method: "PUT", headers: { Authorization: `Bearer ${token}` } });
+                      }
+                    }}
+                    className="btn-primary"
+                    style={{ fontSize: "0.9rem", padding: "0.65rem 2rem" }}
+                  >
+                    Begin Observation
+                  </button>
+                  <p style={{ marginTop: 5, fontSize: "0.7rem", color: "var(--muted)" }}>Rumi will start watching when you&apos;re ready</p>
+                </div>
+              )}
+
+              {/* Talk controls */}
+              {observationState !== "paused" && (
+                <div className="select-none" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                  {/* Subtitle */}
+                  {(isTalking || isProcessing) && transcript && (
+                    <div style={{
+                      padding: "5px 16px", borderBottom: "1px solid rgba(34,211,238,0.12)",
+                      background: "rgba(4,8,15,0.65)", backdropFilter: "blur(10px)",
+                      borderRadius: 20, maxWidth: 280, textAlign: "center",
+                    }}>
+                      <p style={{
+                        margin: 0, fontSize: "0.8rem",
+                        color: isTalking ? "var(--text)" : "var(--muted)",
+                        fontStyle: isProcessing ? "italic" : "normal",
+                        letterSpacing: "0.01em",
+                      }}>&ldquo;{transcript}&rdquo;</p>
+                    </div>
+                  )}
+                  {isTalking && !isTabHidden && (
+                    <div className="flex items-end gap-0.5" style={{ height: 20 }}>
+                      {[3,5,8,5,10,6,4,9,6,3].map((h,i) => (
+                        <div key={i} style={{ width: 3, borderRadius: 2, backgroundColor: "var(--teal)", height: h*2, animation: `waveBar 0.6s ease-in-out ${i*0.06}s infinite alternate` }} />
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleMicToggle}
+                    disabled={speaking}
+                    aria-label={isTalking ? "Stop and send" : "Talk to Rumi"}
+                    style={{
+                      width: 64, height: 64, borderRadius: "50%",
+                      border: `2px solid ${isTalking ? "var(--teal)" : isProcessing ? "var(--gold-dim)" : "var(--border-2)"}`,
+                      background: isTalking ? "rgba(34,211,238,0.12)" : isProcessing ? "rgba(201,168,76,0.08)" : "var(--surface)",
+                      color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : "var(--muted)",
+                      boxShadow: isTalking ? "0 0 24px rgba(34,211,238,0.4), 0 0 48px rgba(34,211,238,0.15)" : isProcessing ? "0 0 20px rgba(201,168,76,0.2)" : "none",
+                      transform: isTalking ? "scale(0.95)" : "scale(1)", transition: "all 0.2s ease",
+                      cursor: speaking ? "default" : "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}
+                  >
+                    {isProcessing ? (
+                      <span style={{ display: "inline-block", width: 20, height: 20, borderRadius: "50%", border: "2.5px solid var(--gold-dim)", borderTopColor: "var(--gold)", animation: "spin 0.8s linear infinite" }} />
+                    ) : speaking ? (
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02z" /></svg>
+                    ) : (
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 1a4 4 0 014 4v6a4 4 0 01-8 0V5a4 4 0 014-4z" />
+                        <path d="M19 10a1 1 0 00-2 0 5 5 0 01-10 0 1 1 0 00-2 0 7 7 0 006 6.92V19H9a1 1 0 000 2h6a1 1 0 000-2h-2v-2.08A7 7 0 0019 10z" />
+                      </svg>
+                    )}
+                  </button>
+                  {/* Status label under mic */}
+                  <p style={{ margin: 0, fontSize: "0.72rem", color: isTalking ? "var(--teal)" : isProcessing ? "var(--gold)" : speaking ? "var(--gold)" : "var(--muted)" }}>
+                    {isTalking ? "Tap or Space to send" : isProcessing ? "Sending to Rumi…" : speaking ? "Rumi is speaking" : "Tap or Space to speak"}
+                  </p>
+                  {(isProcessing || speaking) && (
+                    <button
+                      onClick={handleCancel}
+                      style={{
+                        marginTop: 2, background: "transparent", border: "1px solid rgba(201,168,76,0.25)",
+                        borderRadius: 99, padding: "3px 14px", cursor: "pointer",
+                        color: "var(--muted)", fontSize: "0.68rem", letterSpacing: "0.04em",
+                      }}
+                    >
+                      ✕ Cancel
+                    </button>
+                  )}
+                  {/* Screen share button (desktop only) */}
+                  {!isTalking && !isProcessing && !speaking && supportsScreenShare && (
+                    <button
+                      onClick={screenActive ? stopScreenShare : startScreenShare}
+                      title={screenActive ? "Stop screen sharing" : "Share screen with Rumi"}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 5,
+                        background: screenActive ? "rgba(34,211,238,0.12)" : "rgba(34,211,238,0.06)",
+                        border: `1px solid ${screenActive ? "rgba(34,211,238,0.5)" : "rgba(34,211,238,0.18)"}`,
+                        borderRadius: 99, padding: "5px 14px", cursor: "pointer",
+                        color: screenActive ? "var(--teal)" : "var(--muted)", transition: "all 0.15s",
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+                      </svg>
+                      <span style={{ fontSize: "0.72rem" }}>{screenActive ? "Sharing screen" : "Share screen"}</span>
+                      {screenActive && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", animation: "pulseRing 1.5s infinite" }} />}
+                    </button>
+                  )}
+                  {/* Type button */}
+                  {!isTalking && !isProcessing && !speaking && (
+                    <button
+                      onClick={() => setOverrideOpen(true)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 5,
+                        background: "rgba(34,211,238,0.06)", border: "1px solid rgba(34,211,238,0.18)",
+                        borderRadius: 99, padding: "5px 14px", cursor: "pointer",
+                        color: "var(--muted)", transition: "all 0.15s",
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = "rgba(34,211,238,0.12)"; e.currentTarget.style.color = "var(--teal)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "rgba(34,211,238,0.06)"; e.currentTarget.style.color = "var(--muted)"; }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="2" y="4" width="20" height="16" rx="2"/>
+                        <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M6 16h12"/>
+                      </svg>
+                      <span style={{ fontSize: "0.65rem", letterSpacing: "0.06em" }}>Type</span>
+                    </button>
+                  )}
+                  {/* Wake word standby indicator */}
+                  {wakeListening && !isTalking && !isProcessing && !speaking && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <div style={{
+                        width: 5, height: 5, borderRadius: "50%",
+                        background: "var(--teal)", opacity: 0.55,
+                        animation: !isTabHidden ? "statusPulse 2.4s ease-in-out infinite" : "none",
+                      }} />
+                      <span style={{ fontSize: "0.58rem", color: "var(--muted)", opacity: 0.7, letterSpacing: "0.06em" }}>
+                        Say &ldquo;Hey Rumi&rdquo;
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
-        )}
 
-        {/* Canvas pull tab — visible when session active but canvas closed */}
-        {observationState !== "paused" && !canvasOpen && (
-          <div
-            className="canvas-pull-tab"
-            onClick={() => setCanvasOpen(true)}
-            title="Open artifact canvas"
-          >
-            <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="9 18 15 12 9 6"/></svg>
-            <span>CANVAS</span>
+          {/* ZONE 2 — Artifact Canvas (Desktop Side-by-Side) */}
+          <div className={`canvas-zone${canvasOpen ? " canvas-open" : ""}`} style={{
+            position: "relative",
+            filter: guestMode ? "blur(10px) saturate(0.2)" : "none",
+            transition: "filter 0.5s ease",
+            pointerEvents: guestMode ? "none" : "auto",
+          }}>
+            <ArtifactCanvas
+              content={canvasContent}
+              onDismiss={handleCanvasDismiss}
+              history={canvasHistory}
+              historyIndex={canvasIndex}
+              onNavigate={setCanvasIndex}
+              onFollowUp={handleFollowUp}
+              isFollowingUp={isFollowingUp}
+            />
           </div>
-        )}
-      </div>
 
-      {/* Intervention card — fixed overlay, always on-screen */}
+          {/* Desktop Canvas pull tab — visible when canvas closed */}
+          {observationState !== "paused" && !canvasOpen && (
+            <div
+              className="canvas-pull-tab"
+              onClick={() => setCanvasOpen(true)}
+              title="Open artifact canvas"
+            >
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+              <span>CANVAS</span>
+            </div>
+          )}
+
+          {/* Desktop History Drawer */}
+          <ConversationTimeline
+            isOpen={historyOpen}
+            onClose={() => setHistoryOpen(false)}
+            guestMode={guestMode}
+            isMobileView={false}
+          />
+        </div>
+      )}
+
+      {/* Guest Mode privacy overlay */}
+      {guestMode && (
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 30,
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          background: "rgba(4,8,15,0.55)", backdropFilter: "blur(2px)",
+          animation: "fadeSlideUp 0.4s ease both",
+          pointerEvents: "none",
+        }}>
+          <div style={{
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
+            padding: "20px 32px", borderRadius: 16,
+            background: "rgba(4,8,15,0.8)", border: "1px solid rgba(239,68,68,0.3)",
+            boxShadow: "0 0 40px rgba(239,68,68,0.08)",
+          }}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round">
+              <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+            </svg>
+            <span style={{ fontSize: "0.75rem", letterSpacing: "0.2em", textTransform: "uppercase", color: "#ef4444", fontWeight: 700 }}>Session Locked</span>
+            <span style={{ fontSize: "0.65rem", color: "var(--muted)", letterSpacing: "0.05em", textAlign: "center" }}>
+              Rumi has protected this workspace.<br/>Owner identity required to continue.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Intervention card — fixed overlay */}
       {intervention && (
         <div style={{
-          position: "fixed", bottom: 90, left: "50%", transform: "translateX(-50%)",
+          position: "fixed", bottom: isMobileDevice ? 75 : 90, left: "50%", transform: "translateX(-50%)",
           zIndex: 50, width: "min(420px, calc(100vw - 32px))",
           animation: "interventionIn 0.3s ease",
         }}>
@@ -1729,7 +2103,6 @@ export default function DashboardPage() {
           justify-content: flex-start; gap: 8px; overflow-y: auto; overflow-x: hidden;
           padding: clamp(6px, 2vh, 24px) 16px 16px;
           min-height: 0;
-          /* Hide scrollbar but keep scrollability */
           scrollbar-width: none;
         }
         .rumi-stage::-webkit-scrollbar { display: none; }
@@ -1810,11 +2183,6 @@ export default function DashboardPage() {
           position: relative; border: 1px solid var(--border);
           transition: border-color 0.3s ease, box-shadow 0.3s ease;
         }
-        .hud-cam-off {
-          position: absolute; inset: 0; display: flex; align-items: center;
-          justify-content: center; background: var(--surface-2);
-          font-size: 0.55rem; color: var(--muted); letter-spacing: 0.1em;
-        }
         .hud-controls { display: flex; gap: 6px; justify-content: center; }
         .hud-ctrl-btn {
           display: flex; align-items: center; gap: 4px;
@@ -1827,15 +2195,10 @@ export default function DashboardPage() {
         .hud-ctrl-btn.active-gold { background: rgba(201,168,76,0.1); color: var(--gold); }
         .hud-ctrl-btn.active-red  { background: rgba(239,68,68,0.1);  color: #ef4444; }
 
-        /* HUD positions — mobile: right side, staggered top/bottom */
-        .popup-head  { position: fixed; top: 72px;    right: 14px; left: auto; bottom: auto; }
-        .popup-chest { position: fixed; bottom: 80px; right: 14px; left: auto; top: auto; }
-
-        /* Desktop: opposite corners so they never stack and never cover the robot */
+        /* HUD positions (Desktop) */
         @media (min-width: 640px) {
           .popup-head  { top: 72px;    left: 14px; right: auto; bottom: auto; }
           .popup-chest { bottom: 80px; right: 14px; left: auto; top: auto; }
-          /* Canvas open: right side is canvas content — shift chest panel to left too */
           .app-body.canvas-open .popup-chest { left: 14px; right: auto; bottom: 80px; top: auto; }
         }
 
@@ -1873,45 +2236,7 @@ export default function DashboardPage() {
           font-weight: 600;
         }
 
-        /* Mobile */
-        @media (max-width: 639px) {
-          .app-body {
-            grid-template-columns: unset !important;
-            grid-template-rows: 1fr 0fr;
-            transition: grid-template-rows 0.55s cubic-bezier(0.4, 0, 0.2, 1);
-          }
-          .app-body.canvas-open {
-            grid-template-rows: 35fr 65fr;
-          }
-          .canvas-zone {
-            border-left: none !important;
-            border-top: 1px solid rgba(34,211,238,0.1);
-          }
-          .rumi-stage { gap: 4px; }
-          .hud-panel  { width: min(52vw, 200px); }
-          .override-panel { padding: 10px 14px env(safe-area-inset-bottom, 16px); }
-          /* canvas pull tab → bottom-centre on mobile (canvas stacks below) */
-          .canvas-pull-tab {
-            right: auto;
-            top: auto;
-            bottom: 0;
-            left: 50%;
-            transform: translateX(-50%);
-            flex-direction: row;
-            padding: 7px 24px 10px;
-            border-radius: 10px 10px 0 0;
-            border-right: 1px solid rgba(34,211,238,0.2);
-            border-bottom: none;
-          }
-          .canvas-pull-tab span { writing-mode: horizontal-tb; }
-          /* scale robot further when canvas is stacked below */
-          .app-body.canvas-open .robot-wrap { transform: scale(0.48); margin-bottom: -250px; }
-          .app-body.canvas-open .rumi-stage { gap: 3px; padding-top: 4px; }
-          .app-body.canvas-open .zone-tag   { display: none; }
-        }
-
         /* ── Robot scale-down for smaller viewports ────────────────────── */
-        /* WRAP_H = 480px. Scale down so robot doesn't dominate layout.    */
         .robot-wrap { transform-origin: top center; }
 
         @media (max-height: 780px) {
@@ -1925,7 +2250,6 @@ export default function DashboardPage() {
           .robot-wrap { transform: scale(0.5); margin-bottom: -240px; }
           .rumi-stage { gap: 2px; padding: 4px 8px 8px; }
         }
-        /* Safe area insets for iPhone home bar */
         @supports (padding: env(safe-area-inset-bottom)) {
           .rumi-stage   { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
           .override-panel { padding-bottom: max(24px, env(safe-area-inset-bottom)); }

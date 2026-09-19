@@ -6,7 +6,9 @@ import {
   getIdentity, saveIdentity, verifyAuth, refreshSessionContext,
   getKnownPeople, addKnownPerson, updateKnownPerson, deleteKnownPerson,
   uploadPersonPhoto, uploadProfilePhoto,
-  type KnownPerson,
+  getMemoryCandidates, confirmMemoryCandidate, rejectMemoryCandidate, dismissMemoryCandidate,
+  clearConversationHistory, clearCanvasHistory,
+  type KnownPerson, type MemoryCandidate,
 } from "@/services/session";
 
 type Identity = Record<string, unknown>;
@@ -582,7 +584,7 @@ function KnownPeopleEditor({ uid }: { uid: string }) {
         )}
       </div>
       <p className="text-xs mb-4" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
-        Rumi will recognise these people when they appear on camera and greet them by name.
+        Rumi uses a private face-recognition model to recognize familiar people. Face embeddings are kept private and are not treated as security-grade authentication.
       </p>
 
       {/* Person cards */}
@@ -720,6 +722,323 @@ function KnownPeopleEditor({ uid }: { uid: string }) {
   );
 }
 
+// ── Memory Candidates Section (Phase 5) ────────────────────────────────────────
+
+function MemoryCandidatesSection({ onMemoryConfirmed }: { onMemoryConfirmed?: () => void }) {
+  const [candidates, setCandidates] = useState<MemoryCandidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+
+  const loadCandidates = () => {
+    setLoading(true);
+    getMemoryCandidates()
+      .then(setCandidates)
+      .catch(() => setCandidates([]))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadCandidates();
+  }, []);
+
+  const handleConfirm = async (cand: MemoryCandidate) => {
+    setProcessingId(cand.id);
+    try {
+      await confirmMemoryCandidate(cand.id);
+      setCandidates((prev) => prev.filter((c) => c.id !== cand.id));
+      if (onMemoryConfirmed) onMemoryConfirmed();
+    } catch {
+      // ignore
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleReject = async (cand: MemoryCandidate) => {
+    setProcessingId(cand.id);
+    try {
+      await rejectMemoryCandidate(cand.id);
+      setCandidates((prev) => prev.filter((c) => c.id !== cand.id));
+    } catch {
+      // ignore
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleDismiss = async (cand: MemoryCandidate) => {
+    setProcessingId(cand.id);
+    try {
+      await dismissMemoryCandidate(cand.id);
+      setCandidates((prev) => prev.filter((c) => c.id !== cand.id));
+    } catch {
+      // ignore
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const formatFieldName = (f: string) => {
+    return f.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+
+  return (
+    <div className="rumi-card" style={{ borderColor: "rgba(34,211,238,0.25)", background: "rgba(34,211,238,0.02)" }}>
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-[var(--teal)] shadow-[0_0_6px_var(--teal)]" />
+          <p className="uppercase-label m-0" style={{ color: "var(--teal)" }}>What Rumi Has Noticed</p>
+        </div>
+        {candidates.length > 0 && (
+          <span className="rumi-tag text-xs" style={{ borderColor: "rgba(34,211,238,0.3)", color: "var(--teal)" }}>
+            {candidates.length} suggestion{candidates.length > 1 ? "s" : ""}
+          </span>
+        )}
+      </div>
+      <p className="text-xs mb-4" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
+        As you converse and work, Rumi notices patterns and habits. Inferred observations only become permanent memory when you approve them.
+      </p>
+
+      {loading ? (
+        <p className="text-sm" style={{ color: "var(--muted)" }}>Checking memories…</p>
+      ) : candidates.length === 0 ? (
+        <div className="p-4 rounded-xl text-center" style={{ background: "var(--surface-2)", border: "1px dashed var(--border)" }}>
+          <p className="text-xs text-[var(--text-2)] m-0">No unconfirmed memory suggestions right now.</p>
+          <p className="text-[0.7rem] text-muted m-0 mt-1">Rumi will suggest new habits and context here after future conversations.</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {candidates.map((cand) => (
+            <div
+              key={cand.id}
+              className="p-4 rounded-xl flex flex-col gap-2.5 transition-all"
+              style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="uppercase-label text-gold" style={{ fontSize: "0.62rem" }}>
+                  {formatFieldName(cand.field)}
+                </span>
+                <span className="text-[0.62rem] text-muted">
+                  Suggestion · Confidence {Math.round(cand.confidence * 100)}%
+                </span>
+              </div>
+              <p className="text-sm text-[var(--text)] m-0 font-medium">
+                &ldquo;{Array.isArray(cand.suggested_value) ? cand.suggested_value.join(", ") : String(cand.suggested_value)}&rdquo;
+              </p>
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={() => handleConfirm(cand)}
+                  disabled={processingId === cand.id}
+                  className="btn-primary"
+                  style={{ fontSize: "0.75rem", padding: "0.4rem 1rem" }}
+                >
+                  ✓ Remember this
+                </button>
+                <button
+                  onClick={() => handleReject(cand)}
+                  disabled={processingId === cand.id}
+                  className="btn-ghost"
+                  style={{ fontSize: "0.75rem", padding: "0.4rem 0.85rem", color: "var(--error)", borderColor: "rgba(248,113,113,0.3)" }}
+                >
+                  Not true
+                </button>
+                <button
+                  onClick={() => handleDismiss(cand)}
+                  disabled={processingId === cand.id}
+                  className="btn-ghost"
+                  style={{ fontSize: "0.75rem", padding: "0.4rem 0.75rem" }}
+                >
+                  Not now
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Privacy & Sensors Section (Phase 5) ────────────────────────────────────────
+
+function PrivacySensorsSection() {
+  const sensorItems = [
+    {
+      title: "Camera",
+      icon: "📹",
+      desc: "Rumi can observe your presence and facial expression while enabled. Video frames are processed privately and are never streamed to public endpoints.",
+    },
+    {
+      title: "Microphone",
+      icon: "🎙️",
+      desc: "Rumi can listen when voice interaction is active. Raw audio is processed for realtime speech turns and is not continuously recorded.",
+    },
+    {
+      title: "Screen Sharing",
+      icon: "🖥️",
+      desc: "Rumi only sees your screen while you explicitly share it. Screen capture stops immediately when you dismiss the share session.",
+    },
+    {
+      title: "Facial Recognition",
+      icon: "👤",
+      desc: "Rumi uses a private face-recognition model to recognize familiar people. Face embeddings are kept private and are not treated as security-grade authentication.",
+    },
+    {
+      title: "Memory Inferences",
+      icon: "🧠",
+      desc: "Inferred facts only become permanent when you approve them. You maintain complete control to edit or delete any stored detail.",
+    },
+  ];
+
+  return (
+    <div className="rumi-card">
+      <p className="uppercase-label mb-1" style={{ color: "var(--gold)" }}>Privacy & Sensors</p>
+      <p className="text-xs mb-4" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
+        Clear principles for how Rumi observes, listens, and remembers.
+      </p>
+      <div className="flex flex-col gap-3">
+        {sensorItems.map((s, idx) => (
+          <div key={idx} className="p-3.5 rounded-xl flex items-start gap-3" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+            <span className="text-xl leading-none">{s.icon}</span>
+            <div>
+              <h4 className="text-sm font-semibold text-[var(--text)] m-0 mb-1">{s.title}</h4>
+              <p className="text-xs text-[var(--text-2)] m-0 leading-relaxed">{s.desc}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Data Controls Section (Phase 5) ───────────────────────────────────────────
+
+function DataControlsSection() {
+  const [confirmConv, setConfirmConv] = useState(false);
+  const [confirmCanvas, setConfirmCanvas] = useState(false);
+  const [clearingConv, setClearingConv] = useState(false);
+  const [clearingCanvas, setClearingCanvas] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleClearConv = async () => {
+    setClearingConv(true);
+    try {
+      await clearConversationHistory();
+      showToast("Conversation history permanently wiped.");
+      setConfirmConv(false);
+    } catch {
+      showToast("Failed to clear conversation history.");
+    } finally {
+      setClearingConv(false);
+    }
+  };
+
+  const handleClearCanvas = async () => {
+    setClearingCanvas(true);
+    try {
+      await clearCanvasHistory();
+      showToast("Canvas history permanently wiped.");
+      setConfirmCanvas(false);
+    } catch {
+      showToast("Failed to clear Canvas history.");
+    } finally {
+      setClearingCanvas(false);
+    }
+  };
+
+  return (
+    <div className="rumi-card" style={{ borderColor: "rgba(248,113,113,0.2)" }}>
+      <p className="uppercase-label mb-1" style={{ color: "var(--error)" }}>Data Controls</p>
+      <p className="text-xs mb-4" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
+        Permanently purge your stored history records. These actions cannot be undone.
+      </p>
+
+      {toast && (
+        <div className="p-3 rounded-lg text-xs mb-4 text-[var(--teal)] bg-[rgba(34,211,238,0.1)] border border-[rgba(34,211,238,0.3)]">
+          {toast}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-4">
+        {/* Clear Conversation History */}
+        <div className="flex items-center justify-between flex-wrap gap-3 p-3.5 rounded-xl" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+          <div>
+            <h4 className="text-sm font-semibold text-[var(--text)] m-0 mb-0.5">Conversation History</h4>
+            <p className="text-xs text-muted m-0">Wipe all past sessions, conversation turns, interventions, and summaries.</p>
+          </div>
+          {confirmConv ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleClearConv}
+                disabled={clearingConv}
+                className="btn-primary"
+                style={{ fontSize: "0.75rem", padding: "0.35rem 0.8rem", background: "var(--error)", color: "#fff" }}
+              >
+                {clearingConv ? "Wiping…" : "Confirm Wipe"}
+              </button>
+              <button
+                onClick={() => setConfirmConv(false)}
+                className="btn-ghost"
+                style={{ fontSize: "0.75rem", padding: "0.35rem 0.75rem" }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmConv(true)}
+              className="btn-ghost"
+              style={{ fontSize: "0.75rem", padding: "0.4rem 0.9rem", color: "var(--error)", borderColor: "rgba(248,113,113,0.3)" }}
+            >
+              Clear Conversation History
+            </button>
+          )}
+        </div>
+
+        {/* Clear Canvas History */}
+        <div className="flex items-center justify-between flex-wrap gap-3 p-3.5 rounded-xl" style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+          <div>
+            <h4 className="text-sm font-semibold text-[var(--text)] m-0 mb-0.5">Canvas History</h4>
+            <p className="text-xs text-muted m-0">Wipe all generated artifacts, code blocks, and structured canvas answers.</p>
+          </div>
+          {confirmCanvas ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleClearCanvas}
+                disabled={clearingCanvas}
+                className="btn-primary"
+                style={{ fontSize: "0.75rem", padding: "0.35rem 0.8rem", background: "var(--error)", color: "#fff" }}
+              >
+                {clearingCanvas ? "Wiping…" : "Confirm Wipe"}
+              </button>
+              <button
+                onClick={() => setConfirmCanvas(false)}
+                className="btn-ghost"
+                style={{ fontSize: "0.75rem", padding: "0.35rem 0.75rem" }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmCanvas(true)}
+              className="btn-ghost"
+              style={{ fontSize: "0.75rem", padding: "0.4rem 0.9rem", color: "var(--error)", borderColor: "rgba(248,113,113,0.3)" }}
+            >
+              Clear Canvas History
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function ProfilePage() {
@@ -801,6 +1120,8 @@ export default function ProfilePage() {
 
   if (!identity) return null;
 
+  const [activeTab, setActiveTab] = useState<"all" | "known" | "noticed" | "people" | "privacy" | "data">("all");
+
   const projects = (identity.projects as Project[] | undefined) ?? [];
   const interests = (identity.interests as string[] | undefined) ?? [];
   const roles = (identity.roles as string[] | undefined) ?? [];
@@ -814,167 +1135,234 @@ export default function ProfilePage() {
       <div className="max-w-2xl mx-auto px-4 py-10">
 
         {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-3 mb-8 animate-fade-up">
+        <div className="flex items-center justify-between flex-wrap gap-3 mb-6 animate-fade-up">
           <div>
             <h1
               className="font-display text-gold"
               style={{ fontSize: "2rem", fontWeight: 300, letterSpacing: "0.04em" }}
             >
-              Your Memory
+              Memory & Privacy Center
             </h1>
             <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-              Everything Rumi knows about you.
+              Confirmed identity, candidate observations, sensor permissions, and data controls.
             </p>
           </div>
           <a href="/dashboard" className="btn-ghost" style={{ fontSize: "0.8125rem" }}>
-            ← Dashboard
+            ← Back to Rumi
           </a>
         </div>
 
-        <div className="flex flex-col gap-4">
+        {/* Category Navigation Chips */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 mb-6 scrollbar-none animate-fade-up">
+          {[
+            { id: "all", label: "Overview" },
+            { id: "noticed", label: "What Rumi Noticed" },
+            { id: "known", label: "What Rumi Knows" },
+            { id: "people", label: "Known People" },
+            { id: "privacy", label: "Privacy & Sensors" },
+            { id: "data", label: "Data Controls" },
+          ].map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id as typeof activeTab)}
+              className="px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all"
+              style={{
+                background: activeTab === t.id ? "rgba(201,168,76,0.15)" : "var(--surface)",
+                borderColor: activeTab === t.id ? "var(--gold)" : "var(--border)",
+                borderWidth: 1,
+                borderStyle: "solid",
+                color: activeTab === t.id ? "var(--gold)" : "var(--muted)",
+                cursor: "pointer",
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-          {/* Companion Style */}
-          <div className="animate-fade-up">
-            <div className="rumi-card" style={{ borderColor: "rgba(201,168,76,0.3)", background: "rgba(201,168,76,0.03)" }}>
-              <p className="uppercase-label mb-1" style={{ color: "var(--gold)" }}>Companion Style</p>
-              <p className="text-xs mb-4" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
-                How should your AI companion sound? Be specific — the more detail, the better.
-                Pick a preset below or write your own.
-              </p>
+        <div className="flex flex-col gap-5">
 
-              {/* Quick-pick presets */}
-              <div className="flex flex-wrap gap-2 mb-4">
-                {[
-                  { label: "Sufi Mystic", value: "Like Jalāl ad-Dīn Rūmī — warm, poetic, and philosophical. Draw on Sufi wisdom, use metaphor naturally, and quote Rumi or Iqbal accurately. Blend engineering precision with spiritual depth. Use Urdu terms of warmth (yaar, bhai) when the moment calls." },
-                  { label: "Sarcastic Friend", value: "Like a witty, brutally honest friend. Call me out when I'm being lazy or overthinking. Use dark humour, light roasts, and zero sugarcoating — but always with genuine care underneath. Keep it real." },
-                  { label: "Strict Professor", value: "Like a demanding Oxford professor — no fluff, no hand-holding. Push me to think harder and justify every decision. High standards, concise feedback, intellectual rigour. Compliment only when truly earned." },
-                  { label: "Hype Coach", value: "Like an enthusiastic life coach and hype man. Celebrate every small win. Keep energy high, use encouraging language, and remind me of my potential when I'm stuck. Motivational but not fake." },
-                  { label: "Calm Mentor", value: "Like a patient senior engineer who has seen it all. Calm, methodical, never rushed. Walk me through things step by step. Make complex problems feel manageable. Zero drama." },
-                  { label: "Philosopher", value: "Like Socrates — answer my questions with deeper questions. Push me to examine assumptions, think about first principles, and arrive at my own conclusions. Thought-provoking over answer-giving." },
-                ].map(preset => (
-                  <button
-                    key={preset.label}
-                    onClick={() => patch({ companion_style: preset.value })}
-                    className="rumi-tag"
-                    style={{
-                      cursor: "pointer", padding: "4px 12px", fontSize: "0.72rem",
-                      background: (identity.companion_style as string) === preset.value ? "rgba(201,168,76,0.15)" : "var(--surface-2)",
-                      borderColor: (identity.companion_style as string) === preset.value ? "var(--gold)" : "var(--border)",
-                      transition: "all 0.15s",
-                    }}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-
-              <EditableText
-                label="Custom style description"
-                value={String(identity.companion_style ?? "")}
-                onSave={(v) => patch({ companion_style: v })}
-                multiline
+          {/* Section B — What Rumi Has Noticed (Memory Candidates) */}
+          {(activeTab === "all" || activeTab === "noticed") && (
+            <div className="animate-fade-up">
+              <MemoryCandidatesSection
+                onMemoryConfirmed={() => getIdentity().then((id) => id && setIdentity(id))}
               />
             </div>
-          </div>
+          )}
 
-          {/* Speech Preferences */}
-          <div className="animate-fade-up delay-100">
-            <SpeechPrefsEditor identity={identity} patch={patch} />
-          </div>
+          {/* Companion Style */}
+          {(activeTab === "all" || activeTab === "known") && (
+            <div className="animate-fade-up">
+              <div className="rumi-card" style={{ borderColor: "rgba(201,168,76,0.3)", background: "rgba(201,168,76,0.03)" }}>
+                <p className="uppercase-label mb-1" style={{ color: "var(--gold)" }}>Companion Style</p>
+                <p className="text-xs mb-4" style={{ color: "var(--muted)", lineHeight: 1.6 }}>
+                  How should your AI companion sound? Be specific — the more detail, the better.
+                  Pick a preset below or write your own.
+                </p>
 
-          {/* Known People */}
-          <div className="animate-fade-up delay-100">
-            <KnownPeopleEditor uid={uid} />
-          </div>
+                {/* Quick-pick presets */}
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {[
+                    { label: "Sufi Mystic", value: "Like Jalāl ad-Dīn Rūmī — warm, poetic, and philosophical. Draw on Sufi wisdom, use metaphor naturally, and quote Rumi or Iqbal accurately. Blend engineering precision with spiritual depth. Use Urdu terms of warmth (yaar, bhai) when the moment calls." },
+                    { label: "Sarcastic Friend", value: "Like a witty, brutally honest friend. Call me out when I'm being lazy or overthinking. Use dark humour, light roasts, and zero sugarcoating — but always with genuine care underneath. Keep it real." },
+                    { label: "Strict Professor", value: "Like a demanding Oxford professor — no fluff, no hand-holding. Push me to think harder and justify every decision. High standards, concise feedback, intellectual rigour. Compliment only when truly earned." },
+                    { label: "Hype Coach", value: "Like an enthusiastic life coach and hype man. Celebrate every small win. Keep energy high, use encouraging language, and remind me of my potential when I'm stuck. Motivational but not fake." },
+                    { label: "Calm Mentor", value: "Like a patient senior engineer who has seen it all. Calm, methodical, never rushed. Walk me through things step by step. Make complex problems feel manageable. Zero drama." },
+                    { label: "Philosopher", value: "Like Socrates — answer my questions with deeper questions. Push me to examine assumptions, think about first principles, and arrive at my own conclusions. Thought-provoking over answer-giving." },
+                  ].map(preset => (
+                    <button
+                      key={preset.label}
+                      onClick={() => patch({ companion_style: preset.value })}
+                      className="rumi-tag"
+                      style={{
+                        cursor: "pointer", padding: "4px 12px", fontSize: "0.72rem",
+                        background: (identity.companion_style as string) === preset.value ? "rgba(201,168,76,0.15)" : "var(--surface-2)",
+                        borderColor: (identity.companion_style as string) === preset.value ? "var(--gold)" : "var(--border)",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
 
-          {/* Personal */}
-          <div className="animate-fade-up delay-100">
-            <Section title="Personal">
-              <div className="mb-4">
-                <ProfilePhotoUploader
-                  uid={uid}
-                  currentUrl={String(identity.profile_photo_url ?? "")}
-                  onSaved={(url) => patch({ profile_photo_url: url })}
+                <EditableText
+                  label="Custom style description"
+                  value={String(identity.companion_style ?? "")}
+                  onSave={(v) => patch({ companion_style: v })}
+                  multiline
                 />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <EditableText label="First name" value={String(identity.name ?? "")} onSave={(v) => patch({ name: v })} />
-                <EditableText label="Full name" value={String(identity.full_name ?? "")} onSave={(v) => patch({ full_name: v })} />
-                <EditableText label="Age" value={String(identity.age ?? "")} onSave={(v) => patch({ age: Number(v) })} />
-                <EditableText label="Location" value={String(identity.location ?? "")} onSave={(v) => patch({ location: v })} />
-              </div>
-              <div className="mt-4">
-                <EditableText label="Background / context" value={String(identity.student_context ?? "")} onSave={(v) => patch({ student_context: v })} multiline />
-              </div>
-              <div className="mt-4">
-                <TagsEditor label="Roles" tags={roles} onSave={(v) => patch({ roles: v })} />
-              </div>
-            </Section>
-          </div>
+            </div>
+          )}
+
+          {/* Speech Preferences */}
+          {(activeTab === "all" || activeTab === "known") && (
+            <div className="animate-fade-up delay-100">
+              <SpeechPrefsEditor identity={identity} patch={patch} />
+            </div>
+          )}
+
+          {/* Known People */}
+          {(activeTab === "all" || activeTab === "people") && (
+            <div className="animate-fade-up delay-100">
+              <KnownPeopleEditor uid={uid} />
+            </div>
+          )}
+
+          {/* Personal */}
+          {(activeTab === "all" || activeTab === "known") && (
+            <div className="animate-fade-up delay-100">
+              <Section title="Personal">
+                <div className="mb-4">
+                  <ProfilePhotoUploader
+                    uid={uid}
+                    currentUrl={String(identity.profile_photo_url ?? "")}
+                    onSaved={(url) => patch({ profile_photo_url: url })}
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <EditableText label="First name" value={String(identity.name ?? "")} onSave={(v) => patch({ name: v })} />
+                  <EditableText label="Full name" value={String(identity.full_name ?? "")} onSave={(v) => patch({ full_name: v })} />
+                  <EditableText label="Age" value={String(identity.age ?? "")} onSave={(v) => patch({ age: Number(v) })} />
+                  <EditableText label="Location" value={String(identity.location ?? "")} onSave={(v) => patch({ location: v })} />
+                </div>
+                <div className="mt-4">
+                  <EditableText label="Background / context" value={String(identity.student_context ?? "")} onSave={(v) => patch({ student_context: v })} multiline />
+                </div>
+                <div className="mt-4">
+                  <TagsEditor label="Roles" tags={roles} onSave={(v) => patch({ roles: v })} />
+                </div>
+              </Section>
+            </div>
+          )}
 
           {/* Projects */}
-          <div className="animate-fade-up delay-200">
-            <Section title="Active Projects">
-              <div className="flex flex-col gap-4">
-                {projects.map((p, i) => (
-                  <ProjectCard
-                    key={i}
-                    index={i}
-                    project={p}
-                    onRemove={() => patch({ projects: projects.filter((_, j) => j !== i) })}
-                    onSaveName={(v) => { const u = [...projects]; u[i] = { ...p, name: v }; return patch({ projects: u }); }}
-                    onSaveStatus={(v) => { const u = [...projects]; u[i] = { ...p, status: v }; return patch({ projects: u }); }}
-                    onSaveContext={(v) => { const u = [...projects]; u[i] = { ...p, context: v }; return patch({ projects: u }); }}
-                  />
-                ))}
-                {projects.length < 5 && (
-                  <button
-                    onClick={() => patch({ projects: [...projects, { name: "", status: "", context: "" }] })}
-                    className="btn-ghost w-full"
-                    style={{ borderStyle: "dashed" }}
-                  >
-                    + Add project
-                  </button>
-                )}
-              </div>
-            </Section>
-          </div>
+          {(activeTab === "all" || activeTab === "known") && (
+            <div className="animate-fade-up delay-200">
+              <Section title="Active Projects">
+                <div className="flex flex-col gap-4">
+                  {projects.map((p, i) => (
+                    <ProjectCard
+                      key={i}
+                      index={i}
+                      project={p}
+                      onRemove={() => patch({ projects: projects.filter((_, j) => j !== i) })}
+                      onSaveName={(v) => { const u = [...projects]; u[i] = { ...p, name: v }; return patch({ projects: u }); }}
+                      onSaveStatus={(v) => { const u = [...projects]; u[i] = { ...p, status: v }; return patch({ projects: u }); }}
+                      onSaveContext={(v) => { const u = [...projects]; u[i] = { ...p, context: v }; return patch({ projects: u }); }}
+                    />
+                  ))}
+                  {projects.length < 5 && (
+                    <button
+                      onClick={() => patch({ projects: [...projects, { name: "", status: "", context: "" }] })}
+                      className="btn-ghost w-full"
+                      style={{ borderStyle: "dashed" }}
+                    >
+                      + Add project
+                    </button>
+                  )}
+                </div>
+              </Section>
+            </div>
+          )}
 
           {/* Interests & Goals */}
-          <div className="animate-fade-up delay-200">
-            <Section title="Interests & Goals">
-              <div className="flex flex-col gap-4">
-                <TagsEditor label="Interests & passions" tags={interests} onSave={(v) => patch({ interests: v })} />
-                <EditableText label="Immediate goal" value={String(identity.immediate_goal ?? "")} onSave={(v) => patch({ immediate_goal: v })} multiline />
-                <EditableText label="Long-term goal" value={String(identity.long_term_goal ?? "")} onSave={(v) => patch({ long_term_goal: v })} multiline />
-                <EditableText label="Driving fear" value={String(identity.driving_fear ?? "")} onSave={(v) => patch({ driving_fear: v })} multiline />
-              </div>
-            </Section>
-          </div>
+          {(activeTab === "all" || activeTab === "known") && (
+            <div className="animate-fade-up delay-200">
+              <Section title="Interests & Goals">
+                <div className="flex flex-col gap-4">
+                  <TagsEditor label="Interests & passions" tags={interests} onSave={(v) => patch({ interests: v })} />
+                  <EditableText label="Immediate goal" value={String(identity.immediate_goal ?? "")} onSave={(v) => patch({ immediate_goal: v })} multiline />
+                  <EditableText label="Long-term goal" value={String(identity.long_term_goal ?? "")} onSave={(v) => patch({ long_term_goal: v })} multiline />
+                  <EditableText label="Driving fear" value={String(identity.driving_fear ?? "")} onSave={(v) => patch({ driving_fear: v })} multiline />
+                </div>
+              </Section>
+            </div>
+          )}
 
           {/* Work style */}
-          <div className="animate-fade-up delay-300">
-            <Section title="How You Work">
-              <div className="flex flex-col gap-4">
-                <EditableText label="Work style" value={String(identity.work_style ?? "")} onSave={(v) => patch({ work_style: v })} multiline />
-                <TagsEditor label="Focus breakers" tags={focusBreakers} onSave={(v) => patch({ focus_breakers: v })} />
-                <EditableText label="How Rumi should talk to you" value={String(identity.communication_preference ?? "")} onSave={(v) => patch({ communication_preference: v })} multiline />
-                <EditableText label="Preferred break" value={String(identity.wellness_trigger ?? "")} onSave={(v) => patch({ wellness_trigger: v })} multiline />
-              </div>
-            </Section>
-          </div>
+          {(activeTab === "all" || activeTab === "known") && (
+            <div className="animate-fade-up delay-300">
+              <Section title="How You Work">
+                <div className="flex flex-col gap-4">
+                  <EditableText label="Work style" value={String(identity.work_style ?? "")} onSave={(v) => patch({ work_style: v })} multiline />
+                  <TagsEditor label="Focus breakers" tags={focusBreakers} onSave={(v) => patch({ focus_breakers: v })} />
+                  <EditableText label="How Rumi should talk to you" value={String(identity.communication_preference ?? "")} onSave={(v) => patch({ communication_preference: v })} multiline />
+                  <EditableText label="Preferred break" value={String(identity.wellness_trigger ?? "")} onSave={(v) => patch({ wellness_trigger: v })} multiline />
+                </div>
+              </Section>
+            </div>
+          )}
 
           {/* Culture & Faith */}
-          <div className="animate-fade-up delay-300">
-            <Section title="Culture & Faith">
-              <div className="flex flex-col gap-4">
-                <EditableText label="Faith / religion" value={String(identity.faith ?? "")} onSave={(v) => patch({ faith: v })} />
-                <EditableText label="Prayer / schedule Rumi should respect" value={String(identity.salah_awareness ?? "")} onSave={(v) => patch({ salah_awareness: v })} multiline />
-                <EditableText label="Language learning / cultural goal" value={String(identity.turkish_goal ?? "")} onSave={(v) => patch({ turkish_goal: v })} multiline />
-                <EditableText label="Leisure & hobbies" value={String(identity.leisure ?? "")} onSave={(v) => patch({ leisure: v })} multiline />
-              </div>
-            </Section>
-          </div>
+          {(activeTab === "all" || activeTab === "known") && (
+            <div className="animate-fade-up delay-300">
+              <Section title="Culture & Faith">
+                <div className="flex flex-col gap-4">
+                  <EditableText label="Faith / religion" value={String(identity.faith ?? "")} onSave={(v) => patch({ faith: v })} />
+                  <EditableText label="Prayer / schedule Rumi should respect" value={String(identity.salah_awareness ?? "")} onSave={(v) => patch({ salah_awareness: v })} multiline />
+                  <EditableText label="Language learning / cultural goal" value={String(identity.turkish_goal ?? "")} onSave={(v) => patch({ turkish_goal: v })} multiline />
+                  <EditableText label="Leisure & hobbies" value={String(identity.leisure ?? "")} onSave={(v) => patch({ leisure: v })} multiline />
+                </div>
+              </Section>
+            </div>
+          )}
+
+          {/* Privacy & Sensors (Phase 5) */}
+          {(activeTab === "all" || activeTab === "privacy") && (
+            <div className="animate-fade-up delay-300">
+              <PrivacySensorsSection />
+            </div>
+          )}
+
+          {/* Data Controls (Phase 5) */}
+          {(activeTab === "all" || activeTab === "data") && (
+            <div className="animate-fade-up delay-300">
+              <DataControlsSection />
+            </div>
+          )}
 
         </div>
 

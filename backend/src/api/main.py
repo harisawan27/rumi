@@ -462,6 +462,153 @@ def delete_known_person_route(person_id: str, uid: str = Depends(get_current_uid
 
 
 # ---------------------------------------------------------------------------
+# Memory Candidates (Phase 5)
+# ---------------------------------------------------------------------------
+
+@app.get("/memory/candidates")
+def list_memory_candidates(uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
+    from src.memory.firestore_client import get_db
+    try:
+        db = get_db()
+        docs = (
+            db.collection("users")
+            .document(uid)
+            .collection("memory_candidates")
+            .where("status", "==", "inferred")
+            .stream()
+        )
+        candidates = []
+        for d in docs:
+            data = d.to_dict()
+            c_at = data.get("created_at")
+            if hasattr(c_at, "isoformat"):
+                c_at_str = c_at.isoformat()
+            else:
+                c_at_str = str(c_at) if c_at else ""
+            candidates.append({
+                "id": d.id,
+                "field": data.get("field", ""),
+                "suggested_value": data.get("suggested_value", ""),
+                "source_session_id": data.get("source_session_id", ""),
+                "confidence": data.get("confidence", 0.75),
+                "status": data.get("status", "inferred"),
+                "created_at": c_at_str,
+            })
+        return {"candidates": candidates}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
+
+
+@app.post("/memory/candidates/{candidate_id}/confirm")
+def confirm_memory_candidate(candidate_id: str, uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
+    from src.memory.firestore_client import get_db
+    from src.session.memory_extractor import ALLOWED_CANDIDATE_FIELDS
+    from datetime import datetime, timezone
+    try:
+        db = get_db()
+        cand_ref = db.collection("users").document(uid).collection("memory_candidates").document(candidate_id)
+        cand_snap = cand_ref.get()
+        if not cand_snap.exists:
+            raise HTTPException(status_code=404, detail="CANDIDATE_NOT_FOUND")
+        cand_data = cand_snap.to_dict()
+        field = cand_data.get("field")
+        value = cand_data.get("suggested_value")
+
+        # Strict validation against whitelist
+        if not field or field not in ALLOWED_CANDIDATE_FIELDS:
+            raise HTTPException(status_code=400, detail="INVALID_CANDIDATE_FIELD")
+
+        # Security check: never allow prototype pollution or system field overwriting
+        if field in ("uid", "email", "role", "is_owner", "permissions", "created_at", "embedding"):
+            raise HTTPException(status_code=400, detail="DISALLOWED_FIELD")
+
+        now = datetime.now(timezone.utc)
+        user_ref = db.collection("users").document(uid)
+        user_snap = user_ref.get()
+        current_identity = user_snap.to_dict() if user_snap.exists else {}
+
+        # Safely apply to user identity
+        if field in ("interests", "focus_breakers"):
+            existing_list = current_identity.get(field, [])
+            if not isinstance(existing_list, list):
+                existing_list = []
+            if isinstance(value, list):
+                new_items = [x for x in value if x not in existing_list]
+                updated_list = existing_list + new_items
+            else:
+                str_val = str(value).strip()
+                updated_list = existing_list if str_val in existing_list else existing_list + [str_val]
+            user_ref.update({field: updated_list, "last_updated": now})
+        elif field == "projects":
+            existing_projects = current_identity.get("projects", [])
+            if not isinstance(existing_projects, list):
+                existing_projects = []
+            if isinstance(value, dict):
+                existing_projects.append(value)
+            elif isinstance(value, list):
+                existing_projects.extend(value)
+            user_ref.update({"projects": existing_projects, "last_updated": now})
+        else:
+            user_ref.update({field: value, "last_updated": now})
+
+        # Also store durable confirmed memory record
+        db.collection("users").document(uid).collection("confirmed_memories").add({
+            "field": field,
+            "value": value,
+            "source_candidate_id": candidate_id,
+            "confirmed_at": now,
+        })
+
+        cand_ref.update({"status": "confirmed", "confirmed_at": now})
+        return {"status": "confirmed", "field": field}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
+
+
+@app.post("/memory/candidates/{candidate_id}/reject")
+def reject_memory_candidate(candidate_id: str, uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
+    from src.memory.firestore_client import get_db
+    from datetime import datetime, timezone
+    try:
+        db = get_db()
+        cand_ref = db.collection("users").document(uid).collection("memory_candidates").document(candidate_id)
+        cand_snap = cand_ref.get()
+        if not cand_snap.exists:
+            raise HTTPException(status_code=404, detail="CANDIDATE_NOT_FOUND")
+        now = datetime.now(timezone.utc)
+        cand_ref.update({"status": "rejected", "rejected_at": now})
+        return {"status": "rejected"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
+
+
+@app.delete("/memory/candidates/{candidate_id}")
+def dismiss_memory_candidate(candidate_id: str, uid: str = Depends(get_current_uid)):
+    _check_guest_mode_restriction(uid)
+    from src.memory.firestore_client import get_db
+    try:
+        db = get_db()
+        cand_ref = db.collection("users").document(uid).collection("memory_candidates").document(candidate_id)
+        cand_snap = cand_ref.get()
+        if not cand_snap.exists:
+            raise HTTPException(status_code=404, detail="CANDIDATE_NOT_FOUND")
+        cand_ref.delete()
+        return {"status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"FIRESTORE_UNAVAILABLE: {exc}")
+
+
+
+# ---------------------------------------------------------------------------
 # Canvas helpers (Phase 3 + 5)
 # ---------------------------------------------------------------------------
 
@@ -992,6 +1139,191 @@ async def get_canvas_history(uid: str = Depends(get_current_uid)):
     return {"items": items}
 
 
+def _save_conversation_turn(
+    uid: str,
+    session_id: str,
+    user_text: str,
+    rumi_response: str,
+    source: str = "voice",
+) -> None:
+    """Save a conversational turn to Firestore under the session."""
+    try:
+        from src.memory.firestore_client import get_db
+        from datetime import datetime, timezone
+        db = get_db()
+        now = datetime.now(timezone.utc)
+        turn_doc = {
+            "session_id": session_id,
+            "user_text": user_text,
+            "rumi_response": rumi_response,
+            "source": source,
+            "created_at": now,
+        }
+        db.collection("users").document(uid).collection("sessions").document(
+            session_id
+        ).collection("turns").add(turn_doc)
+        logger.info(
+            "conversation_turn saved for uid=%s session=%s chars=(%d/%d)",
+            uid, session_id, len(user_text), len(rumi_response)
+        )
+    except Exception as exc:
+        logger.warning("_save_conversation_turn failed: %s", exc)
+
+
+@app.get("/conversation/history")
+async def get_conversation_history(limit: int = 15, uid: str = Depends(get_current_uid)):
+    """Fetch durable conversation history grouped by session, with turns and proactive interventions."""
+    _check_guest_mode_restriction(uid)
+    from src.memory.firestore_client import get_db
+
+    def _load():
+        try:
+            db = get_db()
+            sess_docs = (
+                db.collection("users")
+                .document(uid)
+                .collection("sessions")
+                .order_by("started_at", direction="DESCENDING")
+                .limit(min(limit, 30))
+                .stream()
+            )
+            sessions_data = []
+            for s_doc in sess_docs:
+                s_dict = s_doc.to_dict()
+                s_id = s_doc.id
+                started_at = s_dict.get("started_at")
+                if hasattr(started_at, "isoformat"):
+                    started_at_str = started_at.isoformat()
+                else:
+                    started_at_str = str(started_at) if started_at else ""
+
+                events = []
+                # Turns
+                try:
+                    turns_stream = (
+                        db.collection("users")
+                        .document(uid)
+                        .collection("sessions")
+                        .document(s_id)
+                        .collection("turns")
+                        .order_by("created_at")
+                        .stream()
+                    )
+                    for t in turns_stream:
+                        td = t.to_dict()
+                        cat = td.get("created_at")
+                        ts = cat.isoformat() if hasattr(cat, "isoformat") else str(cat) if cat else ""
+                        events.append({
+                            "type": "turn",
+                            "user_text": td.get("user_text", ""),
+                            "rumi_response": td.get("rumi_response", ""),
+                            "source": td.get("source", "voice"),
+                            "timestamp": ts,
+                        })
+                except Exception as exc:
+                    logger.debug("get_conversation_history: could not load turns for %s: %s", s_id, exc)
+
+                # Interactions (proactive interventions)
+                try:
+                    interact_stream = (
+                        db.collection("users")
+                        .document(uid)
+                        .collection("sessions")
+                        .document(s_id)
+                        .collection("interactions")
+                        .order_by("triggered_at")
+                        .stream()
+                    )
+                    for i in interact_stream:
+                        id_data = i.to_dict()
+                        tat = id_data.get("triggered_at")
+                        ts = tat.isoformat() if hasattr(tat, "isoformat") else str(tat) if tat else ""
+                        events.append({
+                            "type": "intervention",
+                            "trigger": id_data.get("trigger_type", "B"),
+                            "text": id_data.get("intervention_text", ""),
+                            "user_response": id_data.get("user_response", ""),
+                            "timestamp": ts,
+                        })
+                except Exception as exc:
+                    logger.debug("get_conversation_history: could not load interactions for %s: %s", s_id, exc)
+
+                events.sort(key=lambda x: x.get("timestamp", ""))
+
+                sessions_data.append({
+                    "session_id": s_id,
+                    "started_at": started_at_str,
+                    "status": s_dict.get("status", "completed"),
+                    "events": events,
+                })
+            return sessions_data
+        except Exception as exc:
+            logger.warning("get_conversation_history failed: %s", exc)
+            return []
+
+    sessions = await asyncio.get_event_loop().run_in_executor(None, _load)
+    return {"sessions": sessions}
+
+
+def _delete_all_conversation_history(uid: str) -> int:
+    """Recursively and genuinely wipe all sessions, nested turns, nested interactions, and session summaries."""
+    from src.memory.firestore_client import get_db
+    db = get_db()
+    deleted_count = 0
+    try:
+        sess_docs = list(db.collection("users").document(uid).collection("sessions").stream())
+        for s in sess_docs:
+            turns = list(s.reference.collection("turns").stream())
+            for t in turns:
+                t.reference.delete()
+                deleted_count += 1
+            interactions = list(s.reference.collection("interactions").stream())
+            for i in interactions:
+                i.reference.delete()
+                deleted_count += 1
+            s.reference.delete()
+            deleted_count += 1
+
+        summaries = list(db.collection("users").document(uid).collection("session_summaries").stream())
+        for sm in summaries:
+            sm.reference.delete()
+            deleted_count += 1
+    except Exception as exc:
+        logger.warning("_delete_all_conversation_history failed: %s", exc)
+    return deleted_count
+
+
+@app.delete("/conversation/history")
+async def clear_conversation_history(uid: str = Depends(get_current_uid)):
+    """Cleanly purge all user-visible conversation history: sessions, turns, interactions, and summaries."""
+    _check_guest_mode_restriction(uid)
+    deleted = await asyncio.get_event_loop().run_in_executor(None, _delete_all_conversation_history, uid)
+    return {"status": "deleted", "deleted_records": deleted}
+
+
+def _delete_all_canvas_history(uid: str) -> int:
+    from src.memory.firestore_client import get_db
+    db = get_db()
+    deleted_count = 0
+    try:
+        canvas_docs = list(db.collection("users").document(uid).collection("canvas_history").stream())
+        for c in canvas_docs:
+            c.reference.delete()
+            deleted_count += 1
+    except Exception as exc:
+        logger.warning("_delete_all_canvas_history failed: %s", exc)
+    return deleted_count
+
+
+@app.delete("/canvas/history")
+async def clear_canvas_history_route(uid: str = Depends(get_current_uid)):
+    """Cleanly purge all canvas history entries for the authenticated user."""
+    _check_guest_mode_restriction(uid)
+    deleted = await asyncio.get_event_loop().run_in_executor(None, _delete_all_canvas_history, uid)
+    return {"status": "deleted", "deleted_records": deleted}
+
+
+
 # ---------------------------------------------------------------------------
 # WebSocket observe (T030 contract)
 # ---------------------------------------------------------------------------
@@ -1167,8 +1499,10 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                             try:
                                 fc = await _identify_face(t, img, sp)
                                 if fc:
+                                    asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, t, fc, "face"))
                                     await mgr.voice_query(fc)
                                 else:
+                                    asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, t, "", "face"))
                                     await mgr.voice_query(t)
                             except asyncio.CancelledError:
                                 pass
@@ -1212,6 +1546,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                 try:
                                     tool_data = await _flash_detect_tool(t)
                                     if not tool_data or not tool_data.get("tool"):
+                                        asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, t, "", "tool"))
                                         await mgr.voice_query(t)
                                         return
                                     tool_name    = tool_data.get("tool", "")
@@ -1249,7 +1584,9 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                             except Exception as exc:
                                                 logger.warning("tool:add_known_person failed: %s", exc)
                                                 confirmation = "I couldn't save that person — make sure I can see their face."
-                                    await mgr.voice_query(confirmation or t)
+                                    reply_text = confirmation or t
+                                    asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, t, reply_text, "tool"))
+                                    await mgr.voice_query(reply_text)
                                 except asyncio.CancelledError:
                                     pass
                                 except Exception as exc:
@@ -1276,8 +1613,10 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                         }))
                                         if not _fu:
                                             asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
+                                        asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, t, content, "canvas"))
                                         await mgr.voice_query("I've put that on your canvas — take a look.")
                                     else:
+                                        asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, t, "", "canvas"))
                                         await mgr.voice_query(t)
                                 except asyncio.CancelledError:
                                     pass
@@ -1291,6 +1630,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
 
                         else:
                             # Voice — direct Gemini Live, no Flash overhead
+                            asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, text, "", "voice"))
                             mgr._speak_task = asyncio.create_task(mgr.voice_query(text))
     except WebSocketDisconnect:
         pass

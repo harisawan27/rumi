@@ -265,3 +265,150 @@ export async function uploadProfilePhoto(uid: string, file: File): Promise<strin
   await uploadBytes(storageRef, file, { contentType: file.type });
   return getDownloadURL(storageRef);
 }
+
+// ---------------------------------------------------------------------------
+// Memory Candidates (Phase 5)
+// ---------------------------------------------------------------------------
+
+export interface MemoryCandidate {
+  id: string;
+  field: string;
+  suggested_value: unknown;
+  source_session_id: string;
+  confidence: number;
+  status: "inferred" | "confirmed" | "rejected";
+  created_at: string;
+}
+
+export async function getMemoryCandidates(): Promise<MemoryCandidate[]> {
+  const res = await fetch(`${BACKEND_URL}/memory/candidates`, { headers: await authHeaders() });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.candidates ?? [];
+}
+
+export async function confirmMemoryCandidate(candidateId: string): Promise<{ status: string; field: string }> {
+  const res = await fetch(`${BACKEND_URL}/memory/candidates/${candidateId}/confirm`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail ?? "Failed to confirm memory candidate");
+  }
+  return res.json();
+}
+
+export async function rejectMemoryCandidate(candidateId: string): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/memory/candidates/${candidateId}/reject`, {
+    method: "POST",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail ?? "Failed to reject memory candidate");
+  }
+}
+
+export async function dismissMemoryCandidate(candidateId: string): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/memory/candidates/${candidateId}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail ?? "Failed to dismiss memory candidate");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Conversation History (Phase 4 & Data Controls)
+// ---------------------------------------------------------------------------
+
+export interface HistoryTurnEvent {
+  type: "turn";
+  user_text: string;
+  rumi_response: string;
+  source: string;
+  timestamp: string;
+}
+
+export interface HistoryInterventionEvent {
+  type: "intervention";
+  trigger: "A" | "B" | "C" | "E" | "G";
+  text: string;
+  user_response: string;
+  timestamp: string;
+}
+
+export type TimelineEvent = HistoryTurnEvent | HistoryInterventionEvent;
+
+export interface SessionHistoryGroup {
+  session_id: string;
+  started_at: string;
+  status: string;
+  events: TimelineEvent[];
+}
+
+export async function getConversationHistory(limit = 15): Promise<SessionHistoryGroup[]> {
+  const res = await fetch(`${BACKEND_URL}/conversation/history?limit=${limit}`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.sessions ?? [];
+}
+
+export async function clearConversationHistory(): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/conversation/history`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail ?? "Failed to clear conversation history");
+  }
+}
+
+export async function clearCanvasHistory(): Promise<void> {
+  const res = await fetch(`${BACKEND_URL}/canvas/history`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail ?? "Failed to clear canvas history");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Privacy-Safe Minimal Local Telemetry (Phase 17)
+// Strictly NO conversation text, transcript, audio, images, or embeddings.
+// ---------------------------------------------------------------------------
+
+export type UxEventType =
+  | "SESSION_START"
+  | "VOICE_TURN_START"
+  | "VOICE_TURN_COMPLETE"
+  | "CANVAS_OPENED"
+  | "CANVAS_CLOSED"
+  | "INTERVENTION_ACCEPTED"
+  | "INTERVENTION_DISMISSED"
+  | "CAMERA_TOGGLED"
+  | "MIC_TOGGLED"
+  | "RECONNECT_ATTEMPT"
+  | "RECONNECT_SUCCESS";
+
+export function logUxEvent(eventType: UxEventType): void {
+  try {
+    if (typeof window === "undefined") return;
+    const MAX_EVENTS = 50;
+    const raw = localStorage.getItem("rumi_ux_events");
+    const list: Array<{ event: UxEventType; ts: number }> = raw ? JSON.parse(raw) : [];
+    list.push({ event: eventType, ts: Date.now() });
+    if (list.length > MAX_EVENTS) list.splice(0, list.length - MAX_EVENTS);
+    localStorage.setItem("rumi_ux_events", JSON.stringify(list));
+  } catch {
+    // Non-critical telemetry — no failures
+  }
+}
