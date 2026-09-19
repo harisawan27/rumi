@@ -1,0 +1,8 @@
+{
+  "mode": "generated_ui",
+  "renderer": "custom_component",
+  "operation": "edit",
+  "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
+  "expected_revision": 0,
+  "edit": {"operation": "set_daily_graph_visibility", "enabled": true}
+}
