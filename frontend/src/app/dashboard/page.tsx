@@ -25,6 +25,7 @@ import RumiStatusMenu from "@/components/RumiStatusMenu";
 import MobileNavigation, { type MobileTab } from "@/components/MobileNavigation";
 import MobileSheet from "@/components/MobileSheet";
 import ConversationTimeline from "@/components/ConversationTimeline";
+import { useGeneratedArtifact } from "@/hooks/useGeneratedArtifact";
 
 interface ActiveIntervention {
   interactionId: string;
@@ -94,6 +95,11 @@ export default function DashboardPage() {
   const [supportsScreenShare, setSupportsScreenShare] = useState(false);
   const [isTabHidden, setIsTabHidden] = useState(false);
   const [showGuidance, setShowGuidance] = useState(false);
+  const [artifactAuthorizationSignal, setArtifactAuthorizationSignal] = useState(0);
+  const artifactAllowed = sessionReady && identityVerified && !guestMode && observationState !== "away" && !isTabHidden;
+  const generated = useGeneratedArtifact(sessionId, artifactAllowed, artifactAuthorizationSignal);
+  const visibleCanvas = artifactAllowed && generated.artifact
+    ? { kind: "generated_ui" as const, artifact: generated.artifact } : canvasContent;
 
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -213,7 +219,10 @@ export default function DashboardPage() {
             handleWsMessage(msg);
           });
           wsRef.current = newWs;
+          newWs.addEventListener("open", () => setSessionReady(true));
           newWs.addEventListener("close", () => {
+            generated.client.revoke();
+            setSessionReady(false);
             if (!shouldReconnectRef.current) return;
             setTimeout(() => {
               if (shouldReconnectRef.current && sessionIdRef.current) connectWs(sessionIdRef.current);
@@ -951,6 +960,7 @@ export default function DashboardPage() {
 
   // ── Canvas ────────────────────────────────────────────────────────────────
   function handleCanvasDismiss() {
+    generated.client.dismiss();
     setCanvasOpen(false);
   }
 
@@ -1121,12 +1131,15 @@ export default function DashboardPage() {
       setTimeout(() => setMemoryToast(null), 6000);
     } else if (msg.type === "identity_verified") {
       setIdentityVerified(true);
+      setArtifactAuthorizationSignal(value => value + 1);
     } else if (msg.type === "guest_detected") {
+      generated.client.revoke();
       setGuestMode(true);
       setIdentityVerified(false);
       setRumiEmotion("neutral");
       sessionStorage.setItem("rumiGuestMode", "true");
     } else if (msg.type === "owner_returned") {
+      setArtifactAuthorizationSignal(value => value + 1);
       setGuestMode(false);
       setIdentityVerified(true);
       sessionStorage.removeItem("rumiGuestMode");
@@ -1147,13 +1160,19 @@ export default function DashboardPage() {
     } else if (msg.type === "paused") {
       setObservationState("paused");
     } else if (msg.type === "away_mode") {
+      generated.client.revoke();
       setObservationState("away");
     } else if (msg.type === "presence_returned") {
+      setArtifactAuthorizationSignal(value => value + 1);
       setObservationState("active");
       setMemoryToast("Welcome back! Rumi resumed active observation.");
       setTimeout(() => setMemoryToast(null), 4000);
     } else if (msg.type === "error") {
       const m = msg as { type: string; code: string };
+      if (m.code === "ARTIFACT_ACCESS_DENIED" || m.code === "CAMERA_UNAVAILABLE") {
+        generated.client.revoke();
+        setIdentityVerified(false);
+      }
       if (m.code === "CAMERA_UNAVAILABLE") setObservationState("degraded");
     }
   }
@@ -1240,6 +1259,18 @@ export default function DashboardPage() {
             onOpenMemoryCenter={() => router.push("/profile")}
           />
 
+          {process.env.NEXT_PUBLIC_ARTIFACT_PROOF_MODE === "1" && (
+            <div className="flex flex-wrap gap-2 text-xs" aria-label="Study tracker preview controls">
+              <button className="btn-ghost min-h-11" disabled={!artifactAllowed || generated.busy} onClick={() => {
+                setCanvasOpen(true); setActiveMobileTab("canvas");
+                void generated.client.proof().catch(() => {});
+              }}>Load study tracker</button>
+              {generated.artifact && <button className="btn-ghost min-h-11" disabled={generated.busy} onClick={() => {
+                void generated.client.setGraph(!generated.artifact!.spec.show_daily_graph).catch(() => {});
+              }}>{generated.artifact.spec.show_daily_graph ? "Hide graph" : "Show graph"}</button>}
+              {generated.error && <span role="alert">{generated.error}</span>}
+            </div>
+          )}
           {/* Desktop Artifact Canvas Toggle */}
           <button
             type="button"
@@ -1443,11 +1474,13 @@ export default function DashboardPage() {
           {activeMobileTab === "canvas" && (
             <div className="flex-1 min-h-0 flex flex-col p-3 overflow-hidden">
               <ArtifactCanvas
-                content={canvasContent}
+                content={visibleCanvas}
+                onArtifactEdit={generated.client.edit}
+                artifactBusy={generated.busy}
                 onDismiss={() => { handleCanvasDismiss(); setActiveMobileTab("rumi"); }}
                 history={canvasHistory}
                 historyIndex={canvasIndex}
-                onNavigate={setCanvasIndex}
+                onNavigate={index => { generated.client.dismiss(); setCanvasIndex(index); }}
                 onFollowUp={handleFollowUp}
                 isFollowingUp={isFollowingUp}
               />
@@ -1878,11 +1911,13 @@ export default function DashboardPage() {
             pointerEvents: guestMode ? "none" : "auto",
           }}>
             <ArtifactCanvas
-              content={canvasContent}
+              content={visibleCanvas}
+              onArtifactEdit={generated.client.edit}
+              artifactBusy={generated.busy}
               onDismiss={handleCanvasDismiss}
               history={canvasHistory}
               historyIndex={canvasIndex}
-              onNavigate={setCanvasIndex}
+              onNavigate={index => { generated.client.dismiss(); setCanvasIndex(index); }}
               onFollowUp={handleFollowUp}
               isFollowingUp={isFollowingUp}
             />

@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import GeneratedArtifact from "./GeneratedArtifact";
+import type { GeneratedArtifact as ArtifactData, StudyStateEdit } from "../types/artifacts";
 
 // ── Data model ────────────────────────────────────────────────────────────────
 export interface CanvasExchange {
@@ -12,13 +14,16 @@ export interface CanvasExchange {
 }
 
 export interface CanvasContent {
+  kind?: "legacy";
   title: string;
   exchanges: CanvasExchange[];
   timestamp: string;
 }
 
 interface Props {
-  content: CanvasContent | null;
+  content: CanvasContent | { kind: "generated_ui"; artifact: ArtifactData } | null;
+  onArtifactEdit?: (edit: StudyStateEdit) => Promise<void>;
+  artifactBusy?: boolean;
   onDismiss: () => void;
   history?: CanvasContent[];
   historyIndex?: number;
@@ -260,7 +265,9 @@ function FollowUpBar({ onFollowUp, isFollowingUp }: {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ArtifactCanvas({ content, onDismiss, history = [], historyIndex = 0, onNavigate, onFollowUp, isFollowingUp }: Props) {
+export default function ArtifactCanvas({ content: input, onArtifactEdit, artifactBusy, onDismiss, history = [], historyIndex = 0, onNavigate, onFollowUp, isFollowingUp }: Props) {
+  const generated = input?.kind === "generated_ui" ? input.artifact : null;
+  const content = input?.kind === "generated_ui" ? null : input;
   const scrollRef = useRef<HTMLDivElement>(null);
   const total = history.length;
   const isLatest = historyIndex === total - 1;
@@ -289,7 +296,7 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid rgba(34,211,238,0.08)", flexShrink: 0, background: "rgba(4,8,15,0.4)" }}>
         <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--teal)", boxShadow: "0 0 8px var(--teal)", flexShrink: 0, animation: "statusPulse 2s ease-in-out infinite" }} />
         <span style={{ fontSize: "0.75rem", letterSpacing: "0.06em", color: "var(--text)", fontWeight: 500, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {content ? content.title : "Rumi's Canvas"}
+          {generated ? generated.title : content ? content.title : "Rumi's Canvas"}
         </span>
         {content && content.exchanges.length > 1 && (
           <span style={{ fontSize: "0.6rem", color: "var(--teal)", background: "rgba(34,211,238,0.08)", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 99, padding: "2px 8px" }}>
@@ -306,7 +313,7 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
       </div>
 
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "clamp(12px,3vw,22px) clamp(14px,3vw,24px) 16px" }}>
-        {content ? (
+        {generated ? <GeneratedArtifact artifact={generated} onEdit={onArtifactEdit ?? (async () => { throw new Error("Editing unavailable."); })} busy={artifactBusy} /> : content ? (
           content.exchanges.map((ex, idx) => (
             <ExchangeBlock key={idx} ex={ex} isLatest={isLatest && idx === content.exchanges.length - 1} />
           ))
@@ -330,7 +337,7 @@ export default function ArtifactCanvas({ content, onDismiss, history = [], histo
 
       {content && onFollowUp && <FollowUpBar onFollowUp={onFollowUp} isFollowingUp={isFollowingUp} />}
 
-      {total > 1 && onNavigate && (
+      {!generated && total > 1 && onNavigate && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderTop: "1px solid rgba(34,211,238,0.08)", flexShrink: 0, background: "rgba(4,8,15,0.4)" }}>
           <button onClick={() => onNavigate(historyIndex - 1)} disabled={historyIndex === 0} style={{ background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 6, color: historyIndex === 0 ? "var(--muted)" : "var(--teal)", cursor: historyIndex === 0 ? "default" : "pointer", padding: "5px 12px", fontSize: "0.75rem", opacity: historyIndex === 0 ? 0.35 : 1, minHeight: 32 }}>← Previous</button>
           <p style={{ flex: 1, margin: 0, fontSize: "0.6rem", color: "var(--muted)", letterSpacing: "0.12em", textAlign: "center" }}>{historyIndex + 1} of {total}</p>

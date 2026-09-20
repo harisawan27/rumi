@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -11,7 +12,13 @@ load_dotenv()
 
 from src.auth.firebase_auth import verify_id_token, AuthError  # noqa: E402
 
-app = FastAPI(title="Project Rumi — Rumi Core", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app):
+    await _startup()
+    yield
+
+
+app = FastAPI(title="Project Rumi — Rumi Core", version="0.1.0", lifespan=lifespan)
 
 frontend_origins = ["http://localhost:3000", "http://localhost:3001", "http://localhost:8000", "http://localhost:7860"]
 frontend_env = os.getenv("FRONTEND_URL", "")
@@ -50,7 +57,6 @@ def get_current_uid(authorization: str = Header(...)) -> str:
 # Health
 # ---------------------------------------------------------------------------
 
-@app.on_event("startup")
 async def _startup():
     logger.info("[RUMI CORE] Initializing Identity Protocol...")
     uid = os.getenv("AUTHORISED_USER_UID", "")
@@ -252,6 +258,24 @@ def get_session_summaries(
 from src.session.session_manager import SessionManager  # noqa: E402
 
 _session_managers: dict[str, SessionManager] = {}
+
+from src.artifacts.access import authorize as authorize_artifact, require_session
+from src.artifacts.routes import create_router as create_artifact_router
+
+app.include_router(create_artifact_router(get_current_uid, _session_managers))
+
+
+@app.middleware("http")
+async def private_artifact_cache_policy(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/generated-artifacts") or request.url.path in ("/canvas/history", "/conversation/history"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def _authorize_canvas(uid: str, session_id: str | None = None):
+    manager = _session_managers.get(uid)
+    return await authorize_artifact(uid, session_id or (manager.session_id if manager else None), _session_managers)
 
 
 def _get_session_manager(uid: str) -> SessionManager:
@@ -973,14 +997,16 @@ async def _flash_text_only(text: str, system_prompt: str = "") -> str:
     return ""
 
 
-async def _flash_canvas_task(text: str, image_b64: str | None, ws) -> None:
+async def _flash_canvas_task(text: str, image_b64: str | None, ws, uid: str, session_id: str) -> None:
     """Generate canvas content via Flash and push text_response to frontend.
     Runs as a background task — never blocks voice response.
     """
     import json as _json
     try:
+        await _authorize_canvas(uid, session_id)
         content = await (_flash_with_image(text, image_b64) if image_b64 else _flash_text_only(text))
         if content and len(content) > 30:
+            await _authorize_canvas(uid, session_id)
             await ws.send_text(_json.dumps({
                 "type": "text_response",
                 "title": _make_title(text),
@@ -1093,12 +1119,15 @@ def _do_save_canvas_entry(uid: str, query: str, title: str, content: str, conten
         doc.reference.delete()
 
 
-async def _save_canvas_entry(uid: str, query: str, title: str, content: str, content_type: str) -> None:
+async def _save_canvas_entry(uid: str, query: str, title: str, content: str, content_type: str, session_id: str) -> None:
     """Persist a canvas answer to Firestore without blocking the event loop."""
     try:
+        await _authorize_canvas(uid, session_id)
         await asyncio.get_event_loop().run_in_executor(
             None, _do_save_canvas_entry, uid, query, title, content, content_type
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("_save_canvas_entry: failed: %s", exc)
 
@@ -1135,7 +1164,9 @@ def _load_canvas_history(uid: str, limit: int = 20) -> list:
 async def get_canvas_history(uid: str = Depends(get_current_uid)):
     """REST endpoint — lets frontend fetch history at page load without WS timing dependency."""
     _check_guest_mode_restriction(uid)
+    await _authorize_canvas(uid)
     items = await asyncio.get_event_loop().run_in_executor(None, _load_canvas_history, uid)
+    await _authorize_canvas(uid)
     return {"items": items}
 
 
@@ -1174,6 +1205,8 @@ def _save_conversation_turn(
 async def get_conversation_history(limit: int = 15, uid: str = Depends(get_current_uid)):
     """Fetch durable conversation history grouped by session, with turns and proactive interventions."""
     _check_guest_mode_restriction(uid)
+    # Conversation turns also contain saved Canvas answers.
+    await _authorize_canvas(uid)
     from src.memory.firestore_client import get_db
 
     def _load():
@@ -1262,6 +1295,7 @@ async def get_conversation_history(limit: int = 15, uid: str = Depends(get_curre
             return []
 
     sessions = await asyncio.get_event_loop().run_in_executor(None, _load)
+    await _authorize_canvas(uid)
     return {"sessions": sessions}
 
 
@@ -1319,6 +1353,10 @@ def _delete_all_canvas_history(uid: str) -> int:
 async def clear_canvas_history_route(uid: str = Depends(get_current_uid)):
     """Cleanly purge all canvas history entries for the authenticated user."""
     _check_guest_mode_restriction(uid)
+    await _authorize_canvas(uid)
+    from src.artifacts.routes import repository
+    await repository.clear(uid, lambda: _authorize_canvas(uid))
+    await _authorize_canvas(uid)
     deleted = await asyncio.get_event_loop().run_in_executor(None, _delete_all_canvas_history, uid)
     return {"status": "deleted", "deleted_records": deleted}
 
@@ -1340,18 +1378,24 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
         await websocket.close(code=4001)
         return
 
-    await websocket.accept()
     uid = decoded["uid"]
-    mgr = _get_session_manager(uid)
+    try:
+        mgr = require_session(uid, session_id, _session_managers)
+    except HTTPException:
+        await websocket.close(code=4003)
+        return
+    await websocket.accept()
     mgr._websocket = websocket
 
     # Send canvas history FIRST — before Gemini connects so frontend shows
     # history immediately without waiting for the Gemini handshake delay
     try:
+        await _authorize_canvas(uid, session_id)
         history = await asyncio.get_event_loop().run_in_executor(
             None, _load_canvas_history, uid
         )
         if history:
+            await _authorize_canvas(uid, session_id)
             await websocket.send_text(json.dumps({"type": "canvas_history", "items": history}))
             logger.info("ws_observe: sent %d canvas history items", len(history))
     except Exception as exc:
@@ -1448,6 +1492,16 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 image_b64 = msg.get("image")  # base64 JPEG or None
                 is_followup = bool(msg.get("is_followup", False))
                 followup_context = msg.get("context", [])  # list of {q, a} dicts
+                if is_followup or msg.get("artifact_id"):
+                    try:
+                        await _authorize_canvas(uid, session_id)
+                        # Generated-artifact edits use the typed state endpoint;
+                        # never send this payload/context to the legacy model path.
+                        if msg.get("artifact_id"):
+                            raise HTTPException(400, "ARTIFACT_TYPED_OPERATION_REQUIRED")
+                    except HTTPException as exc:
+                        await websocket.send_json({"type": "error", "code": exc.detail})
+                        continue
                 if text:
                     import time as _time
                     _t0 = _time.perf_counter()
@@ -1537,7 +1591,7 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                             "this is my colleague", "add as my", "remember him as",
                             "remember her as", "remember them as",
                         ]
-                        wants_canvas = force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
+                        wants_canvas = is_followup or force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
                         is_tool_hint = any(kw in t_lower for kw in _TOOL_HINT_KEYWORDS)
 
                         if is_tool_hint:
@@ -1602,24 +1656,29 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                             async def _canvas_respond(t=text, img=effective_img, sp=sys_prompt,
                                                       _ws=websocket, _fu=is_followup) -> None:
                                 try:
+                                    await _authorize_canvas(uid, session_id)
                                     result  = await _flash_smart(t, img, sp, force_canvas=True)
                                     content = result.get("content", "")
                                     if content and len(content) > 10:
                                         title = result.get("title", "") or _make_title(t)
+                                        if not _fu:
+                                            await _save_canvas_entry(uid, t, title, content, "markdown", session_id)
+                                        await _authorize_canvas(uid, session_id)
+                                        await asyncio.to_thread(_save_conversation_turn, uid, session_id, t, content, "canvas")
+                                        await _authorize_canvas(uid, session_id)
                                         await _ws.send_text(json.dumps({
                                             "type": "text_response", "title": title,
                                             "content": content, "content_type": "markdown",
                                             "append": _fu,
                                         }))
-                                        if not _fu:
-                                            asyncio.create_task(_save_canvas_entry(mgr._uid, t, title, content, "markdown"))
-                                        asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, t, content, "canvas"))
                                         await mgr.voice_query("I've put that on your canvas — take a look.")
                                     else:
                                         asyncio.create_task(asyncio.to_thread(_save_conversation_turn, mgr._uid, session_id, t, "", "canvas"))
                                         await mgr.voice_query(t)
                                 except asyncio.CancelledError:
                                     pass
+                                except HTTPException:
+                                    await _ws.send_json({"type": "error", "code": "ARTIFACT_ACCESS_DENIED"})
                                 except Exception as exc:
                                     logger.warning("_canvas_respond failed: %s", exc)
                                     try:
