@@ -14,7 +14,8 @@ export interface CanvasExchange {
 }
 
 export interface CanvasContent {
-  kind?: "legacy";
+  kind?: "legacy" | "generated_reference";
+  artifact_id?: string;
   title: string;
   exchanges: CanvasExchange[];
   timestamp: string;
@@ -24,6 +25,7 @@ interface Props {
   content: CanvasContent | { kind: "generated_ui"; artifact: ArtifactData } | null;
   onArtifactEdit?: (edit: StudyStateEdit) => Promise<void>;
   artifactBusy?: boolean;
+  artifactMessage?: string;
   onDismiss: () => void;
   history?: CanvasContent[];
   historyIndex?: number;
@@ -265,7 +267,7 @@ function FollowUpBar({ onFollowUp, isFollowingUp }: {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ArtifactCanvas({ content: input, onArtifactEdit, artifactBusy, onDismiss, history = [], historyIndex = 0, onNavigate, onFollowUp, isFollowingUp }: Props) {
+export default function ArtifactCanvas({ content: input, onArtifactEdit, artifactBusy, artifactMessage, onDismiss, history = [], historyIndex = 0, onNavigate, onFollowUp, isFollowingUp }: Props) {
   const generated = input?.kind === "generated_ui" ? input.artifact : null;
   const content = input?.kind === "generated_ui" ? null : input;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -313,7 +315,7 @@ export default function ArtifactCanvas({ content: input, onArtifactEdit, artifac
       </div>
 
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "clamp(12px,3vw,22px) clamp(14px,3vw,24px) 16px" }}>
-        {generated ? <GeneratedArtifact artifact={generated} onEdit={onArtifactEdit ?? (async () => { throw new Error("Editing unavailable."); })} busy={artifactBusy} /> : content ? (
+        {generated ? <GeneratedArtifact artifact={generated} onEdit={onArtifactEdit ?? (async () => { throw new Error("Editing unavailable."); })} busy={artifactBusy} /> : content?.kind === "generated_reference" ? <p role="status">{artifactMessage || (content.artifact_id ? "Loading saved tracker…" : "This saved tracker is unavailable.")}</p> : content ? (
           content.exchanges.map((ex, idx) => (
             <ExchangeBlock key={idx} ex={ex} isLatest={isLatest && idx === content.exchanges.length - 1} />
           ))
@@ -335,9 +337,9 @@ export default function ArtifactCanvas({ content: input, onArtifactEdit, artifac
         )}
       </div>
 
-      {content && onFollowUp && <FollowUpBar onFollowUp={onFollowUp} isFollowingUp={isFollowingUp} />}
+      {content && content.kind !== "generated_reference" && onFollowUp && <FollowUpBar onFollowUp={onFollowUp} isFollowingUp={isFollowingUp} />}
 
-      {!generated && total > 1 && onNavigate && (
+      {total > 1 && onNavigate && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", borderTop: "1px solid rgba(34,211,238,0.08)", flexShrink: 0, background: "rgba(4,8,15,0.4)" }}>
           <button onClick={() => onNavigate(historyIndex - 1)} disabled={historyIndex === 0} style={{ background: "none", border: "1px solid rgba(34,211,238,0.2)", borderRadius: 6, color: historyIndex === 0 ? "var(--muted)" : "var(--teal)", cursor: historyIndex === 0 ? "default" : "pointer", padding: "5px 12px", fontSize: "0.75rem", opacity: historyIndex === 0 ? 0.35 : 1, minHeight: 32 }}>← Previous</button>
           <p style={{ flex: 1, margin: 0, fontSize: "0.6rem", color: "var(--muted)", letterSpacing: "0.12em", textAlign: "center" }}>{historyIndex + 1} of {total}</p>

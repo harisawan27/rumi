@@ -6,6 +6,7 @@ import { SUBJECT_COLORS } from '../src/components/artifacts/StudyTracker';
 import { parseGeneratedArtifact, isStudyEditDecision } from '../src/types/artifacts';
 import { addStudyEntry, removeStudyEntry, calculateDailyTotals, calculateSubjectTotals } from '../src/services/studyTracker';
 import { ArtifactAccessDenied, ArtifactClient } from '../src/services/artifactClient';
+import { canvasFromHistory } from '../src/services/canvasHistory';
 import fixture from '../../tests/fixtures/artifacts/valid_study_tracker.json';
 import colorEdit from '../../tests/fixtures/artifacts/valid_color_edit.json';
 import graphEdit from '../../tests/fixtures/artifacts/valid_graph_edit.json';
@@ -15,6 +16,26 @@ import invalidRenderer from '../../tests/fixtures/artifacts/invalid_renderer.jso
 const entry = { id: 'entry_1', subject_id: 'economics', date: '2026-09-14', minutes: 60 };
 const copy = () => JSON.parse(JSON.stringify(fixture));
 beforeAll(() => { Element.prototype.scrollTo = jest.fn(); });
+
+test('history references never hydrate embedded tracker data or offer Markdown followup', () => {
+  const reference = canvasFromHistory({ kind: 'generated_ui', artifact_id: fixture.artifact_id,
+    title: 'Saved tracker', timestamp: '', content: 'untrusted content', state: fixture.state });
+  expect(reference.exchanges).toEqual([]);
+  expect(reference.state).toBeUndefined();
+  expect(reference.artifact_id).toBe(fixture.artifact_id);
+  render(<ArtifactCanvas content={reference} onDismiss={() => {}} onFollowUp={jest.fn()} />);
+  expect(screen.getByRole('status')).toHaveTextContent('Loading saved tracker');
+  expect(screen.queryByText('untrusted content')).not.toBeInTheDocument();
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+});
+
+test('malformed generated history is harmless and legacy history still maps', () => {
+  const reference = canvasFromHistory({ kind: 'generated_ui', artifact_id: '../foreign', title: 'Saved', timestamp: '' });
+  expect(reference.artifact_id).toBeUndefined();
+  render(<ArtifactCanvas content={reference} onDismiss={() => {}} />);
+  expect(screen.getByRole('status')).toHaveTextContent('unavailable');
+  expect(canvasFromHistory({ title: 'Legacy', content: 'Answer', timestamp: '' }).exchanges[0].response).toBe('Answer');
+});
 
 test('shared fixtures agree with server vocabulary', () => {
   expect(parseGeneratedArtifact(fixture)).toEqual(fixture);
@@ -85,6 +106,7 @@ test('hostile-looking labels are literal text', () => {
 });
 
 function response(path, artifact = fixture) {
+  if (path.startsWith('access?')) return { request_id: new URLSearchParams(path.split('?')[1]).get('request_id'), lease_seconds: 5 };
   return { result: { type: 'artifact_result', request_id: new URLSearchParams(path.split('?')[1]).get('request_id'), artifact_id: artifact.artifact_id,
     revision: artifact.revision, state_revision: artifact.state_revision, renderer: artifact.renderer, artifact }, lease_seconds: 5 };
 }
@@ -157,5 +179,17 @@ test('authorization failure stops refresh until a fresh owner signal', async () 
   jest.advanceTimersByTime(10000);
   expect(transport).toHaveBeenCalledTimes(calls);
   expect(client.snapshot().artifact).toBeNull();
+  client.dispose(); jest.useRealTimers();
+});
+
+test('presence refresh does not repeatedly fetch the artifact document', async () => {
+  jest.useFakeTimers();
+  const transport = jest.fn(async path => response(path));
+  const client = new ArtifactClient(transport); client.configure('session_test', true);
+  await client.load(fixture.artifact_id);
+  await jest.advanceTimersByTimeAsync(6000);
+  expect(transport.mock.calls.filter(([path]) => path.startsWith(fixture.artifact_id))).toHaveLength(1);
+  expect(transport.mock.calls.filter(([path]) => path.startsWith('access?'))).toHaveLength(3);
+  expect(client.snapshot().artifact.artifact_id).toBe(fixture.artifact_id);
   client.dispose(); jest.useRealTimers();
 });

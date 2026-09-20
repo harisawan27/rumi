@@ -1147,6 +1147,17 @@ def _load_canvas_history(uid: str, limit: int = 20) -> list:
         for doc in reversed(docs):  # chronological order
             d = doc.to_dict()
             ts = d.get("timestamp")
+            if d.get("kind") == "generated_ui":
+                from src.artifacts.contracts import ArtifactId, Title
+                from pydantic import TypeAdapter, ValidationError
+                try:
+                    reference = {"kind": "generated_ui", "artifact_id": TypeAdapter(ArtifactId).validate_python(d.get("artifact_id")),
+                                 "title": TypeAdapter(Title).validate_python(d.get("title")),
+                                 "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ""}
+                except ValidationError:
+                    continue
+                items.append(reference)
+                continue
             items.append({
                 "query": d.get("query", ""),
                 "title": d.get("title", ""),
@@ -1337,15 +1348,22 @@ async def clear_conversation_history(uid: str = Depends(get_current_uid)):
 
 def _delete_all_canvas_history(uid: str) -> int:
     from src.memory.firestore_client import get_db
-    db = get_db()
     deleted_count = 0
     try:
-        canvas_docs = list(db.collection("users").document(uid).collection("canvas_history").stream())
-        for c in canvas_docs:
-            c.reference.delete()
-            deleted_count += 1
+        db = get_db()
+        collection = db.collection("users").document(uid).collection("canvas_history")
+        while True:
+            canvas_docs = list(collection.limit(100).stream(retry=None, timeout=5))
+            if not canvas_docs:
+                break
+            batch = db.batch()
+            for c in canvas_docs:
+                batch.delete(c.reference)
+            batch.commit(retry=None, timeout=5)
+            deleted_count += len(canvas_docs)
     except Exception as exc:
         logger.warning("_delete_all_canvas_history failed: %s", exc)
+        raise HTTPException(503, "CANVAS_STORAGE_UNAVAILABLE") from exc
     return deleted_count
 
 
@@ -1355,9 +1373,10 @@ async def clear_canvas_history_route(uid: str = Depends(get_current_uid)):
     _check_guest_mode_restriction(uid)
     await _authorize_canvas(uid)
     from src.artifacts.routes import repository
-    await repository.clear(uid, lambda: _authorize_canvas(uid))
+    await repository.clear_user_artifacts(uid, lambda: _authorize_canvas(uid))
     await _authorize_canvas(uid)
     deleted = await asyncio.get_event_loop().run_in_executor(None, _delete_all_canvas_history, uid)
+    await _authorize_canvas(uid)
     return {"status": "deleted", "deleted_records": deleted}
 
 

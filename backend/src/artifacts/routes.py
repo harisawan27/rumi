@@ -1,4 +1,4 @@
-"""Opt-in, single-worker renderer proof. No model calls or durable storage."""
+"""Durable artifact API. Creation remains an explicitly enabled trusted proof."""
 import json
 import os
 from datetime import datetime, timezone
@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError, TypeAdapter
 from .access import authorize
 from .contracts import ArtifactId, ArtifactResult, GeneratedArtifact, GeneratedUIEditDecision
-from .repository import MemoryArtifactRepository
+from .firestore_repository import FirestoreArtifactRepository
 from .state import StateUpdate
 
-repository = MemoryArtifactRepository()
+repository = FirestoreArtifactRepository()
 id_adapter = TypeAdapter(ArtifactId)
 
 
@@ -19,7 +19,7 @@ def create_router(get_uid, managers):
     router = APIRouter(prefix="/generated-artifacts")
 
     async def context(session_id: str, uid: str = Depends(get_uid)):
-        if os.getenv("RUMI_ARTIFACT_PROOF_MODE") != "1":
+        if os.getenv("RUMI_ARTIFACTS_ENABLED") != "1":
             raise HTTPException(404, "ARTIFACT_NOT_FOUND")
         async def check():
             return await authorize(uid, session_id, managers)
@@ -37,14 +37,22 @@ def create_router(get_uid, managers):
                 "lease_seconds": max(0, min(5, (until - datetime.now(timezone.utc)).total_seconds()))}
 
     @router.get("")
-    async def history(ctx=Depends(context)):
+    async def history(cursor: str | None = None, ctx=Depends(context)):
         uid, _, check = ctx
-        items = repository.list(uid)
+        items = await repository.list_artifacts(uid, cursor)
         await check()
-        return {"artifact_ids": [item.artifact_id for item in items]}
+        return items
+
+    @router.get("/access")
+    async def refresh_access(request_id: ArtifactId, ctx=Depends(context)):
+        _, _, check = ctx
+        until = await check()
+        return {"request_id": request_id, "lease_seconds": max(0, min(5, (until - datetime.now(timezone.utc)).total_seconds()))}
 
     @router.post("/proof")
     async def proof(request_id: ArtifactId, graph: bool = False, ctx=Depends(context)):
+        if os.getenv("RUMI_ARTIFACT_PROOF_MODE") != "1":
+            raise HTTPException(404, "ARTIFACT_NOT_FOUND")
         uid, session_id, check = ctx
         path = Path(__file__).resolve().parents[3] / "tests/fixtures/artifacts/valid_study_tracker.json"
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -53,7 +61,7 @@ def create_router(get_uid, managers):
                     created_at=now, updated_at=now)
         data["spec"]["show_daily_graph"] = graph
         data["spec"]["week_start"] = now.date().isoformat()
-        artifact = await repository.seed(uid, GeneratedArtifact.model_validate(data), check)
+        artifact = await repository.create_artifact(uid, GeneratedArtifact.model_validate(data), check)
         return await response(artifact, request_id, check)
 
     @router.get("/{artifact_id}")
@@ -63,13 +71,13 @@ def create_router(get_uid, managers):
             artifact_id = id_adapter.validate_python(artifact_id)
         except ValidationError:
             raise HTTPException(404, "ARTIFACT_NOT_FOUND")
-        return await response(repository.get(uid, artifact_id), request_id, check)
+        return await response(await repository.get_artifact(uid, artifact_id), request_id, check)
 
     @router.post("/state")
     async def update(body: StateUpdate, ctx=Depends(context)):
         uid, _, check = ctx
         try:
-            artifact = await repository.update(uid, body, check)
+            artifact = await repository.update_state(uid, body, check)
         except ValueError as exc:
             raise HTTPException(422, "INVALID_ARTIFACT_STATE") from exc
         return await response(artifact, body.request_id, check, "artifact_update")
@@ -77,7 +85,14 @@ def create_router(get_uid, managers):
     @router.post("/spec")
     async def edit_spec(body: GeneratedUIEditDecision, request_id: ArtifactId, ctx=Depends(context)):
         uid, _, check = ctx
-        artifact = await repository.edit_spec(uid, body, check)
+        artifact = await repository.update_spec(uid, body, check)
         return await response(artifact, request_id, check, "artifact_update")
+
+    @router.delete("/{artifact_id}")
+    async def delete(artifact_id: str, ctx=Depends(context)):
+        uid, _, check = ctx
+        await repository.delete_artifact(uid, artifact_id, check)
+        await check()
+        return {"status": "deleted"}
 
     return router

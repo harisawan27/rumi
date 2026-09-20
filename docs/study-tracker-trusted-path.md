@@ -1,5 +1,9 @@
 # Validated study tracker: boundary and renderer proof
 
+Historical milestone: its process-local storage limitations are superseded by
+[durable artifact persistence](durable-artifact-persistence.md). The trusted
+renderer and authorization boundary described here remain in use.
+
 This milestone supplies a secure, trusted execution and presentation path for
 validated `study_tracker_v1` data. It does not connect model planning or generate
 interfaces. The contracts from `3af9d53` remain unchanged.

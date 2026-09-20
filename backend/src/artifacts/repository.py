@@ -1,8 +1,8 @@
-"""Process-local proof repository. NOT durable or suitable for multiple workers.
+"""Offline test double. Never selected by production/development environment flags.
 
 UID is an authenticated server argument, never part of an incoming document.
 The lock covers authoritative load, CAS and the final authorization check.
-Replace this with a UID-scoped transactional store before production rollout.
+Production uses FirestoreArtifactRepository instead.
 """
 import asyncio
 from fastapi import HTTPException
@@ -37,8 +37,8 @@ class MemoryArtifactRepository:
         artifact = GeneratedArtifact.model_validate(artifact)
         async with self._lock:
             await check()
-            if len(self.list(uid)) >= 20:
-                raise HTTPException(409, "ARTIFACT_LIMIT")
+            if (uid, artifact.artifact_id) in self._items:
+                raise HTTPException(409, "ARTIFACT_ALREADY_EXISTS")
             self._items[(uid, artifact.artifact_id)] = artifact
         return artifact
 
@@ -78,3 +78,24 @@ class MemoryArtifactRepository:
             await check()
             self._items[(uid, decision.artifact_id)] = candidate
             return candidate
+
+    create_artifact = seed
+    update_state = update
+    update_spec = edit_spec
+    clear_user_artifacts = clear
+
+    async def get_artifact(self, uid, artifact_id):
+        return self.get(uid, artifact_id)
+
+    async def list_artifacts(self, uid, cursor=None):
+        from .firestore_repository import artifact_metadata, PAGE_SIZE
+        artifacts = sorted(self.list(uid), key=lambda a: a.artifact_id)
+        artifacts = [a for a in artifacts if not cursor or a.artifact_id > cursor]
+        return {"items": [artifact_metadata(a) for a in artifacts[:PAGE_SIZE]],
+                "next_cursor": artifacts[PAGE_SIZE - 1].artifact_id if len(artifacts) > PAGE_SIZE else None}
+
+    async def delete_artifact(self, uid, artifact_id, check):
+        async with self._lock:
+            self.get(uid, artifact_id)
+            await check()
+            del self._items[(uid, artifact_id)]

@@ -29,6 +29,7 @@ def owner():
 
 @pytest.fixture
 def setup(monkeypatch):
+    monkeypatch.setenv("RUMI_ARTIFACTS_ENABLED", "1")
     monkeypatch.setenv("RUMI_ARTIFACT_PROOF_MODE", "1")
     repository = MemoryArtifactRepository()
     repository._items[(UID, AID)] = GeneratedArtifact.model_validate(DATA)
@@ -56,7 +57,9 @@ def test_owner_read_and_history(setup):
     response = client.get(url())
     assert response.headers["cache-control"] == "no-store"
     assert response.json()["result"]["artifact"]["state"] == {"entries": []}
-    assert client.get(f"/generated-artifacts?session_id={SID}").json() == {"artifact_ids": [AID]}
+    listing = client.get(f"/generated-artifacts?session_id={SID}").json()
+    assert [item["artifact_id"] for item in listing["items"]] == [AID]
+    assert "state" not in listing["items"][0]
     assert all(c.kwargs == {"bypass_cache": True} for c in presence.call_args_list)
 
 
@@ -221,10 +224,52 @@ def test_offline_suite_blocks_firebase_even_with_credentials(monkeypatch):
     import firebase_admin
     from firebase_admin import firestore
     from src.session import presence_manager
+    from google.cloud.firestore_v1 import Client, AsyncClient
     monkeypatch.setenv("FIREBASE_SERVICE_ACCOUNT_PATH", "production-key.json")
-    for call in (firebase_admin.initialize_app, firestore.client, presence_manager.get_db):
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "production-key.json")
+    for call in (firebase_admin.initialize_app, firestore.client, Client, AsyncClient, presence_manager.get_db):
         with pytest.raises(RuntimeError, match="forbidden"):
             call()
+
+
+def test_presence_refresh_never_loads_artifact(setup):
+    client, _, _, repository = setup
+    with patch.object(repository, "get_artifact", side_effect=AssertionError("unexpected artifact read")):
+        result = client.get(url("access"))
+    assert result.status_code == 200
+    assert result.json()["request_id"] == RID
+    assert "result" not in result.json()
+
+
+def test_durable_storage_failure_and_guard_precedence(setup, monkeypatch):
+    from src.artifacts.firestore_repository import FirestoreArtifactRepository
+    def unavailable():
+        raise RuntimeError("private database path")
+    monkeypatch.setattr(routes, "repository", FirestoreArtifactRepository(unavailable))
+    response = setup[0].get(url())
+    assert response.status_code == 503
+    assert response.json() == {"detail": "ARTIFACT_STORAGE_UNAVAILABLE"}
+    setup[2].return_value = {"mode": "guest"}
+    assert setup[0].get(url()).status_code == 403
+
+
+def test_feature_flag_and_explicit_delete(setup, monkeypatch):
+    client = setup[0]
+    assert client.delete(url()).status_code == 200
+    assert client.get(url()).status_code == 404
+    monkeypatch.delenv("RUMI_ARTIFACTS_ENABLED")
+    assert client.get(url("access")).status_code == 404
+
+
+def test_canvas_clear_storage_failure_never_reports_success(setup):
+    with patch("src.memory.firestore_client.get_db", side_effect=RuntimeError("private database error")):
+        with pytest.raises(HTTPException) as error:
+            main._delete_all_canvas_history(UID)
+    assert (error.value.status_code, error.value.detail) == (503, "CANVAS_STORAGE_UNAVAILABLE")
+    with patch.object(main, "_delete_all_canvas_history", side_effect=HTTPException(503, "CANVAS_STORAGE_UNAVAILABLE")):
+        response = setup[0].delete("/canvas/history")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "CANVAS_STORAGE_UNAVAILABLE"}
 
 
 @pytest.mark.parametrize("change", [{"renderer": "remote_code"}, {"artifact_id": "650e8400-e29b-41d4-a716-446655440000"}])

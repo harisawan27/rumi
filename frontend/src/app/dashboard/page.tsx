@@ -25,6 +25,7 @@ import RumiStatusMenu from "@/components/RumiStatusMenu";
 import MobileNavigation, { type MobileTab } from "@/components/MobileNavigation";
 import MobileSheet from "@/components/MobileSheet";
 import ConversationTimeline from "@/components/ConversationTimeline";
+import { canvasFromHistory } from "@/services/canvasHistory";
 import { useGeneratedArtifact } from "@/hooks/useGeneratedArtifact";
 
 interface ActiveIntervention {
@@ -101,6 +102,12 @@ export default function DashboardPage() {
   const visibleCanvas = artifactAllowed && generated.artifact
     ? { kind: "generated_ui" as const, artifact: generated.artifact } : canvasContent;
 
+  useEffect(() => {
+    if (artifactAllowed && canvasContent?.artifact_id) {
+      void generated.client.load(canvasContent.artifact_id).catch(() => {});
+    }
+  }, [artifactAllowed, canvasContent?.artifact_id, generated.client]);
+
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const cameraPopupVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -154,17 +161,7 @@ export default function DashboardPage() {
         // Load canvas history via REST immediately — no WS timing dependency
         getCanvasHistory().then(items => {
           if (items.length > 0) {
-            const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
-            const mapped: CanvasContent[] = items.map(i => ({
-              title: i.title,
-              timestamp: i.timestamp ?? now,
-              exchanges: [{
-                query: i.query ?? "",
-                response: i.content,
-                type: (i.content_type as "text" | "code" | "markdown") ?? "markdown",
-                timestamp: i.timestamp ?? now,
-              }],
-            }));
+            const mapped = items.map(canvasFromHistory);
             setCanvasHistory(mapped);
             setCanvasIndex(mapped.length - 1);
           }
@@ -965,6 +962,7 @@ export default function DashboardPage() {
   }
 
   function openCanvas(item: CanvasContent) {
+    generated.client.dismiss();
     setCanvasHistory(prev => {
       const next = [...prev, item];
       setCanvasIndex(next.length - 1);
@@ -1065,13 +1063,7 @@ export default function DashboardPage() {
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
       playAudio(msg.data, msg.generation_id);
     } else if (msg.type === "canvas_history") {
-      const m = msg as { type: string; items: { query: string; title: string; content: string; content_type: string; timestamp: string }[] };
-      const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      const items: CanvasContent[] = m.items.map(i => ({
-        title: i.title,
-        timestamp: i.timestamp ?? now,
-        exchanges: [{ query: i.query ?? "", response: i.content, type: (i.content_type as "text" | "code" | "markdown") ?? "markdown", timestamp: i.timestamp ?? now }],
-      }));
+      const items = msg.items.map(canvasFromHistory);
       if (items.length > 0) { setCanvasHistory(items); setCanvasIndex(items.length - 1); }
     } else if (msg.type === "text_response") {
       if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
@@ -1477,6 +1469,7 @@ export default function DashboardPage() {
                 content={visibleCanvas}
                 onArtifactEdit={generated.client.edit}
                 artifactBusy={generated.busy}
+                artifactMessage={!artifactAllowed ? "Verify owner presence to open this tracker." : generated.error || undefined}
                 onDismiss={() => { handleCanvasDismiss(); setActiveMobileTab("rumi"); }}
                 history={canvasHistory}
                 historyIndex={canvasIndex}
@@ -1914,6 +1907,7 @@ export default function DashboardPage() {
               content={visibleCanvas}
               onArtifactEdit={generated.client.edit}
               artifactBusy={generated.busy}
+              artifactMessage={!artifactAllowed ? "Verify owner presence to open this tracker." : generated.error || undefined}
               onDismiss={handleCanvasDismiss}
               history={canvasHistory}
               historyIndex={canvasIndex}

@@ -16,6 +16,14 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      // Generated artifacts and deletion coordination are Admin SDK only.
+      match /artifacts/{document=**} {
+        allow read, write: if false;
+      }
+      match /artifact_control/{document=**} {
+        allow read, write: if false;
+      }
+
       // 2. Ephemeral presence: backend-authoritative authorization state.
       // Client SDK may read presence to inspect guest lock status in UI,
       // but is strictly forbidden from writing or forging presence records.

@@ -23,6 +23,7 @@ export default function StudyTrackerPreview({ fixture }: { fixture: unknown }) {
         authoritative = { ...authoritative, revision: authoritative.revision + 1, spec: { ...authoritative.spec, show_daily_graph: enabled } };
       }
       const requestId = new URLSearchParams(path.split("?")[1]).get("request_id");
+      if (path.startsWith("access?")) return { request_id: requestId, lease_seconds: 5 };
       return { result: { type: "artifact_result", request_id: requestId, artifact_id: authoritative.artifact_id,
         revision: authoritative.revision, state_revision: authoritative.state_revision, renderer: authoritative.renderer, artifact: authoritative }, lease_seconds: 5 };
     });

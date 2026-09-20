@@ -85,10 +85,12 @@ export interface InterventionMessage {
 }
 
 export interface CanvasHistoryItem {
-  query: string;
+  kind?: "generated_ui";
+  artifact_id?: string;
+  query?: string;
   title: string;
-  content: string;
-  content_type: string;
+  content?: string;
+  content_type?: string;
   timestamp: string;
 }
 
@@ -109,7 +111,7 @@ export type WsMessage =
   | { type: "audio_response"; data: string; generation_id?: number }
   | { type: "transcript"; text: string }
   | { type: "audio_interrupt"; generation_id?: number }
-  | { type: "canvas_history"; items: { query?: string; title: string; content: string; content_type?: string; timestamp?: string }[] }
+  | { type: "canvas_history"; items: CanvasHistoryItem[] }
   | { type: "text_response"; title: string; content: string; content_type?: string; append?: boolean }
   | { type: "detection_update"; state: string; confidence: number; cues?: string[]; landmarks?: Record<string, number>; face_detected?: boolean; detector_status?: string }
   | { type: "memory_updated"; fields: string[]; message: string }
