@@ -1,4 +1,4 @@
-import { GeneratedArtifact, parseArtifactResult, StudyStateEdit } from "../types/artifacts";
+import { GeneratedArtifact, parseArtifactResult, StudyStateEdit, StudySpecEdit } from "../types/artifacts";
 
 export type ArtifactTransport = (path: string, body: unknown, signal: AbortSignal) => Promise<unknown>;
 export class ArtifactAccessDenied extends Error {}
@@ -53,6 +53,11 @@ export class ArtifactClient {
     this.clear(); this.selectedId = id;
     await this.request(id);
   };
+  loadIfCurrent = async (id: string, current: () => boolean) => {
+    if (!current()) return;
+    this.clear(); this.selectedId = id;
+    await this.request(id, undefined, false, current);
+  };
   proof = async (graph = false) => {
     this.clear(); this.selectedId = null;
     await this.request(`proof&graph=${graph}`, {}, true);
@@ -64,19 +69,22 @@ export class ArtifactClient {
     await this.request("state", { artifact_id: artifact.artifact_id, expected_state_revision: artifact.state_revision, edit });
   };
   setGraph = async (enabled: boolean) => {
+    await this.editSpec({ operation: "set_daily_graph_visibility", enabled });
+  };
+  editSpec = async (edit: StudySpecEdit) => {
     this.cancelRefresh();
     const artifact = this.view.artifact;
     if (!artifact) throw new Error("Reload the tracker before editing.");
     await this.request("spec", { mode: "generated_ui", renderer: "study_tracker_v1", operation: "edit",
       artifact_id: artifact.artifact_id, expected_revision: artifact.revision,
-      edit: { operation: "set_daily_graph_visibility", enabled } });
+      edit });
   };
   private cancelRefresh() {
     if (this.refreshing) {
       this.epoch++; this.controller?.abort(); this.controller = null; this.refreshing = false;
     }
   }
-  private async request(target: string, body?: unknown, proof = false) {
+  private async request(target: string, body?: unknown, proof = false, current?: () => boolean) {
     if (!this.allowed || !this.session) throw new Error("Owner verification is required.");
     if (this.controller) throw new Error("An update is already pending.");
     const epoch = this.epoch;
@@ -93,6 +101,7 @@ export class ArtifactClient {
       const payload = body === undefined ? undefined : target === "state" ? { ...(body as object), request_id: requestId } : body;
       const raw = await this.transport(path, payload, controller.signal) as { result?: unknown; lease_seconds?: unknown; request_id?: unknown };
       if (epoch !== this.epoch || !this.allowed || this.selectedId !== selected) return;
+      if (current && !current()) { this.dismiss(); return; }
       const result = accessOnly ? null : parseArtifactResult(raw?.result);
       const seconds = raw?.lease_seconds;
       if ((accessOnly ? raw.request_id !== requestId : !result || result.request_id !== requestId || (!proof && result.artifact_id !== selected))

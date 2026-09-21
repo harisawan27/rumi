@@ -1,14 +1,16 @@
 "use client";
 import React, { useState } from "react";
-import { ColorToken, GeneratedArtifact, StudyStateEdit, weekDates } from "../../types/artifacts";
+import { ColorToken, GeneratedArtifact, StudyStateEdit, StudySpecEdit, weekDates } from "../../types/artifacts";
 import { addStudyEntry, calculateDailyTotals, calculateSubjectTotals } from "../../services/studyTracker";
 
 export const SUBJECT_COLORS: Record<ColorToken, string> = {
   red: "#f87171", blue: "#60a5fa", green: "#4ade80", gold: "#c9a84c", purple: "#c084fc", teal: "#22d3ee", orange: "#fb923c",
 };
-export interface TrackerProps { artifact: GeneratedArtifact; onEdit: (edit: StudyStateEdit) => Promise<void>; busy?: boolean }
-export default function StudyTracker({ artifact, onEdit, busy = false }: TrackerProps) {
-  const [subject, setSubject] = useState(artifact.spec.subjects[0].id);
+export interface TrackerProps { artifact: GeneratedArtifact; onEdit: (edit: StudyStateEdit) => Promise<void>; onSpecEdit?: (edit: StudySpecEdit) => Promise<void>; busy?: boolean }
+export default function StudyTracker({ artifact, onEdit, onSpecEdit, busy = false }: TrackerProps) {
+  const [subject, setSubject] = useState(artifact.spec.subjects[0]?.id ?? "");
+  const [newSubject, setNewSubject] = useState("");
+  const selectedSubject = artifact.spec.subjects.some(s => s.id === subject) ? subject : artifact.spec.subjects[0]?.id ?? "";
   const [date, setDate] = useState(artifact.spec.week_start);
   const [minutes, setMinutes] = useState("");
   const [error, setError] = useState("");
@@ -24,7 +26,7 @@ export default function StudyTracker({ artifact, onEdit, busy = false }: Tracker
   function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      const entry = { id: crypto.randomUUID(), subject_id: subject, date, minutes: Number(minutes) };
+      const entry = { id: crypto.randomUUID(), subject_id: selectedSubject, date, minutes: Number(minutes) };
       addStudyEntry(artifact, entry);
       void send({ operation: "add_entry", entry });
     } catch (e) { setError((e as Error).message); }
@@ -34,11 +36,22 @@ export default function StudyTracker({ artifact, onEdit, busy = false }: Tracker
     <p>{dates[0]} – {dates[6]}</p>
     <p aria-live="polite"><strong>{days.reduce((n, d) => n + d.minutes, 0)} minutes</strong> this week</p>
     <ul className="study-subjects">{subjects.map(s => <li key={s.id}><span className="study-dot" style={{ backgroundColor: SUBJECT_COLORS[s.color_token] }} />{s.label}: <strong>{s.minutes} min</strong></li>)}</ul>
+    {artifact.spec.subjects.length === 0 && <p>Add a subject to start tracking your study time.</p>}
+    {onSpecEdit && <form onSubmit={async e => {
+      e.preventDefault(); setError("");
+      const label = newSubject.trim();
+      if (!label || Array.from(label).length > 80) { setError("Enter a subject name of 1–80 characters."); return; }
+      setSaving(true);
+      try { await onSpecEdit({ operation: "add_subject", subject: { id: crypto.randomUUID(), label, color_token: "teal" } }); setNewSubject(""); }
+      catch { setError("Could not add this subject. Check for duplicates or reload and try again."); }
+      finally { setSaving(false); }
+    }}><label>New subject<input value={newSubject} onChange={e => setNewSubject(e.target.value)} maxLength={80} /></label>
+      <button type="submit" disabled={busy || saving || artifact.spec.subjects.length >= 20}>Add subject</button></form>}
     <form onSubmit={submit} noValidate>
-      <label>Subject<select value={subject} onChange={e => setSubject(e.target.value)}>{artifact.spec.subjects.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
+      <label>Subject<select value={selectedSubject} onChange={e => setSubject(e.target.value)}>{artifact.spec.subjects.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
       <label>Date<input type="date" value={date} min={dates[0]} max={dates[6]} onChange={e => setDate(e.target.value)} /></label>
       <label>Minutes<input type="number" inputMode="numeric" min="1" max="1440" step="1" value={minutes} onChange={e => setMinutes(e.target.value)} /></label>
-      <button disabled={busy || saving} type="submit">{busy || saving ? "Saving…" : "Add entry"}</button>
+      <button disabled={busy || saving || !selectedSubject} type="submit">{busy || saving ? "Saving…" : "Add entry"}</button>
     </form>
     {error && <p role="alert">{error}</p>}
     <h3>Study entries</h3>

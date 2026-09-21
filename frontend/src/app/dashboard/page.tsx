@@ -26,6 +26,7 @@ import MobileNavigation, { type MobileTab } from "@/components/MobileNavigation"
 import MobileSheet from "@/components/MobileSheet";
 import ConversationTimeline from "@/components/ConversationTimeline";
 import { canvasFromHistory } from "@/services/canvasHistory";
+import { CreateRequests, CREATE_PROGRESS } from "@/services/createRequests";
 import { useGeneratedArtifact } from "@/hooks/useGeneratedArtifact";
 
 interface ActiveIntervention {
@@ -99,11 +100,19 @@ export default function DashboardPage() {
   const [artifactAuthorizationSignal, setArtifactAuthorizationSignal] = useState(0);
   const artifactAllowed = sessionReady && identityVerified && !guestMode && observationState !== "away" && !isTabHidden;
   const generated = useGeneratedArtifact(sessionId, artifactAllowed, artifactAuthorizationSignal);
+  const createRequests = useRef(new CreateRequests());
+  const [createProgress, setCreateProgress] = useState("");
+  const canvasContextRef = useRef({ allowed: artifactAllowed, hasCanvas: !!canvasContent });
+  canvasContextRef.current = { allowed: artifactAllowed, hasCanvas: !!canvasContent };
+  useEffect(() => {
+    if (!artifactAllowed) { createRequests.current.cancel(); setCreateProgress(""); }
+  }, [artifactAllowed]);
   const visibleCanvas = artifactAllowed && generated.artifact
     ? { kind: "generated_ui" as const, artifact: generated.artifact } : canvasContent;
 
   useEffect(() => {
     if (artifactAllowed && canvasContent?.artifact_id) {
+      if (generated.client.snapshot().artifact?.artifact_id === canvasContent.artifact_id) return;
       void generated.client.load(canvasContent.artifact_id).catch(() => {});
     }
   }, [artifactAllowed, canvasContent?.artifact_id, generated.client]);
@@ -782,7 +791,11 @@ export default function DashboardPage() {
     setIsProcessing(true);
     setTranscript(text);
     lastSentQueryRef.current = text;
-    const payload: Record<string, string> = { type: "user_text", text };
+    const selected = generated.client.snapshot().artifact?.artifact_id ?? null;
+    const requestId = createRequests.current.begin(selected);
+    setCreateProgress("");
+    const payload: Record<string, unknown> = { type: "user_text", text, request_id: requestId,
+      active_artifact_id: selected, has_canvas_context: canvasContextRef.current.hasCanvas };
     if (image) payload.image = image;
     wsRef.current.send(JSON.stringify(payload));
     if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
@@ -810,6 +823,7 @@ export default function DashboardPage() {
 
   function handleFollowUp(text: string, image?: string | null, attachment?: { dataUrl: string; name: string }) {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    createRequests.current.cancel(); setCreateProgress("");
     lastFollowUpQueryRef.current = text;
     lastSentQueryRef.current = text;
     pendingAttachmentRef.current = attachment ?? null;
@@ -890,6 +904,7 @@ export default function DashboardPage() {
   }, [screenActive]);
 
   function handleCancel() {
+    cancelCreate();
     stopAllAudio();
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
@@ -957,8 +972,18 @@ export default function DashboardPage() {
 
   // ── Canvas ────────────────────────────────────────────────────────────────
   function handleCanvasDismiss() {
+    cancelCreate();
     generated.client.dismiss();
     setCanvasOpen(false);
+  }
+
+  function cancelCreate() {
+    createRequests.current.cancel(); setCreateProgress("");
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "cancel_create" }));
+  }
+
+  function navigateCanvas(index: number) {
+    cancelCreate(); generated.client.dismiss(); setCanvasIndex(index);
   }
 
   function openCanvas(item: CanvasContent) {
@@ -1048,7 +1073,33 @@ export default function DashboardPage() {
 
   // ── WS message handler ────────────────────────────────────────────────────
   function handleWsMessage(msg: WsMessage) {
-    if (msg.type === "intervention") {
+    if (msg.type === "create_status") {
+      if (!createRequests.current.current(msg.request_id) || !canvasContextRef.current.allowed) return;
+      setCreateProgress(msg.stage === "failed" ? (msg.message || "Could not update the tracker.") : CREATE_PROGRESS[msg.stage] || "");
+      if (msg.stage === "failed" || msg.stage === "ready") setIsProcessing(false);
+      if (msg.stage === "failed" && msg.reload_artifact_id && createRequests.current.matchesTarget(msg.request_id, msg.reload_artifact_id)) {
+        const current = () => createRequests.current.current(msg.request_id) && canvasContextRef.current.allowed;
+        void generated.client.loadIfCurrent(msg.reload_artifact_id, current).then(() => {
+          if (current() && generated.client.snapshot().artifact) setCreateProgress("Tracker reloaded. Please try the change again.");
+        }).catch(() => {});
+      }
+    } else if (msg.type === "generated_artifact") {
+      const result = createRequests.current.result(msg.result);
+      if (!result || !canvasContextRef.current.allowed) return;
+      const current = () => createRequests.current.current(result.request_id) && canvasContextRef.current.allowed;
+      void generated.client.loadIfCurrent(result.artifact_id, current).then(() => {
+        const artifact = generated.client.snapshot().artifact;
+        if (!current() || !artifact || artifact.artifact_id !== result.artifact_id) return;
+        const reference = canvasFromHistory({ kind: "generated_ui", artifact_id: artifact.artifact_id,
+          title: artifact.title, timestamp: artifact.updated_at });
+        setCanvasHistory(previous => {
+          const index = previous.findIndex(item => item.artifact_id === artifact.artifact_id);
+          if (index >= 0) { setCanvasIndex(index); return previous.map((item, i) => i === index ? reference : item); }
+          setCanvasIndex(previous.length); return [...previous, reference];
+        });
+        setCanvasOpen(true); setActiveMobileTab("canvas"); setCreateProgress("Ready"); setIsProcessing(false);
+      }).catch(() => { if (current()) setCreateProgress("Could not open the tracker. Please reload."); });
+    } else if (msg.type === "intervention") {
       const m = msg as InterventionMessage;
       setInterventionQueue(q => [...q, { interactionId: m.interaction_id, trigger: m.trigger, text: m.text }]);
       const emotionMap: Record<string, typeof rumiEmotion> = { A: "concerned", B: "thinking", C: "concerned", E: "happy", G: "neutral" };
@@ -1066,6 +1117,7 @@ export default function DashboardPage() {
       const items = msg.items.map(canvasFromHistory);
       if (items.length > 0) { setCanvasHistory(items); setCanvasIndex(items.length - 1); }
     } else if (msg.type === "text_response") {
+      if (msg.request_id && !createRequests.current.current(msg.request_id)) return;
       if (processingTimeoutRef.current) { clearTimeout(processingTimeoutRef.current); processingTimeoutRef.current = null; }
       setIsProcessing(false);
       setIsFollowingUp(false);
@@ -1125,6 +1177,7 @@ export default function DashboardPage() {
       setIdentityVerified(true);
       setArtifactAuthorizationSignal(value => value + 1);
     } else if (msg.type === "guest_detected") {
+      cancelCreate(); canvasContextRef.current.allowed = false;
       generated.client.revoke();
       setGuestMode(true);
       setIdentityVerified(false);
@@ -1152,6 +1205,7 @@ export default function DashboardPage() {
     } else if (msg.type === "paused") {
       setObservationState("paused");
     } else if (msg.type === "away_mode") {
+      cancelCreate(); canvasContextRef.current.allowed = false;
       generated.client.revoke();
       setObservationState("away");
     } else if (msg.type === "presence_returned") {
@@ -1201,6 +1255,7 @@ export default function DashboardPage() {
 
   return (
     <main className="dot-grid noise-overlay" style={{ height: "100dvh", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+      {createProgress && <p role="status" aria-live="polite" style={{ margin: 0, padding: "8px 16px", color: "var(--teal)" }}>{createProgress}</p>}
 
       {/* Hidden video — always in DOM so captureFrame works */}
       <video ref={videoRef} autoPlay muted playsInline style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", top: 0, left: 0 }} />
@@ -1468,12 +1523,13 @@ export default function DashboardPage() {
               <ArtifactCanvas
                 content={visibleCanvas}
                 onArtifactEdit={generated.client.edit}
+                onArtifactSpecEdit={generated.client.editSpec}
                 artifactBusy={generated.busy}
                 artifactMessage={!artifactAllowed ? "Verify owner presence to open this tracker." : generated.error || undefined}
                 onDismiss={() => { handleCanvasDismiss(); setActiveMobileTab("rumi"); }}
                 history={canvasHistory}
                 historyIndex={canvasIndex}
-                onNavigate={index => { generated.client.dismiss(); setCanvasIndex(index); }}
+                onNavigate={navigateCanvas}
                 onFollowUp={handleFollowUp}
                 isFollowingUp={isFollowingUp}
               />
@@ -1906,12 +1962,13 @@ export default function DashboardPage() {
             <ArtifactCanvas
               content={visibleCanvas}
               onArtifactEdit={generated.client.edit}
+              onArtifactSpecEdit={generated.client.editSpec}
               artifactBusy={generated.busy}
               artifactMessage={!artifactAllowed ? "Verify owner presence to open this tracker." : generated.error || undefined}
               onDismiss={handleCanvasDismiss}
               history={canvasHistory}
               historyIndex={canvasIndex}
-              onNavigate={index => { generated.client.dismiss(); setCanvasIndex(index); }}
+              onNavigate={navigateCanvas}
               onFollowUp={handleFollowUp}
               isFollowingUp={isFollowingUp}
             />

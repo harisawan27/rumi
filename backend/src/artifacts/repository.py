@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from .contracts import GeneratedArtifact
 from .contracts import SetSubjectColor, validate_artifact_transition
 from datetime import datetime, timezone
-from .state import apply_state_update
+from .state import apply_state_update, apply_spec_update
 
 
 class MemoryArtifactRepository:
@@ -63,18 +63,10 @@ class MemoryArtifactRepository:
             previous = self.get(uid, decision.artifact_id)
             if previous.revision != decision.expected_revision:
                 raise HTTPException(409, "ARTIFACT_REVISION_CONFLICT")
-            data = previous.model_dump(mode="json")
-            if isinstance(decision.edit, SetSubjectColor):
-                subject = next((s for s in data["spec"]["subjects"] if s["id"] == decision.edit.subject_id), None)
-                if subject is None:
-                    raise HTTPException(422, "INVALID_ARTIFACT_SPEC")
-                subject["color_token"] = decision.edit.color_token
-            else:
-                data["spec"]["show_daily_graph"] = decision.edit.enabled
-            if data["spec"] != previous.model_dump(mode="json")["spec"]:
-                data["revision"] += 1
-            data["updated_at"] = datetime.now(timezone.utc)
-            candidate = validate_artifact_transition(previous, GeneratedArtifact.model_validate(data))
+            try:
+                candidate = apply_spec_update(previous, decision)
+            except ValueError as exc:
+                raise HTTPException(422, "INVALID_ARTIFACT_SPEC") from exc
             await check()
             self._items[(uid, decision.artifact_id)] = candidate
             return candidate

@@ -94,12 +94,17 @@ def test_create_cannot_nominate_server_fields_or_user_history(create_data, field
         OUTPUT_DECISION_ADAPTER.validate_python(create_data)
 
 
-@pytest.mark.parametrize("name", ["valid_color_edit", "valid_graph_edit"])
+@pytest.mark.parametrize("name", ["valid_color_edit", "valid_graph_edit", "valid_add_subject"])
 def test_shared_valid_edits_round_trip(name):
     payload = load_fixture(name)
     decision = OUTPUT_DECISION_ADAPTER.validate_python(payload)
     assert decision == OUTPUT_DECISION_ADAPTER.validate_json(json.dumps(payload))
     assert decision.model_dump(mode="json") == payload
+
+
+def test_shared_empty_tracker_fixture():
+    artifact = GeneratedArtifact.model_validate(load_fixture("valid_empty_study_tracker"))
+    assert artifact.spec.subjects == () and artifact.state.entries == ()
 
 
 @pytest.mark.parametrize("name", ["invalid_renderer", "invalid_color"])
@@ -144,8 +149,7 @@ def test_subject_limits_and_uniqueness(artifact_data):
     with pytest.raises(ValidationError):
         StudyTrackerSpec.model_validate(spec)
     spec["subjects"] = []
-    with pytest.raises(ValidationError):
-        StudyTrackerSpec.model_validate(spec)
+    assert StudyTrackerSpec.model_validate(spec).subjects == ()
 
 
 @pytest.mark.parametrize("identifier", ["", "../owner", "users/abc", "https://evil.example", "x" * (MAX_ID_LENGTH + 1)])

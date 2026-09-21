@@ -1,0 +1,15 @@
+{
+  "mode": "generated_ui",
+  "renderer": "study_tracker_v1",
+  "operation": "edit",
+  "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
+  "expected_revision": 0,
+  "edit": {
+    "operation": "add_subject",
+    "subject": {
+      "id": "physics",
+      "label": "Physics",
+      "color_token": "blue"
+    }
+  }
+}

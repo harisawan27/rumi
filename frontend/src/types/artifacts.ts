@@ -17,7 +17,8 @@ export interface ArtifactResult {
 }
 export type StudyStateEdit = { operation: "add_entry"; entry: StudyEntry } | { operation: "remove_entry"; entry_id: string };
 export type StudySpecEdit = { operation: "set_subject_color"; subject_id: string; color_token: ColorToken }
-  | { operation: "set_daily_graph_visibility"; enabled: boolean };
+  | { operation: "set_daily_graph_visibility"; enabled: boolean }
+  | { operation: "add_subject"; subject: StudySubject };
 export interface StudyEditDecision {
   mode: "generated_ui"; renderer: "study_tracker_v1"; operation: "edit";
   artifact_id: string; expected_revision: number; edit: StudySpecEdit;
@@ -59,7 +60,7 @@ export function parseGeneratedArtifact(v: unknown): GeneratedArtifact | null {
   const state = v.state === undefined ? {} : v.state;
   if (!object(spec) || !keys(spec, ["week_start", "subjects"], ["show_daily_graph"]) || !isISODate(spec.week_start)
     || spec.week_start > "9999-12-25" || (spec.show_daily_graph !== undefined && typeof spec.show_daily_graph !== "boolean")
-    || !Array.isArray(spec.subjects) || spec.subjects.length < 1 || spec.subjects.length > 20) return null;
+    || !Array.isArray(spec.subjects) || spec.subjects.length > 20) return null;
   const subjects: StudySubject[] = [];
   for (const s of spec.subjects) {
     if (!object(s) || !keys(s, ["id", "label", "color_token"]) || !stable(s.id) || !text(s.label, 80) || !color(s.color_token) || subjects.some(x => x.id === s.id)) return null;
@@ -90,6 +91,8 @@ export function isStudyEditDecision(v: unknown): v is StudyEditDecision {
   if (!object(v) || !keys(v, ["mode", "renderer", "operation", "artifact_id", "expected_revision", "edit"])
     || v.mode !== "generated_ui" || v.renderer !== "study_tracker_v1" || v.operation !== "edit" || !isArtifactId(v.artifact_id) || !revision(v.expected_revision) || !object(v.edit)) return false;
   const e = v.edit;
+  if (e.operation === "add_subject") return keys(e, ["operation", "subject"]) && object(e.subject)
+    && keys(e.subject, ["id", "label", "color_token"]) && stable(e.subject.id) && text(e.subject.label, 80) && color(e.subject.color_token);
   return e.operation === "set_subject_color" ? keys(e, ["operation", "subject_id", "color_token"]) && stable(e.subject_id) && color(e.color_token)
     : e.operation === "set_daily_graph_visibility" && keys(e, ["operation", "enabled"]) && typeof e.enabled === "boolean";
 }

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pydantic import Field
 from .contracts import (
     Contract, ArtifactId, StableId, Revision, StudyEntry, GeneratedArtifact,
-    GeneratedUIEditDecision, SetSubjectColor, validate_artifact_transition,
+    GeneratedUIEditDecision, SetSubjectColor, AddSubject, validate_artifact_transition,
 )
 
 
@@ -54,6 +54,12 @@ def apply_spec_update(artifact: GeneratedArtifact, decision: GeneratedUIEditDeci
         if subject is None:
             raise ValueError("unknown subject")
         subject["color_token"] = decision.edit.color_token
+    elif isinstance(decision.edit, AddSubject):
+        import unicodedata
+        normalize = lambda label: " ".join(unicodedata.normalize("NFKC", label).casefold().split())
+        if any(normalize(s.label) == normalize(decision.edit.subject.label) for s in artifact.spec.subjects):
+            raise ValueError("subject already exists")
+        data["spec"]["subjects"].append(decision.edit.subject.model_dump(mode="json"))
     else:
         data["spec"]["show_daily_graph"] = decision.edit.enabled
     if data["spec"] == artifact.model_dump(mode="json")["spec"]:

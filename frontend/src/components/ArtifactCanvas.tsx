@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import GeneratedArtifact from "./GeneratedArtifact";
-import type { GeneratedArtifact as ArtifactData, StudyStateEdit } from "../types/artifacts";
+import type { GeneratedArtifact as ArtifactData, StudyStateEdit, StudySpecEdit } from "../types/artifacts";
 
 // ── Data model ────────────────────────────────────────────────────────────────
 export interface CanvasExchange {
@@ -24,6 +24,7 @@ export interface CanvasContent {
 interface Props {
   content: CanvasContent | { kind: "generated_ui"; artifact: ArtifactData } | null;
   onArtifactEdit?: (edit: StudyStateEdit) => Promise<void>;
+  onArtifactSpecEdit?: (edit: StudySpecEdit) => Promise<void>;
   artifactBusy?: boolean;
   artifactMessage?: string;
   onDismiss: () => void;
@@ -267,7 +268,7 @@ function FollowUpBar({ onFollowUp, isFollowingUp }: {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ArtifactCanvas({ content: input, onArtifactEdit, artifactBusy, artifactMessage, onDismiss, history = [], historyIndex = 0, onNavigate, onFollowUp, isFollowingUp }: Props) {
+export default function ArtifactCanvas({ content: input, onArtifactEdit, onArtifactSpecEdit, artifactBusy, artifactMessage, onDismiss, history = [], historyIndex = 0, onNavigate, onFollowUp, isFollowingUp }: Props) {
   const generated = input?.kind === "generated_ui" ? input.artifact : null;
   const content = input?.kind === "generated_ui" ? null : input;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -315,7 +316,7 @@ export default function ArtifactCanvas({ content: input, onArtifactEdit, artifac
       </div>
 
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "clamp(12px,3vw,22px) clamp(14px,3vw,24px) 16px" }}>
-        {generated ? <GeneratedArtifact artifact={generated} onEdit={onArtifactEdit ?? (async () => { throw new Error("Editing unavailable."); })} busy={artifactBusy} /> : content?.kind === "generated_reference" ? <p role="status">{artifactMessage || (content.artifact_id ? "Loading saved tracker…" : "This saved tracker is unavailable.")}</p> : content ? (
+        {generated ? <GeneratedArtifact artifact={generated} onEdit={onArtifactEdit ?? (async () => { throw new Error("Editing unavailable."); })} onSpecEdit={onArtifactSpecEdit} busy={artifactBusy} /> : content?.kind === "generated_reference" ? <p role="status">{artifactMessage || (content.artifact_id ? "Loading saved tracker…" : "This saved tracker is unavailable.")}</p> : content ? (
           content.exchanges.map((ex, idx) => (
             <ExchangeBlock key={idx} ex={ex} isLatest={isLatest && idx === content.exchanges.length - 1} />
           ))

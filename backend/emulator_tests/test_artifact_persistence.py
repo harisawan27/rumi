@@ -260,3 +260,73 @@ def test_client_rules_deny_even_matching_owner(db, uid):
             with pytest.raises(urllib.error.HTTPError) as denied:
                 urllib.request.urlopen(request, timeout=5)
             assert denied.value.code == 403
+
+
+@pytest.mark.asyncio
+async def test_planner_create_subject_entries_edits_restart_and_history(repo, db, uid):
+    from src.artifacts.service import plan_and_execute
+    from unittest.mock import AsyncMock
+    async def execute(text, plan, selected=None):
+        _, result, _ = await plan_and_execute(text=text, uid=uid, session_id="planner_emulator_session",
+            request_id=str(uuid4()), selected_id=selected, has_canvas=bool(selected), timezone_name="Asia/Karachi",
+            repository=repo, check=check, provider=AsyncMock(return_value=json.dumps(plan)), progress=AsyncMock())
+        return result.artifact
+    created = await execute("I need to track how much I study this week", {
+        "mode": "generated_ui", "renderer": "study_tracker_v1", "operation": "create", "title": "Study",
+        "week": "current", "subjects": [], "show_daily_graph": False})
+    assert created.state.entries == () and created.spec.subjects == ()
+    reference = db.collection("users").document(uid).collection("canvas_history").document("artifact_" + created.artifact_id).get().to_dict()
+    assert reference["artifact_id"] == created.artifact_id and "state" not in reference
+    added = await repo.update_spec(uid, spec(created, {"operation": "add_subject", "subject": {
+        "id": "economics", "label": "Economics", "color_token": "gold"}}), check)
+    update = state(added).model_dump(mode="json")
+    update["edit"]["entry"]["date"] = added.spec.week_start.isoformat()
+    entered = await repo.update_state(uid, StateUpdate.model_validate(update), check)
+    colored = await execute("Make Economics red", {"mode": "generated_ui", "renderer": "study_tracker_v1", "operation": "edit",
+        "edit": {"operation": "set_subject_color", "subject_label": "Economics", "color_token": "red"}}, created.artifact_id)
+    graphed = await execute("Add a graph showing daily study time", {"mode": "generated_ui", "renderer": "study_tracker_v1", "operation": "edit",
+        "edit": {"operation": "set_daily_graph_visibility", "enabled": True}}, created.artifact_id)
+    assert graphed.artifact_id == entered.artifact_id and graphed.state == entered.state
+    assert graphed.state_revision == 1 and graphed.revision == 3
+    process = await asyncio.create_subprocess_exec(sys.executable, str(Path(__file__).with_name("restart_probe.py")), uid, created.artifact_id,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    stdout, stderr = await asyncio.wait_for(process.communicate(), 90)
+    assert process.returncode == 0, stderr.decode()
+    assert json.loads(stdout) == graphed.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_planner_racing_edit_conflicts_without_rebuilding(repo, uid):
+    from src.artifacts.service import plan_and_execute
+    from unittest.mock import AsyncMock
+    a = await repo.create_artifact(uid, artifact(), check)
+    async def provider(*args):
+        await repo.update_spec(uid, spec(a), check)
+        return json.dumps({"mode": "generated_ui", "renderer": "study_tracker_v1", "operation": "edit",
+            "edit": {"operation": "set_subject_color", "subject_label": "Economics", "color_token": "red"}})
+    with pytest.raises(HTTPException) as conflict:
+        await plan_and_execute(text="Make Economics red", uid=uid, session_id="planner_session", request_id=str(uuid4()),
+            selected_id=a.artifact_id, has_canvas=True, timezone_name="UTC", repository=repo, check=check,
+            provider=provider, progress=AsyncMock())
+    assert conflict.value.status_code == 409
+    assert len((await repo.list_artifacts(uid))["items"]) == 1
+    assert (await repo.get_artifact(uid, a.artifact_id)).spec.subjects[0].color_token == "gold"
+
+
+@pytest.mark.asyncio
+async def test_persistence_latency_samples(repo, uid):
+    """Storage-only benchmark; never mislabeled as browser or model latency."""
+    import time
+    import statistics
+    writes, loads = [], []
+    for _ in range(20):
+        started = time.perf_counter()
+        a = await repo.create_artifact(uid, artifact(), check)
+        writes.append((time.perf_counter() - started) * 1000)
+        started = time.perf_counter()
+        assert await repo.get_artifact(uid, a.artifact_id) == a
+        loads.append((time.perf_counter() - started) * 1000)
+    def summary(values):
+        return {"samples": len(values), "p50_ms": round(statistics.median(values), 3),
+                "p95_ms": round(sorted(values)[18], 3)}
+    print("\nPERSISTENCE_LATENCY " + json.dumps({"create": summary(writes), "load": summary(loads)}))

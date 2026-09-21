@@ -115,6 +115,7 @@ class SessionManager:
         summary_depth = int(os.getenv("SESSION_SUMMARY_DEPTH", "3"))
 
         identity = load_core_identity(uid)
+        self._timezone = identity.get("timezone", "UTC")
         summaries = load_session_summaries(uid, limit=summary_depth)
         self._system_prompt = build_system_prompt(identity, summaries)
         self._owner_name      = identity.get("name", "the owner")

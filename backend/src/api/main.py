@@ -15,7 +15,15 @@ from src.auth.firebase_auth import verify_id_token, AuthError  # noqa: E402
 @asynccontextmanager
 async def lifespan(app):
     await _startup()
+    if os.getenv("RUMI_CREATE_PLANNER_ENABLED") == "1" and os.getenv("RUMI_ARTIFACTS_ENABLED") == "1":
+        from src.artifacts.planner import prepare_planner_client
+        try:
+            await asyncio.wait_for(prepare_planner_client(_make_genai_client), timeout=60)
+        except Exception:
+            logger.warning("create_planner provider setup unavailable; requests will fail safely")
     yield
+    from src.artifacts.planner import close_planner_clients
+    await close_planner_clients()
 
 
 app = FastAPI(title="Project Rumi — Rumi Core", version="0.1.0", lifespan=lifespan)
@@ -1389,6 +1397,82 @@ from fastapi import WebSocket, WebSocketDisconnect  # noqa: E402
 import json  # noqa: E402
 
 
+async def _planned_respond(*, text, uid, session_id, request_id, selected_id,
+                           has_canvas, mgr, websocket, token):
+    from src.artifacts import routes
+    from src.artifacts.contracts import ArtifactId, ArtifactDecision
+    from src.artifacts.planner import provider_for, create_intent, edit_intent
+    from src.artifacts.service import plan_and_execute
+    from pydantic import TypeAdapter
+    async def check():
+        if getattr(mgr, "_create_request_token", None) is not token or asyncio.current_task().cancelling():
+            raise asyncio.CancelledError()
+        if os.getenv("RUMI_CREATE_PLANNER_ENABLED") != "1" or os.getenv("RUMI_ARTIFACTS_ENABLED") != "1":
+            raise HTTPException(403, "ARTIFACT_ACCESS_DENIED")
+        await _authorize_canvas(uid, session_id)
+        if getattr(mgr, "_create_request_token", None) is not token:
+            raise asyncio.CancelledError()
+    async def progress(stage, message=None, reload_artifact_id=None):
+        await check()
+        await websocket.send_json({"type": "create_status", "request_id": request_id, "stage": stage,
+                                   "message": message, "reload_artifact_id": reload_artifact_id})
+    try:
+        request_id = TypeAdapter(ArtifactId).validate_python(request_id)
+        outcome, result, acknowledgment = await plan_and_execute(text=text, uid=uid, session_id=session_id,
+            request_id=request_id, selected_id=selected_id, has_canvas=has_canvas,
+            timezone_name=getattr(mgr, "_timezone", "UTC"), repository=routes.repository,
+            check=check, provider=provider_for(_make_genai_client, FLASH_MODELS[0]), progress=progress)
+        await check()
+        if result is not None:
+            await websocket.send_json({"type": "generated_artifact", "result": result.model_dump(mode="json")})
+            await progress("ready")
+            await check()
+            await mgr.voice_query(acknowledgment)
+        elif isinstance(outcome.decision, ArtifactDecision):
+            await progress("writing")
+            content_result = await _flash_smart(text, None, mgr._system_prompt or "", force_canvas=True)
+            content = content_result.get("content", "")
+            if not isinstance(content, str) or len(content) <= 10:
+                raise ValueError("empty Canvas")
+            await check()
+            await _save_canvas_entry(uid, text, outcome.decision.title, content, "markdown", session_id)
+            await check()
+            await websocket.send_json({"type": "text_response", "request_id": request_id,
+                "title": outcome.decision.title, "content": content, "content_type": "markdown", "append": False})
+            await progress("ready")
+            await check()
+            await mgr.voice_query("I've put that on your canvas — take a look.")
+        else:
+            failed_tool = (selected_id and edit_intent(text)) or create_intent(text)
+            message = ("I couldn't apply that change. Select a tracker and name one subject exactly; I can change its color or show and hide the daily graph."
+                       if selected_id else "I can create a study tracker for the current week, but couldn't complete this request. Please try again.")
+            await progress("failed" if failed_tool else "ready", message if failed_tool else None)
+            await check()
+            await mgr.voice_query(message if failed_tool else text)
+    except asyncio.CancelledError:
+        pass
+    except HTTPException as exc:
+        logger.info("create_execution failed status=%s", exc.status_code)
+        if exc.status_code == 403:
+            if getattr(mgr, "_create_request_token", None) is token:
+                await websocket.send_json({"type": "create_status", "request_id": request_id,
+                    "stage": "failed", "message": "Owner verification is required."})
+            return
+        message = "This tracker changed. Reload it before trying again." if exc.status_code == 409 else "I couldn't save that tracker. Please try again."
+        try:
+            await progress("failed", message, selected_id if exc.status_code == 409 else None)
+            await check()
+            await mgr.voice_query(message)
+        except (HTTPException, asyncio.CancelledError):
+            pass
+    except Exception:
+        logger.info("create_execution failed category=invalid_or_unavailable")
+        try:
+            await progress("failed", "I couldn't create or update the tracker. Please try again.")
+        except (HTTPException, asyncio.CancelledError):
+            pass
+
+
 @app.websocket("/ws/observe")
 async def ws_observe(websocket: WebSocket, session_id: str, token: str):
     try:
@@ -1500,7 +1584,13 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 logger.info("ws_observe: demo_trigger received — firing intervention A")
                 asyncio.create_task(mgr._fire_trigger_a())
 
+            elif msg.get("type") == "cancel_create":
+                mgr._create_request_token = None
+                pending_create = getattr(mgr, "_create_task", None)
+                if pending_create and not pending_create.done():
+                    pending_create.cancel()
             elif msg.get("type") == "audio_interrupt":
+                mgr._create_request_token = None
                 # Frontend-initiated manual interruption.
                 gen_id = mgr.interrupt_audio("frontend_audio_interrupt")
                 logger.info("ws_observe: audio_interrupt from frontend — suppressed + cancelled (gen=%d)", gen_id)
@@ -1522,6 +1612,10 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                         await websocket.send_json({"type": "error", "code": exc.detail})
                         continue
                 if text:
+                    from uuid import uuid4
+                    request_id = msg.get("request_id") or str(uuid4())
+                    request_token = object()
+                    mgr._create_request_token = request_token
                     import time as _time
                     _t0 = _time.perf_counter()
 
@@ -1612,6 +1706,11 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                         ]
                         wants_canvas = is_followup or force_canvas or any(kw in t_lower for kw in _CANVAS_TRIGGER_KEYWORDS)
                         is_tool_hint = any(kw in t_lower for kw in _TOOL_HINT_KEYWORDS)
+                        from src.artifacts.planner import needs_planner
+                        planner_enabled = os.getenv("RUMI_CREATE_PLANNER_ENABLED") == "1" and os.getenv("RUMI_ARTIFACTS_ENABLED") == "1"
+                        explicit_canvas = "canvas" in t_lower
+                        if planner_enabled and explicit_canvas:
+                            wants_canvas = True
 
                         if is_tool_hint:
                             # Tool path — Flash detects intent and extracts params
@@ -1670,6 +1769,13 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                                         pass
                             mgr._speak_task = asyncio.create_task(_tool_respond())
 
+                        elif (planner_enabled and not force_canvas and not is_followup and not explicit_canvas
+                              and needs_planner(text, bool(msg.get("active_artifact_id")), wants_canvas)):
+                            mgr._speak_task = asyncio.create_task(_planned_respond(text=text, uid=uid,
+                                session_id=session_id, request_id=request_id, selected_id=msg.get("active_artifact_id"),
+                                has_canvas=bool(msg.get("has_canvas_context")), mgr=mgr, websocket=websocket, token=request_token))
+                            mgr._create_task = mgr._speak_task
+
                         elif wants_canvas:
                             # Canvas path — single Flash call for content generation
                             async def _canvas_respond(t=text, img=effective_img, sp=sys_prompt,
@@ -1713,6 +1819,9 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
     except WebSocketDisconnect:
         pass
     finally:
+        pending_create = getattr(mgr, "_create_task", None)
+        if pending_create and not pending_create.done():
+            pending_create.cancel()
         ping_task.cancel()
         mgr._websocket = None
         if hasattr(mgr, "_state_monitor") and mgr._state_monitor:

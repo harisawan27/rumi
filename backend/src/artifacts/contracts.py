@@ -131,7 +131,7 @@ class StudyTrackerSpec(Contract):
     week_start: ISODate
     subjects: Annotated[
         tuple[StudySubject, ...], BeforeValidator(_immutable_array),
-        Field(min_length=1, max_length=MAX_SUBJECTS),
+        Field(max_length=MAX_SUBJECTS),
     ]
     show_daily_graph: bool = False
 
@@ -170,8 +170,13 @@ class SetDailyGraphVisibility(Contract):
     enabled: bool
 
 
+class AddSubject(Contract):
+    operation: Literal["add_subject"]
+    subject: StudySubject
+
+
 StudyTrackerEdit = Annotated[
-    Union[SetSubjectColor, SetDailyGraphVisibility], Field(discriminator="operation")
+    Union[SetSubjectColor, SetDailyGraphVisibility, AddSubject], Field(discriminator="operation")
 ]
 STUDY_TRACKER_EDIT_ADAPTER = TypeAdapter(StudyTrackerEdit)
 

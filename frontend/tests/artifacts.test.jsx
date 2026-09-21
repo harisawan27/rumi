@@ -7,11 +7,14 @@ import { parseGeneratedArtifact, isStudyEditDecision } from '../src/types/artifa
 import { addStudyEntry, removeStudyEntry, calculateDailyTotals, calculateSubjectTotals } from '../src/services/studyTracker';
 import { ArtifactAccessDenied, ArtifactClient } from '../src/services/artifactClient';
 import { canvasFromHistory } from '../src/services/canvasHistory';
+import { CreateRequests } from '../src/services/createRequests';
 import fixture from '../../tests/fixtures/artifacts/valid_study_tracker.json';
 import colorEdit from '../../tests/fixtures/artifacts/valid_color_edit.json';
 import graphEdit from '../../tests/fixtures/artifacts/valid_graph_edit.json';
 import invalidColor from '../../tests/fixtures/artifacts/invalid_color.json';
 import invalidRenderer from '../../tests/fixtures/artifacts/invalid_renderer.json';
+import emptyFixture from '../../tests/fixtures/artifacts/valid_empty_study_tracker.json';
+import addSubjectFixture from '../../tests/fixtures/artifacts/valid_add_subject.json';
 
 const entry = { id: 'entry_1', subject_id: 'economics', date: '2026-09-14', minutes: 60 };
 const copy = () => JSON.parse(JSON.stringify(fixture));
@@ -38,6 +41,8 @@ test('malformed generated history is harmless and legacy history still maps', ()
 });
 
 test('shared fixtures agree with server vocabulary', () => {
+  expect(parseGeneratedArtifact(emptyFixture)).toEqual(emptyFixture);
+  expect(isStudyEditDecision(addSubjectFixture)).toBe(true);
   expect(parseGeneratedArtifact(fixture)).toEqual(fixture);
   expect(isStudyEditDecision(colorEdit)).toBe(true);
   expect(isStudyEditDecision(graphEdit)).toBe(true);
@@ -192,4 +197,49 @@ test('presence refresh does not repeatedly fetch the artifact document', async (
   expect(transport.mock.calls.filter(([path]) => path.startsWith('access?'))).toHaveLength(3);
   expect(client.snapshot().artifact.artifact_id).toBe(fixture.artifact_id);
   client.dispose(); jest.useRealTimers();
+});
+
+test('model-created empty tracker is selected through authorized fetch and mounts with subject controls', async () => {
+  const gate = new CreateRequests();
+  const requestId = gate.begin(null);
+  const empty = { ...fixture, spec: { ...fixture.spec, subjects: [] } };
+  const ready = gate.result({ type: 'artifact_result', request_id: requestId, artifact_id: empty.artifact_id,
+    revision: 0, state_revision: 0, renderer: 'study_tracker_v1', artifact: empty });
+  const client = new ArtifactClient(async path => response(path, empty));
+  client.configure('session_test', true);
+  await client.loadIfCurrent(ready.artifact_id, () => gate.current(requestId));
+  const onSpecEdit = jest.fn().mockResolvedValue(undefined);
+  render(<GeneratedArtifact artifact={client.snapshot().artifact} onEdit={jest.fn()} onSpecEdit={onSpecEdit} />);
+  expect(screen.getByRole('region', { name: 'Study tracker' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Add entry' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('New subject'), { target: { value: 'Economics' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add subject' }));
+  await waitFor(() => expect(onSpecEdit).toHaveBeenCalledWith(expect.objectContaining({ operation: 'add_subject',
+    subject: expect.objectContaining({ label: 'Economics', color_token: 'teal' }) })));
+  client.dispose();
+});
+
+test('cancelled or superseded planner results cannot select or reopen a tracker', async () => {
+  const gate = new CreateRequests();
+  const a = gate.begin(null);
+  const event = { type: 'artifact_result', request_id: a, artifact_id: fixture.artifact_id,
+    revision: 0, state_revision: 0, renderer: 'study_tracker_v1', artifact: fixture };
+  let finish;
+  const client = new ArtifactClient(path => new Promise(resolve => { finish = () => resolve(response(path)); }));
+  client.configure('session_test', true);
+  const loading = client.loadIfCurrent(gate.result(event).artifact_id, () => gate.current(a));
+  gate.begin(null);
+  expect(gate.result(event)).toBeNull();
+  finish(); await loading;
+  expect(client.snapshot().artifact).toBeNull();
+  gate.cancel();
+  expect(gate.result(event)).toBeNull();
+  client.dispose();
+});
+
+test('planner edit result must match selected artifact, never history position', () => {
+  const gate = new CreateRequests();
+  const requestId = gate.begin('650e8400-e29b-41d4-a716-446655440000');
+  expect(gate.result({ type: 'artifact_update', request_id: requestId, artifact_id: fixture.artifact_id,
+    revision: 0, state_revision: 0, renderer: 'study_tracker_v1', artifact: fixture })).toBeNull();
 });

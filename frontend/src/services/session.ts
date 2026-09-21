@@ -112,7 +112,9 @@ export type WsMessage =
   | { type: "transcript"; text: string }
   | { type: "audio_interrupt"; generation_id?: number }
   | { type: "canvas_history"; items: CanvasHistoryItem[] }
-  | { type: "text_response"; title: string; content: string; content_type?: string; append?: boolean }
+  | { type: "generated_artifact"; result: unknown }
+  | { type: "create_status"; request_id: string; stage: string; message?: string; reload_artifact_id?: string }
+  | { type: "text_response"; request_id?: string; title: string; content: string; content_type?: string; append?: boolean }
   | { type: "detection_update"; state: string; confidence: number; cues?: string[]; landmarks?: Record<string, number>; face_detected?: boolean; detector_status?: string }
   | { type: "memory_updated"; fields: string[]; message: string }
   | { type: "guest_detected"; name?: string; photo_url?: string; confidence?: number }
