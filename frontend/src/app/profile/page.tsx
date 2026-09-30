@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   getIdentity, saveIdentity, verifyAuth, refreshSessionContext,
   getKnownPeople, addKnownPerson, updateKnownPerson, deleteKnownPerson,
   uploadPersonPhoto, uploadProfilePhoto,
   getMemoryCandidates, confirmMemoryCandidate, rejectMemoryCandidate, dismissMemoryCandidate,
   clearConversationHistory, clearCanvasHistory,
+  PresenceError,
   type KnownPerson, type MemoryCandidate,
 } from "@/services/session";
 
@@ -1047,25 +1049,60 @@ export default function ProfilePage() {
   const [uid, setUid] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [isGuest, setIsGuest] = useState(false);
+  const [activeTab, setActiveTab] = useState<"all" | "known" | "noticed" | "people" | "privacy" | "data">("all");
 
   useEffect(() => {
-    // Always verify auth first — the owner must never be locked out of their profile.
-    // Guest mode (rumiGuestMode in sessionStorage) is only honoured when auth fails.
-    verifyAuth()
-      .then((auth) => { setUid(auth.uid); return getIdentity(); })
-      .then((id) => {
-        if (!id) { router.push("/onboarding"); return; }
-        setIdentity(id);
-      })
-      .catch(() => {
-        // Auth failed — only then treat as guest
-        if (typeof window !== "undefined" && sessionStorage.getItem("rumiGuestMode") === "true") {
-          setIsGuest(true);
-        } else {
-          router.push("/");
+    let cancelled = false;
+
+    async function load() {
+      try {
+        // 1. Verify user is authenticated with Firebase
+        const authData = await verifyAuth();
+        if (cancelled) return;
+        setUid(authData.uid);
+
+        // 2. Fetch identity. Note: identity is protected by physical presence (_check_guest_mode_restriction)
+        try {
+          const id = await getIdentity();
+          if (cancelled) return;
+          if (!id) {
+            router.push("/onboarding");
+            return;
+          }
+          setIdentity(id);
+        } catch (idErr: unknown) {
+          if (cancelled) return;
+          const msg = idErr instanceof Error ? idErr.message : String(idErr);
+          const isPresenceBlock =
+            idErr instanceof PresenceError ||
+            (idErr as { status?: number })?.status === 403 ||
+            msg.includes("GUEST_PROTECTED") ||
+            (typeof window !== "undefined" && sessionStorage.getItem("rumiGuestMode") === "true");
+
+          if (isPresenceBlock) {
+            // User is authenticated, but owner presence is unverified / away / locked in guest mode
+            setIsGuest(true);
+          } else {
+            console.error("Failed to load profile identity:", idErr);
+          }
         }
-      })
-      .finally(() => setLoading(false));
+      } catch (authErr) {
+        if (cancelled) return;
+        // User is genuinely not signed in — redirect to login
+        console.warn("Unauthenticated profile visit, routing to login:", authErr);
+        router.push("/");
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   async function patch(updates: Partial<Identity>) {
@@ -1082,7 +1119,7 @@ export default function ProfilePage() {
   if (isGuest) {
     return (
       <main className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
-        <div className="rumi-card text-center" style={{ maxWidth: 360, display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+        <div className="rumi-card text-center" style={{ maxWidth: 380, display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" strokeWidth="1.5" strokeLinecap="round">
             <rect x="3" y="11" width="18" height="11" rx="2"/>
             <path d="M7 11V7a5 5 0 0110 0v4"/>
@@ -1090,9 +1127,12 @@ export default function ProfilePage() {
           <p className="font-display" style={{ fontSize: "1.2rem", color: "var(--gold)", margin: 0 }}>Profile Locked</p>
           <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: 0, lineHeight: 1.6 }}>
             This profile belongs to the owner of this session.<br />
-            Rumi has protected it from guest access.
+            Rumi has protected it until owner presence is verified.
           </p>
-          <button className="btn-ghost" onClick={() => router.back()} style={{ marginTop: 4 }}>Go back</button>
+          <div className="flex gap-2 justify-center" style={{ marginTop: 4 }}>
+            <button className="btn-ghost" onClick={() => router.back()}>Go back</button>
+            <Link href="/dashboard" className="btn-primary">Return to Rumi</Link>
+          </div>
         </div>
       </main>
     );
@@ -1118,9 +1158,19 @@ export default function ProfilePage() {
     );
   }
 
-  if (!identity) return null;
-
-  const [activeTab, setActiveTab] = useState<"all" | "known" | "noticed" | "people" | "privacy" | "data">("all");
+  if (!identity) {
+    return (
+      <main className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
+        <div className="rumi-card text-center" style={{ maxWidth: 380, display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+          <p className="font-display" style={{ fontSize: "1.2rem", color: "var(--gold)", margin: 0 }}>Unable to Load Profile</p>
+          <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: 0, lineHeight: 1.6 }}>
+            Could not retrieve profile information. Please return to Rumi or try again.
+          </p>
+          <Link href="/dashboard" className="btn-primary" style={{ marginTop: 4 }}>Return to Rumi</Link>
+        </div>
+      </main>
+    );
+  }
 
   const projects = (identity.projects as Project[] | undefined) ?? [];
   const interests = (identity.interests as string[] | undefined) ?? [];
@@ -1147,9 +1197,9 @@ export default function ProfilePage() {
               Confirmed identity, candidate observations, sensor permissions, and data controls.
             </p>
           </div>
-          <a href="/dashboard" className="btn-ghost" style={{ fontSize: "0.8125rem" }}>
+          <Link href="/dashboard" className="btn-ghost" style={{ fontSize: "0.8125rem" }}>
             ← Back to Rumi
-          </a>
+          </Link>
         </div>
 
         {/* Category Navigation Chips */}

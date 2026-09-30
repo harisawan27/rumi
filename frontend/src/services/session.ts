@@ -1,16 +1,44 @@
 import { auth } from "./firebase";
+import { onAuthStateChanged, type User } from "firebase/auth";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
 /**
+ * Custom error indicating the request was blocked by physical presence restriction (Guest mode/away).
+ */
+export class PresenceError extends Error {
+  status = 403;
+  code = "GUEST_PROTECTED";
+  constructor(message = "Presence unverified or guest mode active") {
+    super(message);
+    this.name = "PresenceError";
+  }
+}
+
+/**
+ * Resolves the currently signed-in Firebase user, waiting for initial auth state
+ * restoration if the user is not yet populated synchronously on mount/refresh.
+ */
+export async function ensureAuthUser(): Promise<User | null> {
+  if (auth.currentUser) return auth.currentUser;
+  if (typeof auth.authStateReady === "function") {
+    await auth.authStateReady();
+    if (auth.currentUser) return auth.currentUser;
+  }
+  return new Promise<User | null>((resolve) => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      unsub();
+      resolve(user);
+    });
+  });
+}
+
+/**
  * Always returns a fresh token from the currently signed-in Firebase user.
- * Does NOT fall back to sessionStorage — auth persistence (LOCAL) handled
- * by Firebase SDK itself, so auth.currentUser is always available after
- * onAuthStateChanged fires. Callers that need to wait for the auth state
- * should await a one-time onAuthStateChanged promise before calling this.
+ * Awaits initial auth state restoration if auth.currentUser is not yet populated.
  */
 async function getFreshToken(): Promise<string> {
-  const user = auth.currentUser;
+  const user = await ensureAuthUser();
   if (user) {
     return user.getIdToken(/* forceRefresh */ false);
   }
@@ -54,9 +82,15 @@ export async function bootstrap(): Promise<{ has_identity: boolean; name: string
 export async function getIdentity(): Promise<Record<string, unknown> | null> {
   const res = await fetch(`${BACKEND_URL}/identity`, { headers: await authHeaders() });
   if (res.status === 404) return null;
+  if (res.status === 403) {
+    const data = await res.json().catch(() => ({}));
+    throw new PresenceError(data.detail ?? "GUEST_PROTECTED");
+  }
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail ?? "Failed to load identity");
+    const err = new Error(data.detail ?? "Failed to load identity") as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
