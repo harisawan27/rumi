@@ -3,27 +3,44 @@
 import { useState, useEffect } from "react";
 import {
   signInWithPopup, signInWithRedirect, getRedirectResult,
-  GoogleAuthProvider,
+  GoogleAuthProvider, onAuthStateChanged,
 } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { auth } from "@/services/firebase";
-import { verifyAuth, getIdentity } from "@/services/session";
+import { verifyAuth, bootstrap } from "@/services/session";
 
 export default function SignInPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // On mount: if Firebase already has a signed-in user (e.g. browser restart),
+  // auto-route them without showing the login page.
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) { setLoading(false); return; }
+      try {
+        // verifyAuth confirms the token with the backend (incl. AUTHORISED_USER_UID check)
+        await verifyAuth();
+        const { has_identity } = await bootstrap();
+        router.push(has_identity ? "/dashboard" : "/onboarding");
+      } catch {
+        // Token invalid or unauthorised user — fall through to show the login button
+        setLoading(false);
+      }
+    });
+    return () => unsub();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Handle redirect result on page load (fallback flow for popup-blocked browsers)
   useEffect(() => {
     getRedirectResult(auth)
       .then(async (result) => {
-        if (!result) { setLoading(false); return; }
-        const idToken = await result.user.getIdToken();
-        sessionStorage.setItem("id_token", idToken);
+        if (!result) return; // handled by onAuthStateChanged above
         await verifyAuth();
-        const identity = await getIdentity();
-        router.push(identity ? "/dashboard" : "/onboarding");
+        const { has_identity } = await bootstrap();
+        router.push(has_identity ? "/dashboard" : "/onboarding");
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Sign-in failed");
@@ -39,12 +56,8 @@ export default function SignInPage() {
       const provider = new GoogleAuthProvider();
       try {
         // Primary: popup (instant, works on desktop + most mobile)
-        const result = await signInWithPopup(auth, provider);
-        const idToken = await result.user.getIdToken();
-        sessionStorage.setItem("id_token", idToken);
-        await verifyAuth();
-        const identity = await getIdentity();
-        router.push(identity ? "/dashboard" : "/onboarding");
+        await signInWithPopup(auth, provider);
+        // onAuthStateChanged will fire and route the user automatically
       } catch (popupErr: unknown) {
         // Fallback: redirect for browsers that block popups
         const code = (popupErr as { code?: string })?.code ?? "";

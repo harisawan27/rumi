@@ -249,11 +249,14 @@ class SessionManager:
         import json
         try:
             b64 = base64.b64encode(pcm_bytes).decode()
+            ack = getattr(self, "_create_ack_generation", None)
+            ack_metadata = ({"create_request_id": ack[1]} if ack and ack[0] == self._voice_controller.generation_id else {})
             await self._websocket.send_text(
                 json.dumps({
                     "type": "audio_response",
                     "data": b64,
                     "generation_id": self._voice_controller.generation_id,
+                    **ack_metadata,
                 })
             )
             self._reset_gemini_idle_timer()  # keep alive while response is streaming
@@ -515,7 +518,7 @@ class SessionManager:
             pass
         await self.dispatch_intervention("A", interaction_id, intervention_text)
         # Speak intervention aloud — only if no voice query is currently active
-        if not self._is_responding:
+        if not self._is_responding and not self.create_in_progress:
             self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
         logger.info("SessionManager: Trigger A fired — interaction %s", interaction_id)
 
@@ -546,7 +549,7 @@ class SessionManager:
         except Exception:
             pass
         await self.dispatch_intervention("B", interaction_id, intervention_text)
-        if not self._is_responding:
+        if not self._is_responding and not self.create_in_progress:
             self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
         logger.info("SessionManager: Trigger B fired — interaction %s", interaction_id)
 
@@ -564,7 +567,7 @@ class SessionManager:
             intervention_text=intervention_text,
         )
         await self.dispatch_intervention("C", interaction_id, intervention_text)
-        if not self._is_responding:
+        if not self._is_responding and not self.create_in_progress:
             self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
         logger.info("SessionManager: Trigger C fired — interaction %s", interaction_id)
 
@@ -582,7 +585,7 @@ class SessionManager:
             intervention_text=intervention_text,
         )
         await self.dispatch_intervention("E", interaction_id, intervention_text)
-        if not self._is_responding:
+        if not self._is_responding and not self.create_in_progress:
             self._speak_task = asyncio.create_task(self.voice_query(intervention_text))
         logger.info("SessionManager: Trigger E fired — interaction %s", interaction_id)
 
@@ -784,7 +787,7 @@ class SessionManager:
             pass
         return self._voice_gen
 
-    async def voice_query(self, text: str) -> None:
+    async def voice_query(self, text: str, *, create_request_id: str | None = None) -> None:
         """Natural voice conversation via Gemini Live.
 
         Managed by VoiceSessionController: increments generation, drains stale audio,
@@ -792,6 +795,7 @@ class SessionManager:
         """
         my_gen = self._voice_controller.start_generation("voice_query")
         self._voice_gen = my_gen
+        self._create_ack_generation = (my_gen, create_request_id) if create_request_id else None
         self._is_responding = True
 
         try:
@@ -827,6 +831,11 @@ class SessionManager:
             if self._voice_controller.generation_id == my_gen:
                 self._voice_controller.mark_complete(my_gen)
                 self._is_responding = False
+
+    @property
+    def create_in_progress(self) -> bool:
+        task = getattr(self, "_create_task", None)
+        return task is not None and not task.done()
 
     async def _speak(self, text: str) -> None:
         """Ensure Gemini Live is open, then speak the text aloud.

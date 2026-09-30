@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   verifyAuth,
+  bootstrap,
   getIdentity,
   saveIdentity,
   startSession,
@@ -27,6 +28,7 @@ import MobileSheet from "@/components/MobileSheet";
 import ConversationTimeline from "@/components/ConversationTimeline";
 import { canvasFromHistory } from "@/services/canvasHistory";
 import { CreateRequests, CREATE_PROGRESS } from "@/services/createRequests";
+import { CreateMetrics } from "@/services/createMetrics";
 import { useGeneratedArtifact } from "@/hooks/useGeneratedArtifact";
 
 interface ActiveIntervention {
@@ -101,11 +103,12 @@ export default function DashboardPage() {
   const artifactAllowed = sessionReady && identityVerified && !guestMode && observationState !== "away" && !isTabHidden;
   const generated = useGeneratedArtifact(sessionId, artifactAllowed, artifactAuthorizationSignal);
   const createRequests = useRef(new CreateRequests());
+  const createMetrics = useRef(new CreateMetrics());
   const [createProgress, setCreateProgress] = useState("");
   const canvasContextRef = useRef({ allowed: artifactAllowed, hasCanvas: !!canvasContent });
   canvasContextRef.current = { allowed: artifactAllowed, hasCanvas: !!canvasContent };
   useEffect(() => {
-    if (!artifactAllowed) { createRequests.current.cancel(); setCreateProgress(""); }
+    if (!artifactAllowed) { createRequests.current.cancel(); createMetrics.current.cancel(); setCreateProgress(""); }
   }, [artifactAllowed]);
   const visibleCanvas = artifactAllowed && generated.artifact
     ? { kind: "generated_ui" as const, artifact: generated.artifact } : canvasContent;
@@ -153,17 +156,20 @@ export default function DashboardPage() {
 
     async function init() {
       try {
+        // 1. Verify Firebase token with backend (no presence required)
         await verifyAuth();
-        const identity = await getIdentity();
-        if (!identity) { router.push("/onboarding"); return; }
-        setName(identity.name as string);
 
-        // Silently sync device timezone — never ask the user for this
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        if (identity.timezone !== tz) {
-          saveIdentity({ ...identity, timezone: tz }).catch(() => {});
-        }
+        // 2. Auth-only routing check — no presence required.
+        //    bootstrap() returns {has_identity, name} without triggering
+        //    _check_guest_mode_restriction, so this never 403s at login.
+        const boot = await bootstrap();
+        if (!boot.has_identity) { router.push("/onboarding"); return; }
+        setName(boot.name);
 
+        // 3. Start the Rumi session BEFORE loading any presence-protected data.
+        //    The WS connection triggers the camera/presence loop; once the backend
+        //    verifies the owner's face, it emits "identity_verified" over the socket,
+        //    at which point we load private data (timezone sync, canvas history, etc).
         const sid = await startSession();
         setSessionId(sid);
 
@@ -227,6 +233,9 @@ export default function DashboardPage() {
           wsRef.current = newWs;
           newWs.addEventListener("open", () => setSessionReady(true));
           newWs.addEventListener("close", () => {
+            createRequests.current.cancel(); createMetrics.current.cancel();
+            canvasContextRef.current.allowed = false;
+            setCreateProgress("");
             generated.client.revoke();
             setSessionReady(false);
             if (!shouldReconnectRef.current) return;
@@ -793,6 +802,7 @@ export default function DashboardPage() {
     lastSentQueryRef.current = text;
     const selected = generated.client.snapshot().artifact?.artifact_id ?? null;
     const requestId = createRequests.current.begin(selected);
+    createMetrics.current.begin(requestId);
     setCreateProgress("");
     const payload: Record<string, unknown> = { type: "user_text", text, request_id: requestId,
       active_artifact_id: selected, has_canvas_context: canvasContextRef.current.hasCanvas };
@@ -978,6 +988,7 @@ export default function DashboardPage() {
   }
 
   function cancelCreate() {
+    createMetrics.current.cancel();
     createRequests.current.cancel(); setCreateProgress("");
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "cancel_create" }));
   }
@@ -1015,7 +1026,7 @@ export default function DashboardPage() {
   // Uses a sequential promise chain (audioChainRef) so chunks always schedule
   // in arrival order — no race on nextPlayTimeRef regardless of WS batching.
   // audioGenRef lets stopAllAudio() cancel chunks still waiting in the chain.
-  function playAudio(b64: string, serverGenId?: number) {
+  function playAudio(b64: string, serverGenId?: number, createRequestId?: string) {
     if (serverGenId !== undefined && serverGenId < audioGenRef.current) {
       return; // Discard stale audio from prior generation immediately
     }
@@ -1056,6 +1067,9 @@ export default function DashboardPage() {
           nextPlayTimeRef.current = now + 0.05;
         }
         source.start(nextPlayTimeRef.current);
+        if (createRequestId && createRequests.current.current(createRequestId)) {
+          createMetrics.current.mark(createRequestId, "acknowledgement_audio_scheduled");
+        }
         nextPlayTimeRef.current += buffer.duration;
 
         activeSourcesRef.current.push(source);
@@ -1075,6 +1089,7 @@ export default function DashboardPage() {
   function handleWsMessage(msg: WsMessage) {
     if (msg.type === "create_status") {
       if (!createRequests.current.current(msg.request_id) || !canvasContextRef.current.allowed) return;
+      if (msg.stage === "understanding") createMetrics.current.mark(msg.request_id, "planner_started");
       setCreateProgress(msg.stage === "failed" ? (msg.message || "Could not update the tracker.") : CREATE_PROGRESS[msg.stage] || "");
       if (msg.stage === "failed" || msg.stage === "ready") setIsProcessing(false);
       if (msg.stage === "failed" && msg.reload_artifact_id && createRequests.current.matchesTarget(msg.request_id, msg.reload_artifact_id)) {
@@ -1087,9 +1102,12 @@ export default function DashboardPage() {
       const result = createRequests.current.result(msg.result);
       if (!result || !canvasContextRef.current.allowed) return;
       const current = () => createRequests.current.current(result.request_id) && canvasContextRef.current.allowed;
+      createMetrics.current.mark(result.request_id, "socket_result");
+      const loadStarted = performance.now();
       void generated.client.loadIfCurrent(result.artifact_id, current).then(() => {
         const artifact = generated.client.snapshot().artifact;
         if (!current() || !artifact || artifact.artifact_id !== result.artifact_id) return;
+        createMetrics.current.mark(result.request_id, "authorized_load", performance.now() - loadStarted);
         const reference = canvasFromHistory({ kind: "generated_ui", artifact_id: artifact.artifact_id,
           title: artifact.title, timestamp: artifact.updated_at });
         setCanvasHistory(previous => {
@@ -1098,7 +1116,15 @@ export default function DashboardPage() {
           setCanvasIndex(previous.length); return [...previous, reference];
         });
         setCanvasOpen(true); setActiveMobileTab("canvas"); setCreateProgress("Ready"); setIsProcessing(false);
-      }).catch(() => { if (current()) setCreateProgress("Could not open the tracker. Please reload."); });
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (current() && generated.client.snapshot().artifact?.artifact_id === result.artifact_id && document.querySelector('[aria-label="Study tracker"]')) {
+            createMetrics.current.mark(result.request_id, "canvas_interactive");
+          }
+        }));
+      }).catch(() => { if (current()) {
+        createMetrics.current.mark(result.request_id, "load_failed", performance.now() - loadStarted);
+        setCreateProgress("Could not open the tracker. Please reload.");
+      } });
     } else if (msg.type === "intervention") {
       const m = msg as InterventionMessage;
       setInterventionQueue(q => [...q, { interactionId: m.interaction_id, trigger: m.trigger, text: m.text }]);
@@ -1112,7 +1138,7 @@ export default function DashboardPage() {
       window.speechSynthesis.cancel();
     } else if (msg.type === "audio_response") {
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
-      playAudio(msg.data, msg.generation_id);
+      playAudio(msg.data, msg.generation_id, msg.create_request_id);
     } else if (msg.type === "canvas_history") {
       const items = msg.items.map(canvasFromHistory);
       if (items.length > 0) { setCanvasHistory(items); setCanvasIndex(items.length - 1); }
@@ -1176,6 +1202,17 @@ export default function DashboardPage() {
     } else if (msg.type === "identity_verified") {
       setIdentityVerified(true);
       setArtifactAuthorizationSignal(value => value + 1);
+      // Deferred: now that presence is confirmed, load full identity for timezone sync
+      // and ensure the display name is up to date with the stored profile.
+      getIdentity().then((identity) => {
+        if (!identity) return;
+        setName(identity.name as string);
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (identity.timezone !== tz) {
+          saveIdentity({ ...identity, timezone: tz }).catch(() => {});
+        }
+      }).catch(() => { /* non-critical — silently ignore */ });
+
     } else if (msg.type === "guest_detected") {
       cancelCreate(); canvasContextRef.current.allowed = false;
       generated.client.revoke();

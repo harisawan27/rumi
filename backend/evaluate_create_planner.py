@@ -15,6 +15,9 @@ from src.artifacts.contracts import GeneratedArtifact
 from src.artifacts.planner import PLAN_ADAPTER, needs_planner, plan_output, provider_for
 
 CASES = [
+    ("I need something where I can record how long I study every day.", False, "generated_ui:create"),
+    ("I want a place to log my studying", False, "generated_ui:create"),
+    ("I need something to track... how much I study this week.", False, "generated_ui:create"),
     ("hello", False, "conversation"),
     ("explain economics", False, "conversation"),
     ("Why do people procrastinate?", False, "conversation"),
@@ -127,7 +130,7 @@ async def evaluate():
             "ordinary_fast_path": quantiles([r["decision_ms"] for r in rows if not r["provider_called"] and r["expected"] == "conversation"]),
             "persistence_latency": "measured separately against emulator",
             "interactive_canvas_latency": "requires browser acceptance; not inferred from provider latency", "results": rows}
-        destination = Path(__file__).resolve().parents[1] / "docs/create-planner-evaluation.json"
+        destination = Path(__file__).resolve().parents[1] / "docs/create-planner-rollout-evaluation.json"
         destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({key: value for key, value in report.items() if key != "results"}, indent=2))
         from src.artifacts.planner import close_planner_clients

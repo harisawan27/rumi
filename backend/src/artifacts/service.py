@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from .contracts import (ArtifactResult, GeneratedArtifact, GeneratedUICreateDecision,
                         GeneratedUIEditDecision, SetSubjectColor, SetDailyGraphVisibility)
 from .planner import plan_output, create_intent
+from . import telemetry
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,10 @@ async def plan_and_execute(*, text, uid, session_id, request_id, selected_id,
                            has_canvas, timezone_name, repository, check, provider, progress):
     started = time.perf_counter()
     await check()
+    load_started = time.perf_counter()
     active = await repository.get_artifact(uid, selected_id) if selected_id else None
+    if selected_id:
+        telemetry.emit("active_artifact_loaded", started=load_started)
     await check()
     await progress("understanding")
     result = await plan_output(text, active, has_canvas, current_week(timezone_name), provider)
@@ -47,9 +51,12 @@ async def plan_and_execute(*, text, uid, session_id, request_id, selected_id,
             "title": decision.title, "spec": decision.spec, "state": {"entries": []},
             "created_at": now, "updated_at": now, "source_session_id": session_id,
             "validation_version": "1", "generation_version": "planner-1"})
+        telemetry.emit("artifact_constructed")
         await check()
         await progress("saving")
+        store_started = time.perf_counter()
         artifact = await repository.create_artifact(uid, artifact, check)
+        telemetry.emit("generated_artifact_created", started=store_started, reason="create")
         acknowledgment = "Done — I made you a tracker for this week. Add your subjects to get started."
         event = "artifact_result"
     else:
@@ -58,7 +65,9 @@ async def plan_and_execute(*, text, uid, session_id, request_id, selected_id,
             raise HTTPException(422, "UNSUPPORTED_ARTIFACT_EDIT")
         await progress("updating")
         await check()
+        store_started = time.perf_counter()
         artifact = await repository.update_spec(uid, decision, check)
+        telemetry.emit("generated_artifact_edit_succeeded", started=store_started, reason="edit")
         if isinstance(decision.edit, SetSubjectColor):
             label = next(s.label for s in artifact.spec.subjects if s.id == decision.edit.subject_id)
             acknowledgment = f"Done — {label} is {decision.edit.color_token} now."

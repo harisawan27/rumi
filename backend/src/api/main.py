@@ -11,17 +11,14 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 from src.auth.firebase_auth import verify_id_token, AuthError  # noqa: E402
+from src.artifacts.readiness import readiness as create_readiness
 
 @asynccontextmanager
 async def lifespan(app):
     await _startup()
-    if os.getenv("RUMI_CREATE_PLANNER_ENABLED") == "1" and os.getenv("RUMI_ARTIFACTS_ENABLED") == "1":
-        from src.artifacts.planner import prepare_planner_client
-        try:
-            await asyncio.wait_for(prepare_planner_client(_make_genai_client), timeout=60)
-        except Exception:
-            logger.warning("create_planner provider setup unavailable; requests will fail safely")
+    create_readiness.start(_make_genai_client)
     yield
+    await create_readiness.stop()
     from src.artifacts.planner import close_planner_clients
     await close_planner_clients()
 
@@ -70,8 +67,8 @@ async def _startup():
     uid = os.getenv("AUTHORISED_USER_UID", "")
     if uid:
         logger.warning(
-            "AUTHORISED_USER_UID is set (%s) — only that user can sign in. "
-            "Remove it from .env to enable multi-user mode.", uid
+            "AUTHORISED_USER_UID is set — only the configured user can sign in. "
+            "Remove it from .env to enable multi-user mode."
         )
     else:
         logger.info("[RUMI CORE] Multi-user mode active — identity layer ready.")
@@ -88,7 +85,7 @@ async def _startup():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.1.0", "create": create_readiness.snapshot()}
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +118,34 @@ def auth_verify(body: VerifyRequest):
         name = identity.get("name", "")
 
     return {"uid": decoded["uid"], "name": name, "authenticated": True}
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap — auth-only account routing check (no presence required)
+# ---------------------------------------------------------------------------
+
+@app.get("/bootstrap")
+def bootstrap(uid: str = Depends(get_current_uid)):
+    """Return whether this Firebase account already has an identity profile.
+
+    Requires only a valid Firebase ID token — no owner presence check.
+    Used by the login page and dashboard to decide between onboarding and
+    the main app without triggering a presence 403 before a session starts.
+
+    SECURITY NOTE: This endpoint deliberately does NOT return any private
+    profile data (memory, canvas, conversation history, known people, etc.).
+    Those remain protected by owner presence via _check_guest_mode_restriction.
+    Only the bare routing signal (onboarding needed or not) is exposed here.
+    """
+    from src.identity.identity_loader import load_core_identity, IdentityNotFoundError
+    try:
+        identity = load_core_identity(uid)
+        name = identity.get("name", "") or ""
+    except IdentityNotFoundError:
+        return {"has_identity": False, "name": ""}
+    except Exception:
+        raise HTTPException(status_code=503, detail="FIRESTORE_UNAVAILABLE")
+    return {"has_identity": True, "name": name}
 
 
 # ---------------------------------------------------------------------------
@@ -1404,12 +1429,17 @@ async def _planned_respond(*, text, uid, session_id, request_id, selected_id,
     from src.artifacts.planner import provider_for, create_intent, edit_intent
     from src.artifacts.service import plan_and_execute
     from pydantic import TypeAdapter
+    from src.artifacts import telemetry
+    import time
+    trace_token = None
     async def check():
         if getattr(mgr, "_create_request_token", None) is not token or asyncio.current_task().cancelling():
             raise asyncio.CancelledError()
         if os.getenv("RUMI_CREATE_PLANNER_ENABLED") != "1" or os.getenv("RUMI_ARTIFACTS_ENABLED") != "1":
             raise HTTPException(403, "ARTIFACT_ACCESS_DENIED")
+        started = time.perf_counter()
         await _authorize_canvas(uid, session_id)
+        telemetry.emit("authorization_checked", started=started)
         if getattr(mgr, "_create_request_token", None) is not token:
             raise asyncio.CancelledError()
     async def progress(stage, message=None, reload_artifact_id=None):
@@ -1418,6 +1448,14 @@ async def _planned_respond(*, text, uid, session_id, request_id, selected_id,
                                    "message": message, "reload_artifact_id": reload_artifact_id})
     try:
         request_id = TypeAdapter(ArtifactId).validate_python(request_id)
+        trace_token = telemetry.begin(request_id)
+        telemetry.emit("request_received")
+        if create_readiness.provider == "unavailable":
+            # Retry setup on actual use; no warm-up inference or sticky outage latch.
+            await create_readiness.prepare(_make_genai_client)
+            if create_readiness.provider == "unavailable":
+                await progress("failed", "CREATE is temporarily unavailable. You can still talk with Rumi.")
+                return
         outcome, result, acknowledgment = await plan_and_execute(text=text, uid=uid, session_id=session_id,
             request_id=request_id, selected_id=selected_id, has_canvas=has_canvas,
             timezone_name=getattr(mgr, "_timezone", "UTC"), repository=routes.repository,
@@ -1425,9 +1463,12 @@ async def _planned_respond(*, text, uid, session_id, request_id, selected_id,
         await check()
         if result is not None:
             await websocket.send_json({"type": "generated_artifact", "result": result.model_dump(mode="json")})
+            create_readiness.storage = "observed_available"
+            telemetry.emit("socket_result")
             await progress("ready")
             await check()
-            await mgr.voice_query(acknowledgment)
+            telemetry.emit("voice_acknowledgement_requested")
+            await mgr.voice_query("The requested tracker action is already complete. Say exactly one short acknowledgement, with no explanation or follow-up question: " + acknowledgment, create_request_id=request_id)
         elif isinstance(outcome.decision, ArtifactDecision):
             await progress("writing")
             content_result = await _flash_smart(text, None, mgr._system_prompt or "", force_canvas=True)
@@ -1450,8 +1491,12 @@ async def _planned_respond(*, text, uid, session_id, request_id, selected_id,
             await check()
             await mgr.voice_query(message if failed_tool else text)
     except asyncio.CancelledError:
-        pass
+        telemetry.emit("create_cancelled", reason="superseded")
     except HTTPException as exc:
+        reason = "authorization" if exc.status_code == 403 else "conflict" if exc.status_code == 409 else "storage" if exc.status_code == 503 else "invalid"
+        telemetry.emit("create_failed", reason=reason)
+        if exc.status_code == 503:
+            create_readiness.storage = "unavailable"
         logger.info("create_execution failed status=%s", exc.status_code)
         if exc.status_code == 403:
             if getattr(mgr, "_create_request_token", None) is token:
@@ -1466,11 +1511,15 @@ async def _planned_respond(*, text, uid, session_id, request_id, selected_id,
         except (HTTPException, asyncio.CancelledError):
             pass
     except Exception:
+        telemetry.emit("create_failed", reason="invalid")
         logger.info("create_execution failed category=invalid_or_unavailable")
         try:
             await progress("failed", "I couldn't create or update the tracker. Please try again.")
         except (HTTPException, asyncio.CancelledError):
             pass
+    finally:
+        if trace_token is not None:
+            telemetry.end(trace_token)
 
 
 @app.websocket("/ws/observe")

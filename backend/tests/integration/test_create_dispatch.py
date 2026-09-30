@@ -21,7 +21,7 @@ def socket_setup(monkeypatch):
     monkeypatch.setenv("RUMI_ARTIFACTS_ENABLED", "1")
     mgr = SimpleNamespace(_uid=uid, session_id=sid, status="active", is_guest_mode=False, _greeting_task=None,
         _system_prompt="", _timezone="UTC", connect_gemini=AsyncMock(), interrupt_audio=lambda reason: 1)
-    async def voice(text):
+    async def voice(text, **kwargs):
         await mgr._websocket.send_json({"type": "test_voice", "text": text})
     mgr.voice_query = voice
     monkeypatch.setitem(main._session_managers, uid, mgr)
@@ -59,7 +59,8 @@ def test_socket_create_progress_correlated_result_and_single_ack(socket_setup):
     assert result["request_id"] == rid and result["artifact"]["state"] == {"entries": []}
     assert result["artifact"]["spec"]["subjects"] == []
     assert [m["stage"] for m in messages if m["type"] == "create_status"] == ["understanding", "creating", "saving", "ready"]
-    assert messages[-1]["text"].startswith("Done")
+    assert "Say exactly one short acknowledgement" in messages[-1]["text"]
+    assert "Done" in messages[-1]["text"]
     assert len(socket_setup[2].list(socket_setup[4])) == 1
 
 

@@ -2,24 +2,19 @@ import { auth } from "./firebase";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
-/** Always returns a fresh token — forces refresh if close to expiry. */
+/**
+ * Always returns a fresh token from the currently signed-in Firebase user.
+ * Does NOT fall back to sessionStorage — auth persistence (LOCAL) handled
+ * by Firebase SDK itself, so auth.currentUser is always available after
+ * onAuthStateChanged fires. Callers that need to wait for the auth state
+ * should await a one-time onAuthStateChanged promise before calling this.
+ */
 async function getFreshToken(): Promise<string> {
   const user = auth.currentUser;
   if (user) {
-    const token = await user.getIdToken(/* forceRefresh */ false);
-    sessionStorage.setItem("id_token", token);
-    return token;
+    return user.getIdToken(/* forceRefresh */ false);
   }
-  // Fallback to cached token
-  const cached = sessionStorage.getItem("id_token");
-  if (cached) return cached;
-  throw new Error("No auth token — please sign in again");
-}
-
-function getToken(): string {
-  const token = sessionStorage.getItem("id_token");
-  if (!token) throw new Error("No auth token — please sign in again");
-  return token;
+  throw new Error("No authenticated user — please sign in again");
 }
 
 async function authHeaders(): Promise<HeadersInit> {
@@ -37,6 +32,21 @@ export async function verifyAuth(): Promise<{ uid: string; name: string }> {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.detail ?? "Auth verification failed");
+  }
+  return res.json();
+}
+
+/**
+ * Auth-only routing check — no presence required.
+ * Returns whether this Firebase account already has an identity profile
+ * so the app can route to onboarding vs dashboard without triggering
+ * a presence 403 before the session is started.
+ */
+export async function bootstrap(): Promise<{ has_identity: boolean; name: string }> {
+  const res = await fetch(`${BACKEND_URL}/bootstrap`, { headers: await authHeaders() });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail ?? "Bootstrap failed");
   }
   return res.json();
 }
@@ -108,7 +118,7 @@ export type WsMessage =
   | { type: "ping" }
   | { type: "paused" }
   | { type: "request_frame" }
-  | { type: "audio_response"; data: string; generation_id?: number }
+  | { type: "audio_response"; data: string; generation_id?: number; create_request_id?: string }
   | { type: "transcript"; text: string }
   | { type: "audio_interrupt"; generation_id?: number }
   | { type: "canvas_history"; items: CanvasHistoryItem[] }

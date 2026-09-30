@@ -14,6 +14,7 @@ from .contracts import (
     GeneratedUICreateDecision, GeneratedUIEditDecision, GeneratedArtifact,
     OUTPUT_DECISION_ADAPTER, OutputDecision, _immutable_array,
 )
+from . import telemetry
 
 log = logging.getLogger(__name__)
 _client_tasks = {}
@@ -92,7 +93,12 @@ def normalize(value):
 
 def create_intent(text):
     text = normalize(text)
-    return bool(re.search(r"\b(make|create|build|start|want|need|like)\b.*\b(study tracker|study time|track.*study|track.*studying|study.*track)\b", text))
+    # A broad request/domain gate, not a sentence-specific route: the structured
+    # planner still decides whether a tool or advice is appropriate.
+    request = re.search(r"\b(make|create|build|start|want|need|like)\b", text)
+    study = re.search(r"\b(study|studying)\b", text)
+    tracking = re.search(r"\b(tracker|track|record|log|measure|monitor|time)\b", text)
+    return bool(request and study and tracking)
 
 
 def edit_intent(text):
@@ -162,6 +168,7 @@ class PlanResult:
 
 async def plan_output(text, active, has_canvas, week_start, provider):
     started = time.perf_counter()
+    telemetry.emit("create_planner_invoked")
     context = context_projection(text, active, has_canvas, week_start)
     repair = None
     for attempt in range(2):
@@ -173,15 +180,22 @@ async def plan_output(text, active, has_canvas, week_start, provider):
             planned = PLAN_ADAPTER.validate_json(raw)
             decision = resolve_plan(planned, text, active, week_start)
             elapsed = (time.perf_counter() - started) * 1000
+            telemetry.emit("create_mode_selected", started=started,
+                           reason=getattr(decision, "operation", decision.mode))
             log.info("create_planner %s", json.dumps({"event": "decision", "requested_mode": planned.mode,
                 "accepted_mode": decision.mode, "repair_used": bool(attempt), "planner_ms": round(elapsed, 2)}))
             return PlanResult(decision, False, bool(attempt), elapsed)
         except (ValidationError, ValueError) as exc:
+            telemetry.emit("create_planner_invalid", reason="invalid")
             log.info("create_planner %s", json.dumps({"event": "validation_failure", "attempt": attempt + 1}))
             # No raw model output or validation values are returned to the model.
             summary = "invalid schema" if isinstance(exc, ValidationError) else str(exc)
             repair = f"Validation summary: {summary}. Reconsider the original request using only supported modes and exact subject labels. Use conversation for unsupported or missing targets."
+        except asyncio.TimeoutError:
+            telemetry.emit("create_planner_timeout", started=started, reason="timeout")
+            break
         except Exception:
+            telemetry.emit("create_provider_failed", started=started, reason="provider")
             # Provider errors/timeouts do not trigger paid retry loops.
             break
     elapsed = (time.perf_counter() - started) * 1000
