@@ -1,6 +1,6 @@
 # Windows executor: first implementation increment
 
-Date: 2026-11-11. This is the first increment of the
+Updated: 2026-11-12. This is an implementation increment of the
 [three-day plan](rumi-jarvis-research-and-three-day-plan.md), not a public release.
 Morph template migration remains deferred. Desktop actions are disabled by default
 on both the backend and dashboard.
@@ -16,6 +16,9 @@ on both the backend and dashboard.
 - Manual dashboard controls to list/read/create text files in one explicitly chosen
   folder and request launching Notepad or Explorer. Files are flat, UTF-8, and use
   `.txt`, `.md`, `.csv`, or `.json`. Existing files are never overwritten.
+- Typed requests and finalized speech transcripts now share the same local command
+  path. See [command and voice acceptance](rumi-desktop-command-acceptance.md).
+  The helper parses explicit supported requests locally, without a planning-model call.
 - File reads are limited to 64,000 bytes; creates to 16,000 characters and 64,000
   UTF-8 bytes. Listing checks at most 500 directory entries. Traversal, device names,
   alternate data streams, junctions, symbolic links and hard-linked files are rejected.
@@ -106,7 +109,7 @@ Pending before day-four users:
 
 - Real signed-in owner acceptance, physical microphone and camera checks, and visible
   Notepad/Explorer outcomes. Existing CREATE acceptance remains pending where recorded.
-- Typed/spoken natural-language desktop routing, interruption and single voice acknowledgement.
+- Physical acceptance of the implemented typed/spoken command routing and voice acknowledgement.
 - Public browser research with supporting links and a verified saved result.
 - App targeting/focus, guarded file organization and global stop shortcut.
 - A user-friendly installer/startup experience and tested hosted-browser pairing.

@@ -32,6 +32,7 @@ import { CreateRequests, CREATE_PROGRESS } from "@/services/createRequests";
 import { CreateMetrics } from "@/services/createMetrics";
 import { useGeneratedArtifact } from "@/hooks/useGeneratedArtifact";
 import DesktopControls from "@/components/DesktopControls";
+import { dispatchDesktop, isDesktopCommand, isDesktopStop, type DesktopHandle, type DesktopNotice } from "@/services/desktopCommands";
 
 interface ActiveIntervention {
   interactionId: string;
@@ -103,6 +104,10 @@ export default function DashboardPage() {
   const [showGuidance, setShowGuidance] = useState(false);
   const [artifactAuthorizationSignal, setArtifactAuthorizationSignal] = useState(0);
   const artifactAllowed = sessionReady && identityVerified && !guestMode && observationState !== "away" && !isTabHidden;
+  const desktopRef = useRef<DesktopHandle | null>(null);
+  const desktopTurn = useRef(false);
+  const desktopAck = useRef<string | null>(null);
+  const desktopAckTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const generated = useGeneratedArtifact(sessionId, artifactAllowed, artifactAuthorizationSignal);
   const createRequests = useRef(new CreateRequests());
   const createMetrics = useRef(new CreateMetrics());
@@ -111,6 +116,7 @@ export default function DashboardPage() {
   canvasContextRef.current = { allowed: artifactAllowed, hasCanvas: !!canvasContent };
   useEffect(() => {
     if (!artifactAllowed) { createRequests.current.cancel(); createMetrics.current.cancel(); setCreateProgress(""); }
+    if (!artifactAllowed) cancelDesktopAudio();
   }, [artifactAllowed]);
   const visibleCanvas = artifactAllowed && generated.artifact
     ? { kind: "generated_ui" as const, artifact: generated.artifact } : canvasContent;
@@ -558,7 +564,7 @@ export default function DashboardPage() {
     setIsTalking(false);
 
     const lower = text.toLowerCase();
-    const shouldAutoAttach = AUTO_ATTACH_KEYWORDS.some(kw => lower.includes(kw));
+    const shouldAutoAttach = !isDesktopCommand(text) && AUTO_ATTACH_KEYWORDS.some(kw => lower.includes(kw));
     if (shouldAutoAttach && captureFrameRef.current) {
       captureFrameRef.current().then(image => sendToRumi(text, image));
     } else {
@@ -722,16 +728,15 @@ export default function DashboardPage() {
     }
   }
 
-  // ── VAD barge-in ─────────────────────────────────────────────────────────
-  // Runs ONLY while Rumi is speaking. Any speech >2 chars immediately interrupts
-  // without requiring the wake word — true VAD barge-in.
+  // During a desktop acknowledgement, listen only for an explicit Stop/Cancel.
+  // Other recognized audio cannot become another computer action or chat turn.
   function stopBargeinListener() {
     bargeinRef.current?.abort();
     bargeinRef.current = null;
   }
 
   function startBargeinListener() {
-    if (!micEnabledRef.current || bargeinRef.current) return;
+    if (!micEnabledRef.current || bargeinRef.current || !desktopAck.current) return;
     // Chrome allows only one active SpeechRecognition per tab — kill wake word first
     // or it will get aborted mid-capture when barge-in tries to start.
     stopWakeWordListener();
@@ -743,36 +748,27 @@ export default function DashboardPage() {
     if (!SR) return;
 
     const rec = new SR();
-    rec.continuous = false;
-    rec.interimResults = true;
+    rec.continuous = true;
+    rec.interimResults = false;
     rec.lang = "en-US";
     bargeinRef.current = rec;
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
-      if (activeSourcesRef.current.length === 0) return; // no audio playing — echo of last word, ignore
-      const text = Array.from(e.results)
-        .map(r => r[0].transcript)
-        .join("")
-        .trim();
-      // Require 15+ chars — wind/fan produces short spurious transcripts.
-      // Real interruptions ("actually stop", "wait no", "hey rumi") are longer.
-      if (text.length >= 15) {
-        stopBargeinListener();
-        stopWakeWordListener(); // release mic fully before main listener grabs it
-        // Stop all audio immediately (synchronous) — no context close
-        stopAllAudio();
-        window.speechSynthesis.cancel();
-        // Notify backend to cancel its speak task
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
+      if (activeSourcesRef.current.length === 0 || !desktopAck.current || !canvasContextRef.current.allowed) return;
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal && isDesktopStop(e.results[i][0].transcript)) {
+          stopBargeinListener(); handleCancel(); return;
         }
-        // 250ms lets browser fully release mic before main listener grabs it
-        setTimeout(() => startListeningWithRef(), 250);
       }
     };
 
     rec.onend = () => {
-      if (bargeinRef.current === rec) bargeinRef.current = null;
+      if (bargeinRef.current === rec) {
+        bargeinRef.current = null;
+        setTimeout(() => {
+          if (!isUnmountedRef.current && speakingRef.current && desktopAck.current && canvasContextRef.current.allowed) startBargeinListener();
+        }, 200);
+      }
     };
 
     rec.onerror = () => {
@@ -782,18 +778,23 @@ export default function DashboardPage() {
     try { rec.start(); } catch { /* ignore race */ }
   }
 
-  // Start/stop barge-in listener whenever Rumi's speaking state changes
-  // 2s delay before enabling barge-in — protects the opening of every response
-  // from being instantly cancelled by ambient noise or mic pickup of Rumi's voice.
+  // Ordinary conversation keeps its existing behavior. Desktop acknowledgements
+  // accept only exact stop utterances, never echoed action instructions.
   useEffect(() => {
-    // Barge-in disabled — mic picks up Rumi's own speaker output and self-interrupts.
-    // Standard voice demo flow: Rumi speaks fully, user waits, then responds.
-    if (!speaking) stopBargeinListener();
+    if (speaking && desktopAck.current) startBargeinListener();
+    else stopBargeinListener();
     return () => stopBargeinListener();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speaking]);
 
   function sendToRumi(text: string, image?: string | null) {
+    if (!image && desktopRef.current && isDesktopStop(text)) {
+      handleCancel(); desktopRef.current.submit(text); return;
+    }
+    // Both finalized speech and typed input enter here. A consumed desktop
+    // request never also reaches the conversational model or CREATE planner.
+    if (!image && dispatchDesktop(text, desktopRef.current)) return;
+    desktopTurn.current = false; desktopAck.current = null;
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       setRumiEmotion("neutral");
       setTranscript("");
@@ -834,6 +835,8 @@ export default function DashboardPage() {
   ];
 
   function handleFollowUp(text: string, image?: string | null, attachment?: { dataUrl: string; name: string }) {
+    if (!image && !attachment && dispatchDesktop(text, desktopRef.current)) return;
+    desktopTurn.current = false; desktopAck.current = null;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     createRequests.current.cancel(); setCreateProgress("");
     lastFollowUpQueryRef.current = text;
@@ -916,13 +919,15 @@ export default function DashboardPage() {
   }, [screenActive]);
 
   function handleCancel() {
+    desktopRef.current?.stop();
+    cancelDesktopAudio();
     cancelCreate();
     stopAllAudio();
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
     }
     setIsProcessing(false);
-    recognitionRef.current?.stop();
+    stopListening(false);
     isTalkingRef.current = false;
     setIsTalking(false);
     setTranscript("");
@@ -1013,6 +1018,35 @@ export default function DashboardPage() {
   }
 
   // ── Audio interrupt helper ────────────────────────────────────────────────
+  function cancelDesktopAudio() {
+    if (!desktopTurn.current && !desktopAck.current) return;
+    if (desktopAckTimeout.current) clearTimeout(desktopAckTimeout.current);
+    desktopTurn.current = false;
+    desktopAck.current = null;
+    stopAllAudio();
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
+    setIsProcessing(false);
+  }
+
+  function startDesktopCommand(id: string) {
+    desktopTurn.current = true; desktopAck.current = id;
+    if (desktopAckTimeout.current) clearTimeout(desktopAckTimeout.current);
+    desktopAckTimeout.current = setTimeout(() => {
+      if (desktopAck.current === id) { desktopTurn.current = false; desktopAck.current = null; }
+    }, 90000);
+    cancelCreate(); stopAllAudio();
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "audio_interrupt" }));
+    setIsProcessing(true); setTranscript("");
+  }
+
+  function finishDesktopCommand(notice: DesktopNotice) {
+    if (!canvasContextRef.current.allowed || desktopAck.current !== notice.request_id) return;
+    setIsProcessing(false); setTranscript("");
+    // Only coarse receipt metadata reaches the voice service. File names and
+    // contents remain in the local helper and the private computer panel.
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "desktop_result", ...notice }));
+  }
+
   // Stops all currently playing audio sources immediately (synchronous).
   // Does NOT close the AudioContext — closing is async and the context keeps
   // playing during the close, which was causing two voices simultaneously.
@@ -1028,7 +1062,11 @@ export default function DashboardPage() {
   // Uses a sequential promise chain (audioChainRef) so chunks always schedule
   // in arrival order — no race on nextPlayTimeRef regardless of WS batching.
   // audioGenRef lets stopAllAudio() cancel chunks still waiting in the chain.
-  function playAudio(b64: string, serverGenId?: number, createRequestId?: string) {
+  function playAudio(b64: string, serverGenId?: number, createRequestId?: string, desktopRequestId?: string) {
+    const desktopAudioAllowed = () => desktopRequestId
+      ? desktopAck.current === desktopRequestId && canvasContextRef.current.allowed && !isTalkingRef.current
+      : !desktopTurn.current || desktopAck.current === null;
+    if (!desktopAudioAllowed()) return;
     if (serverGenId !== undefined && serverGenId < audioGenRef.current) {
       return; // Discard stale audio from prior generation immediately
     }
@@ -1045,7 +1083,7 @@ export default function DashboardPage() {
 
     audioChainRef.current = audioChainRef.current.then(async () => {
       // Chunk was cancelled by stopAllAudio() while waiting in the chain
-      if (audioGenRef.current !== myGen || (serverGenId !== undefined && serverGenId < audioGenRef.current)) return;
+      if (!desktopAudioAllowed() || audioGenRef.current !== myGen || (serverGenId !== undefined && serverGenId < audioGenRef.current)) return;
 
       try {
         if (!playCtxRef.current) playCtxRef.current = new AudioContext({ sampleRate: 24000 });
@@ -1055,7 +1093,7 @@ export default function DashboardPage() {
         // Safe here because the chain serialises calls — no concurrent awaits.
         if (ctx.state === "suspended") await ctx.resume();
 
-        if (audioGenRef.current !== myGen || (serverGenId !== undefined && serverGenId < audioGenRef.current)) return;
+        if (!desktopAudioAllowed() || audioGenRef.current !== myGen || (serverGenId !== undefined && serverGenId < audioGenRef.current)) return;
 
         const buffer = ctx.createBuffer(1, float32.length, 24000);
         buffer.copyToChannel(float32, 0);
@@ -1069,6 +1107,13 @@ export default function DashboardPage() {
           nextPlayTimeRef.current = now + 0.05;
         }
         source.start(nextPlayTimeRef.current);
+        if (desktopRequestId) {
+          // A correlated reply proves the old server turn has been interrupted.
+          // Let later proactive speech use the usual generation checks again.
+          desktopTurn.current = false;
+          // Clear recognition buffers before output can be heard by the mic.
+          stopWakeWordListener(); stopListening(false); speakingRef.current = true;
+        }
         if (createRequestId && createRequests.current.current(createRequestId)) {
           createMetrics.current.mark(createRequestId, "acknowledgement_audio_scheduled");
         }
@@ -1140,7 +1185,7 @@ export default function DashboardPage() {
       window.speechSynthesis.cancel();
     } else if (msg.type === "audio_response") {
       setRumiEmotion(prev => prev === "neutral" || prev === "thinking" ? "happy" : prev);
-      playAudio(msg.data, msg.generation_id, msg.create_request_id);
+      playAudio(msg.data, msg.generation_id, msg.create_request_id, msg.desktop_request_id);
     } else if (msg.type === "canvas_history") {
       const items = msg.items.map(canvasFromHistory);
       if (items.length > 0) { setCanvasHistory(items); setCanvasIndex(items.length - 1); }
@@ -1345,7 +1390,8 @@ export default function DashboardPage() {
             onOpenMemoryCenter={() => router.push("/profile")}
           />
 
-          {process.env.NEXT_PUBLIC_RUMI_DESKTOP_ENABLED === "1" && <DesktopControls sessionId={sessionId} allowed={artifactAllowed} />}
+          {process.env.NEXT_PUBLIC_RUMI_DESKTOP_ENABLED === "1" && <DesktopControls ref={desktopRef} sessionId={sessionId} allowed={artifactAllowed}
+            onCommandStart={startDesktopCommand} onCommandResult={finishDesktopCommand} onDisconnect={cancelDesktopAudio} />}
           {process.env.NEXT_PUBLIC_ARTIFACT_PROOF_MODE === "1" && (
             <div className="flex flex-wrap gap-2 text-xs" aria-label="Study tracker preview controls">
               <button className="btn-ghost min-h-11" disabled={!artifactAllowed || generated.busy} onClick={() => {

@@ -152,7 +152,7 @@ export type WsMessage =
   | { type: "ping" }
   | { type: "paused" }
   | { type: "request_frame" }
-  | { type: "audio_response"; data: string; generation_id?: number; create_request_id?: string }
+  | { type: "audio_response"; data: string; generation_id?: number; create_request_id?: string; desktop_request_id?: string }
   | { type: "transcript"; text: string }
   | { type: "audio_interrupt"; generation_id?: number }
   | { type: "canvas_history"; items: CanvasHistoryItem[] }

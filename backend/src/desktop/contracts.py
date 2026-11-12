@@ -45,11 +45,10 @@ class OpenApp(Closed):
 Action = Annotated[Union[ListFiles, ReadText, CreateText, OpenApp], Field(discriminator="operation")]
 
 
-class ActionRequest(Closed):
+class RequestIdentity(Closed):
     request_id: str
     session_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     expires_at: int
-    action: Action
 
     @field_validator("request_id")
     @classmethod
@@ -58,3 +57,17 @@ class ActionRequest(Closed):
         if parsed.version != 4 or str(parsed) != value:
             raise ValueError("Canonical UUID4 required")
         return value
+
+
+class ActionRequest(RequestIdentity):
+    action: Action
+
+
+class CommandRequest(RequestIdentity):
+    text: str = Field(min_length=1, max_length=18000)
+    last_file: str | None = None
+
+    @field_validator("last_file")
+    @classmethod
+    def reference(cls, value):
+        return NamedFile(name=value).name if value is not None else None

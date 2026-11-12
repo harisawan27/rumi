@@ -1645,6 +1645,14 @@ async def ws_observe(websocket: WebSocket, session_id: str, token: str):
                 # Frontend-initiated manual interruption.
                 gen_id = mgr.interrupt_audio("frontend_audio_interrupt")
                 logger.info("ws_observe: audio_interrupt from frontend — suppressed + cancelled (gen=%d)", gen_id)
+            elif msg.get("type") == "desktop_result":
+                from src.desktop.acknowledgement import acknowledge
+                from pydantic import ValidationError
+                try:
+                    await acknowledge(uid, session_id, mgr, _session_managers,
+                                      {key: value for key, value in msg.items() if key != "type"})
+                except (HTTPException, ValidationError):
+                    await websocket.send_json({"type": "error", "code": "DESKTOP_ACK_UNAVAILABLE"})
             elif msg.get("type") == "user_text":
                 # Web Speech API transcript — Flash generates text (single source of truth),
                 # Live speaks it verbatim, canvas opens 1500ms later (voice-first UX).

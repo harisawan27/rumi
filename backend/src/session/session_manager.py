@@ -251,6 +251,9 @@ class SessionManager:
             b64 = base64.b64encode(pcm_bytes).decode()
             ack = getattr(self, "_create_ack_generation", None)
             ack_metadata = ({"create_request_id": ack[1]} if ack and ack[0] == self._voice_controller.generation_id else {})
+            desktop_ack = getattr(self, "_desktop_ack_generation", None)
+            if desktop_ack and desktop_ack[0] == self._voice_controller.generation_id:
+                ack_metadata["desktop_request_id"] = desktop_ack[1]
             await self._websocket.send_text(
                 json.dumps({
                     "type": "audio_response",
@@ -787,7 +790,7 @@ class SessionManager:
             pass
         return self._voice_gen
 
-    async def voice_query(self, text: str, *, create_request_id: str | None = None) -> None:
+    async def voice_query(self, text: str, *, create_request_id: str | None = None, desktop_request_id: str | None = None) -> None:
         """Natural voice conversation via Gemini Live.
 
         Managed by VoiceSessionController: increments generation, drains stale audio,
@@ -796,6 +799,7 @@ class SessionManager:
         my_gen = self._voice_controller.start_generation("voice_query")
         self._voice_gen = my_gen
         self._create_ack_generation = (my_gen, create_request_id) if create_request_id else None
+        self._desktop_ack_generation = (my_gen, desktop_request_id) if desktop_request_id else None
         self._is_responding = True
 
         try:

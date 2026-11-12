@@ -113,3 +113,89 @@ test.each(['guest', 'new-session'])('private results are hidden before cleanup e
   expect(frames[0]).not.toContain('private file contents');
   expect(frames[0]).not.toContain('private-folder');
 });
+
+test('typed and finalized speech use the same local command path and report metadata only', async () => {
+  const ref = React.createRef();
+  const notice = jest.fn();
+  global.fetch.mockImplementation(async (url, options) => {
+    if (url.endsWith('/pair')) return { ok: true, json: async () => ({ device_secret: 's'.repeat(40), workspace: 'test-workspace' }) };
+    if (url.endsWith('/stop')) return { ok: true };
+    const request = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ request_id: request.request_id, state: 'succeeded', operation: request.text.startsWith('Read') ? 'read_text' : 'create_text', file: 'notes.txt', result: { text: 'private content' } }) };
+  });
+  render(<DesktopControls ref={ref} sessionId="session" allowed={true} onCommandResult={notice} />);
+  fireEvent.click(screen.getByText('Computer'));
+  fireEvent.change(screen.getByLabelText('Pairing code'), { target: { value: 'p'.repeat(32) } });
+  fireEvent.click(screen.getByText('Connect', { exact: true }));
+  await screen.findByText('Selected folder: test-workspace');
+  fireEvent.change(screen.getByLabelText('Computer request'), { target: { value: 'Create notes.txt with content: private content' } });
+  fireEvent.click(screen.getByText('Send request'));
+  await screen.findByText('File created and its contents verified.');
+  // Dashboard forwards a finalized speech transcript through this same handle.
+  act(() => { ref.current.submit('Read that file'); });
+  await screen.findByText('private content');
+  const commands = global.fetch.mock.calls.filter(([url]) => url.endsWith('/command')).map(([, options]) => JSON.parse(options.body));
+  expect(commands).toHaveLength(2);
+  expect(commands[1]).toMatchObject({ text: 'Read that file', last_file: 'notes.txt', session_id: 'session' });
+  expect(notice).toHaveBeenCalledTimes(2);
+  expect(JSON.stringify(notice.mock.calls)).not.toMatch(/private content|notes\.txt/);
+});
+
+test('spoken stop cancels pending command and suppresses a late success acknowledgement', async () => {
+  const ref = React.createRef();
+  const notice = jest.fn();
+  let finish;
+  global.fetch.mockImplementation(async (url, options) => {
+    if (url.endsWith('/pair')) return { ok: true, json: async () => ({ device_secret: 's'.repeat(40), workspace: 'test-workspace' }) };
+    if (url.endsWith('/stop')) return { ok: true };
+    const request = JSON.parse(options.body);
+    return new Promise(resolve => { finish = () => resolve({ ok: true, json: async () => ({ request_id: request.request_id, state: 'succeeded', operation: 'create_text', file: 'notes.txt', result: {} }) }); });
+  });
+  render(<DesktopControls ref={ref} sessionId="session" allowed={true} onCommandResult={notice} />);
+  fireEvent.click(screen.getByText('Computer'));
+  fireEvent.change(screen.getByLabelText('Pairing code'), { target: { value: 'p'.repeat(32) } });
+  fireEvent.click(screen.getByText('Connect', { exact: true }));
+  await screen.findByText('Selected folder: test-workspace');
+  act(() => { ref.current.submit('Create notes.txt with content: hello'); });
+  await waitFor(() => expect(finish).toBeDefined());
+  act(() => { ref.current.submit('Stop'); });
+  await act(async () => { finish(); });
+  expect(notice).not.toHaveBeenCalled();
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/command'))).toHaveLength(1);
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/stop'))).toHaveLength(1);
+  expect(screen.queryByText('File created and its contents verified.')).not.toBeInTheDocument();
+});
+
+test('server authorization loss immediately disconnects and clears private state', async () => {
+  global.fetch.mockImplementation(async url => {
+    if (url.endsWith('/pair')) return { ok: true, json: async () => ({ device_secret: 's'.repeat(40), workspace: 'test-workspace' }) };
+    if (url.endsWith('/stop')) return { ok: true };
+    return { ok: false, status: 403 };
+  });
+  await connect();
+  fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'private draft' } });
+  fireEvent.click(screen.getByText('Read file'));
+  await screen.findByText(/Pairing or owner verification failed/);
+  expect(screen.queryByDisplayValue('private draft')).not.toBeInTheDocument();
+  expect(screen.queryByText('Selected folder: test-workspace')).not.toBeInTheDocument();
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/stop'))).toHaveLength(1);
+});
+
+test('a late authorization error cannot disconnect a newly paired session', async () => {
+  let finish;
+  global.fetch.mockImplementation(async url => {
+    if (url.endsWith('/pair')) return { ok: true, json: async () => ({ device_secret: 's'.repeat(40), workspace: 'test-workspace' }) };
+    if (url.endsWith('/stop')) return { ok: true };
+    return new Promise(resolve => { finish = () => resolve({ ok: false, status: 403 }); });
+  });
+  await connect();
+  fireEvent.click(screen.getByText('Read file'));
+  await waitFor(() => expect(finish).toBeDefined());
+  fireEvent.click(screen.getByText('Stop and disconnect'));
+  fireEvent.change(screen.getByLabelText('Pairing code'), { target: { value: 'p'.repeat(32) } });
+  fireEvent.click(screen.getByText('Connect', { exact: true }));
+  await screen.findByText('Selected folder: test-workspace');
+  await act(async () => { finish(); });
+  expect(screen.getByText('Selected folder: test-workspace')).toBeInTheDocument();
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/stop'))).toHaveLength(1);
+});

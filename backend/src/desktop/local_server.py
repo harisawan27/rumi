@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import Field
-from .contracts import Closed, ActionRequest
+from .contracts import Closed, ActionRequest, CommandRequest
+from .commands import parse_command, Clarification
 from .executor import Executor
 from .workspace import Workspace, WorkspaceError
 
@@ -104,6 +105,29 @@ def create_local_app(*, root, journal, origin, authorize, pairing_code, port=876
         device(x_rumi_device)
         executor.stop()
         return {"state": "stopped"}
+
+    @app.post("/command")
+    def command(body: CommandRequest, authorization: str = Header(default=""), x_rumi_device: str = Header(default="")):
+        device(x_rumi_device)
+        token = credential(authorization)
+        try:
+            owner_check(token, body.session_id)
+            executor.desktop_check()
+            if executor.stopped.is_set():
+                raise WorkspaceError("stopped")
+            if not time.time() < body.expires_at <= time.time() + 120:
+                raise WorkspaceError("expired")
+            try:
+                action = parse_command(body.text, body.last_file)
+            except Clarification as exc:
+                return {"request_id": body.request_id, "state": "clarification", "message": str(exc)}
+            result = executor.execute(ActionRequest(**body.model_dump(exclude={"text", "last_file"}), action=action), token)
+            return {**result, "operation": action.operation,
+                    "file": action.name if action.operation in ("read_text", "create_text") else None}
+        except WorkspaceError as exc:
+            raise HTTPException(409 if exc.code == "busy" else 403, exc.code)
+        except Exception:
+            raise HTTPException(403, "OWNER_VERIFICATION_REQUIRED")
 
     # No remote resume: restart/re-pair after an emergency stop.
     return app
