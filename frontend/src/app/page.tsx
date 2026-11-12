@@ -169,6 +169,9 @@ export default function SignInPage() {
         <p className="text-center mt-6 text-xs" style={{ color: "var(--muted)" }}>
           Your identity is your own. Rumi only remembers what you share.
         </p>
+        <a href="/desktop/" className="block text-center mt-5 text-sm underline underline-offset-4" style={{ color: "var(--text-2)" }}>
+          Explore the desktop preview · no sign-in or cloud AI
+        </a>
       </div>
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

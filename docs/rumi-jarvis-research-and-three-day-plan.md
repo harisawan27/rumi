@@ -1,5 +1,21 @@
 # Rumi desktop assistant: repository research and three-day release plan
 
+## Subsequent direction
+
+The user has deferred Gemini-dependent acceptance while API access is unavailable
+and requested an offline-first Windows assistant. The original three-day schedule
+below is historical, not a current production-release commitment. Everyday commands
+should run locally; cloud AI is optional for creative or complex requests.
+
+The [desktop interface preview](rumi-desktop-interface-preview.md) is the next
+implemented design milestone: a standalone React workspace, command bar, companion,
+local appearance settings and explicitly simulated workflows. It is not a Windows
+installer or an offline authorization implementation. Local authorization, native
+packaging and broader verified Windows adapters remain subsequent engineering work.
+Real owner/voice acceptance remains pending; previous automated evidence is retained.
+
+## Original research and schedule
+
 Research date: 2026-11-11 (Asia/Karachi). Baseline inspected: `6293b85` on master,
 which includes `adc9171` and the subsequent CREATE rollout work in `6b9413f`.
 The user selected **browser research, files, app control, and voice** as the release scope.
