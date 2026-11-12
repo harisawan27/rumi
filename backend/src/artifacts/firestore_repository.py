@@ -6,6 +6,8 @@ Presence and artifact commits are NOT one atomic authorization transaction.
 """
 import asyncio
 import os
+import random
+import time
 from datetime import datetime, timezone
 from threading import Event
 from uuid import uuid4
@@ -105,8 +107,18 @@ class FirestoreArtifactRepository:
         user = self._user(db, uid)
         control = user.collection("artifact_control").document("state")
         tx = db.transaction(max_attempts=5)
+        attempt = 0
         @firestore.transactional
         def commit(transaction):
+            nonlocal attempt
+            if attempt:
+                # The SDK retries confirmed Aborted commits immediately. Jitter
+                # before acquiring new read locks prevents competing clients from
+                # repeatedly colliding (also observed with the local emulator).
+                # Unknown commit outcomes are NOT retried by this callback.
+                check()
+                time.sleep(random.uniform(0.05, 0.2) * attempt)
+            attempt += 1
             status = control.get(transaction=transaction, retry=None, timeout=5).to_dict() or {}
             if clearing_token is not None:
                 if status.get("clearing_token") != clearing_token:

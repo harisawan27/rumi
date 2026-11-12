@@ -31,6 +31,7 @@ import { canvasFromHistory } from "@/services/canvasHistory";
 import { CreateRequests, CREATE_PROGRESS } from "@/services/createRequests";
 import { CreateMetrics } from "@/services/createMetrics";
 import { useGeneratedArtifact } from "@/hooks/useGeneratedArtifact";
+import DesktopControls from "@/components/DesktopControls";
 
 interface ActiveIntervention {
   interactionId: string;
@@ -1344,6 +1345,7 @@ export default function DashboardPage() {
             onOpenMemoryCenter={() => router.push("/profile")}
           />
 
+          {process.env.NEXT_PUBLIC_RUMI_DESKTOP_ENABLED === "1" && <DesktopControls sessionId={sessionId} allowed={artifactAllowed} />}
           {process.env.NEXT_PUBLIC_ARTIFACT_PROOF_MODE === "1" && (
             <div className="flex flex-wrap gap-2 text-xs" aria-label="Study tracker preview controls">
               <button className="btn-ghost min-h-11" disabled={!artifactAllowed || generated.busy} onClick={() => {

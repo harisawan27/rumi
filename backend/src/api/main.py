@@ -294,8 +294,10 @@ _session_managers: dict[str, SessionManager] = {}
 
 from src.artifacts.access import authorize as authorize_artifact, require_session
 from src.artifacts.routes import create_router as create_artifact_router
+from src.desktop.routes import create_router as create_desktop_router
 
 app.include_router(create_artifact_router(get_current_uid, _session_managers))
+app.include_router(create_desktop_router(get_current_uid, _session_managers))
 
 
 @app.middleware("http")

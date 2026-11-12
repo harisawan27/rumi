@@ -129,10 +129,12 @@ async def test_two_clients_only_one_revision_wins(repo, uid, domain):
     try:
         requests = [r.update_state(uid, state(a), check) if domain == "state" else r.update_spec(uid, spec(a), check) for r in (repo, other)]
         results = await asyncio.wait_for(asyncio.gather(*requests, return_exceptions=True), 90)
-        assert sum(isinstance(r, GeneratedArtifact) for r in results) == 1
+        diagnostics = [(repr(r), repr(getattr(r, "__cause__", None)),
+                        repr(getattr(getattr(r, "__cause__", None), "__cause__", None))) for r in results]
+        assert sum(isinstance(r, GeneratedArtifact) for r in results) == 1, diagnostics
         failures = [r for r in results if isinstance(r, Exception)]
         assert len(failures) == 1
-        assert isinstance(failures[0], HTTPException) and failures[0].status_code == 409
+        assert isinstance(failures[0], HTTPException) and failures[0].status_code == 409, diagnostics
         current = await repo.get_artifact(uid, a.artifact_id)
         assert (current.state_revision, current.revision) == ((1, 0) if domain == "state" else (0, 1))
     finally:
