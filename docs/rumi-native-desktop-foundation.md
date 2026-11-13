@@ -93,12 +93,25 @@ tree showed the rendered local UI, **Native connection ready**, cloud/microphone
 off, and disabled command controls before folder consent. This establishes startup
 and bridge initialization, not end-to-end command success.
 
-Live folder consent, file commands, app launching, minimize/lock, and visual layout
-acceptance remain pending. The Windows automation tool reported `FrameArrived`
-and `window capture` timeouts, then `coordinate input geometry is unavailable`;
-reading the accessibility tree recovered but input could not be verified. A user
-handoff was requested for the disposable `desktop/build/acceptance` folder. These
-pending checks must not be reported as passed from the mocked permission/launch tests.
+Live follow-up observations on the same build:
+
+- After the user completed the native consent flow, the actual window showed
+  `Connected to your folder`, the disposable `desktop/build/acceptance` path,
+  enabled command controls and a decreasing permission countdown.
+- The create request for `native-acceptance.txt` completed through the app. Its
+  result panel showed `File created and its contents verified.` Independent
+  filesystem readback matched exactly `Rumi offline Windows acceptance.` (32
+  bytes). The persistent receipt recorded `succeeded` with `bytes: 32`.
+- These observations establish native consent and one real UI-to-file operation.
+  They do not establish the read-command path from an independent file readback.
+
+Live listing, overwrite rejection, read command, app launching, Stop, minimize/lock
+and visual layout acceptance remain pending. The Windows automation tool reported
+`FrameArrived` and `window capture` timeouts, then `coordinate input geometry is
+unavailable`. Accessibility reads and setting the command field worked, but clicks
+and keyboard submission could not be verified reliably. A user handoff is pending
+for the remaining commands. Do not report those checks as passed from mocked
+permission/launch tests or from the successful create alone.
 
 Non-failing tooling notices: stale Browserslist data; backend Starlette/httpx and
 Google Python-version deprecations; PyInstaller optional module warnings. No live
