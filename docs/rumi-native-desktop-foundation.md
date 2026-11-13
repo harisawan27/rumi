@@ -85,8 +85,9 @@ Validation on 2026-11-13:
 
 Local artifact: `desktop/dist/RumiDesktop-Windows.zip` (about 18.4 MiB).
 SHA-256: `0E831795C4D628BB2583E8B5AC6EDDF3FA2AD7189E8058D476B5CF574CF217D1`.
-The executable was launched from this package's source folder. Full clean-machine
-installation and command acceptance have not been completed.
+The executable was launched from this package's source folder. The user-assisted
+command smoke test below passed on this laptop. Clean-machine installation and the
+remaining reliability/release gates have not been completed.
 
 The packaged executable started on this laptop. Its actual WebView2 accessibility
 tree showed the rendered local UI, **Native connection ready**, cloud/microphone
@@ -102,16 +103,39 @@ Live follow-up observations on the same build:
   result panel showed `File created and its contents verified.` Independent
   filesystem readback matched exactly `Rumi offline Windows acceptance.` (32
   bytes). The persistent receipt recorded `succeeded` with `bytes: 32`.
-- These observations establish native consent and one real UI-to-file operation.
-  They do not establish the read-command path from an independent file readback.
+- The user then ran listing, attempted to overwrite the note with `replacement`,
+  read it with `Read that file`, launched Notepad and clicked Stop. The user
+  confirmed that all behaved as expected, including the original read result.
+- Read-only inspection of the native journal found this complete ordered receipt
+  sequence: `succeeded` with `bytes: 32`, `succeeded`, `failed` with
+  `reason: already_exists`, `succeeded`, and `dispatched` with `dispatched: true`
+  and `verified_window: false`. This corroborates the reported command sequence;
+  list/read contents and operation names are intentionally absent from the journal.
+- Independent file readback after the overwrite test still matched the original
+  32 bytes exactly. The current Windows inventory contained `Untitled - Notepad`
+  from `C:\Windows\System32\notepad.exe`; it was absent before the test. The
+  executor correctly reported dispatch rather than claiming verified focus.
+- The final Rumi accessibility tree showed `Local permission cleared`, no selected
+  folder path or private result, an empty disabled command field, and disabled
+  command/shortcut buttons. No access was re-enabled for verification.
 
-Live listing, overwrite rejection, read command, app launching, Stop, minimize/lock
-and visual layout acceptance remain pending. The Windows automation tool reported
-`FrameArrived` and `window capture` timeouts, then `coordinate input geometry is
-unavailable`. Accessibility reads and setting the command field worked, but clicks
-and keyboard submission could not be verified reliably. A user handoff is pending
-for the remaining commands. Do not report those checks as passed from mocked
-permission/launch tests or from the successful create alone.
+**User-assisted smoke test: passed** for folder consent, create, list, collision
+protection, read, Notepad launch and idle Stop. List/read display correctness is
+user-confirmed and supported by successful receipts; it was not captured by the
+agent before Stop cleared the output. The create result, final stopped controls,
+Notepad window inventory and unchanged file bytes were independently observed.
+
+The Windows automation tool reported `FrameArrived` and `window capture` timeouts,
+then `coordinate input geometry is unavailable`. Accessibility reads and setting
+the command field worked, but clicks and keyboard submission could not be verified
+reliably, so the user performed the remaining steps. This was not an unattended
+automated UI pass.
+
+Physical minimize/lock revocation, timed expiry, in-flight Stop, Explorer launch,
+visual layout, restart/sleep recovery, clean-machine installation and the measured
+eight-hour run remain open. Automated tests cover several of these boundaries but
+do not substitute for their physical acceptance. The public-release limitations
+above remain in force; this smoke test does not establish general PC control.
 
 Non-failing tooling notices: stale Browserslist data; backend Starlette/httpx and
 Google Python-version deprecations; PyInstaller optional module warnings. No live
