@@ -11,6 +11,7 @@ if not getattr(sys, "frozen", False):
 from src.desktop.native_runtime import NativeRuntime
 from src.desktop.native_assets import AssetServer
 from src.desktop.workspace import WorkspaceError
+from voice import LocalVoice
 
 
 class Bridge:
@@ -18,10 +19,15 @@ class Bridge:
         self._runtime, self._url = runtime, url
         self._window = None
         self._picker = threading.Lock()
+        self._voice = LocalVoice(lambda: self._runtime.status()["active"], self._runtime.stop)
+
+    def _stop_all(self):
+        self._runtime.stop()
+        self._voice.stop()
 
     def _check_window(self):
         if not self._window or self._window.get_current_url() != self._url:
-            self._runtime.stop()
+            self._stop_all()
             raise WorkspaceError("native_window_required")
 
     def status(self):
@@ -34,7 +40,7 @@ class Bridge:
             return {"active": False, "message": "A folder dialog is already open."}
         try:
             import webview
-            self._runtime.stop()
+            self._stop_all()
             generation = self._runtime.generation
             selected = self._window.create_file_dialog(webview.FileDialog.FOLDER, allow_multiple=False)
             if not selected:
@@ -49,7 +55,7 @@ class Bridge:
             self._check_window()
             return self._runtime.enable(root, generation)
         except Exception:
-            self._runtime.stop()
+            self._stop_all()
             return {"active": False, "message": "Could not enable this folder. Choose a local folder, then try again."}
         finally:
             self._picker.release()
@@ -60,7 +66,28 @@ class Bridge:
 
     def stop(self):
         self._check_window()
-        return self._runtime.stop()
+        result = self._runtime.stop()
+        self._voice.stop()
+        return result
+
+    def voice_start(self):
+        self._check_window()
+        return self._voice.start()
+
+    def voice_stop(self):
+        self._check_window()
+        return self._voice.stop()
+
+    def voice_poll(self):
+        self._check_window()
+        return self._voice.poll()
+
+    def voice_speak(self, request):
+        self._check_window()
+        grant = self._runtime.status()
+        if not isinstance(request, dict) or set(request) != {"session_id", "voice_id", "text"} or not grant["active"] or request["session_id"] != grant["session_id"]:
+            return {"accepted": False}
+        return self._voice.speak(request["text"], request["voice_id"])
 
 
 def expose_bridge(window, api):
@@ -75,7 +102,15 @@ def expose_bridge(window, api):
         return api.command(request)
     def stop():
         return api.stop()
-    window.expose(status, choose_workspace, command, stop)
+    def voice_start():
+        return api.voice_start()
+    def voice_stop():
+        return api.voice_stop()
+    def voice_poll():
+        return api.voice_poll()
+    def voice_speak(request):
+        return api.voice_speak(request)
+    window.expose(status, choose_workspace, command, stop, voice_start, voice_stop, voice_poll, voice_speak)
 
 
 def main():
@@ -92,16 +127,17 @@ def main():
     server.start()
     shutdown = threading.Event()
     window = webview.create_window("Rumi Desktop", server.url, width=1180, height=820,
-        min_size=(700, 560), background_color="#101514", text_select=True)
+        min_size=(700, 560), background_color="#050b12", text_select=True)
     api._window = window
     expose_bridge(window, api)
-    window.events.before_load += runtime.stop
-    window.events.minimized += runtime.stop
-    window.events.closing += runtime.stop
+    window.events.before_load += api._stop_all
+    window.events.minimized += api._stop_all
+    window.events.closing += api._stop_all
 
     def watch_lock():
         while not shutdown.wait(1):
             runtime.status()  # Revokes on lock/expiry, never renews a grant.
+            api._voice.watch()
 
     threading.Thread(target=watch_lock, daemon=True).start()
     webview.settings["ALLOW_FILE_URLS"] = False
@@ -111,6 +147,7 @@ def main():
         webview.start(gui="edgechromium", debug=False, private_mode=True)
     finally:
         shutdown.set()
+        api._voice.stop()
         runtime.close()
         server.close()
 

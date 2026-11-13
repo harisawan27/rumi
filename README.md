@@ -1,11 +1,12 @@
 # Rumi — Present before you speak
 
-**Windows local control development build:** Rumi now has a portable native host
-for supported typed commands without cloud AI: Notepad/Explorer launch and text
+**Windows companion development build:** Rumi now has a full-window animated
+companion with optional local English voice and typed commands, without cloud AI:
+Notepad/Explorer launch and text
 file operations in a folder you explicitly select. See the
 [Windows setup guide](desktop/README.md) and
-[capabilities and acceptance report](docs/rumi-native-desktop-foundation.md).
-This unsigned development build is not the full public-release assistant; voice,
+[companion phase evidence](docs/rumi-voice-first-companion.md).
+This unsigned development build is not the full public-release assistant; live voice quality,
 browser automation, broader Windows control and all-day reliability remain release
 gates. The cloud companion described below is a separate mode.
 

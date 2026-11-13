@@ -1,7 +1,8 @@
-# Rumi Desktop — local control foundation
+# Rumi Desktop — voice-first companion
 
-This Windows app runs supported typed commands without Gemini, Firebase, a browser
-sign-in, a camera or a microphone. It uses the installed Microsoft Edge WebView2
+This Windows app runs supported voice and typed commands without Gemini, Firebase,
+a browser sign-in or a camera. Voice is optional and explicitly enabled. It uses
+installed English Windows speech support and the Microsoft Edge WebView2
 Runtime. This is an **unsigned portable development build**, not a signed public
 installer. Do not bypass Windows security warnings to run it.
 
@@ -33,10 +34,38 @@ retains its separate protections. The renderer cannot supply a folder path; sele
 and confirmation happen in native dialogs. Private results are cleared when the app
 observes revocation; the screen-lock watcher and UI status updates are bounded polls.
 
-Microphone support, Chrome/Gmail automation, Windows settings, shutdown, a global
+Chrome/Gmail automation, Windows settings, shutdown, a global
 system-wide Stop shortcut, tray/startup integration, signing and automatic updates
 are not included in this increment. Ctrl+K and Ctrl+Shift+. work while the app is
 focused. The existing `/desktop/` route remains a separately labelled simulation.
+
+## Local voice and companion
+
+After choosing a folder, click **Let's talk** to enable the default microphone.
+Begin each request with **Rumi**, for example `Rumi open Notepad` or
+`Rumi list files`. Windows recognizes and speaks locally; Rumi does not save audio,
+send it to a service, or use browser speech recognition. English Windows speech
+recognition and a local voice must be installed. If unavailable, use **Type**.
+
+Spoken file creation shows the recognized request for review. Say `Rumi confirm`
+within 30 seconds or click **Confirm creation**. Check spelling and content;
+dictation can be wrong. `Rumi cancel` or `Rumi stop` disconnects local access.
+`Rumi listen` interrupts a spoken reply; wait a moment before your next request.
+Other actions are ignored during playback and its short echo guard. Voice pauses
+after two quiet minutes; it never automatically re-arms. This is explicit local
+listening, not a background system-wide wake word. Do not rely on speech alone for
+Stop: the button, Escape and Ctrl+Shift+. also work while Rumi is focused.
+
+The animated companion reflects listening, speaking, working and review states.
+Workspace results use pages instead of scrolling; say `Rumi next page` or
+`Rumi previous page`. Type remains available with
+Ctrl+K. Reduce motion is supported, including the Windows accessibility preference.
+Local greetings/help are predefined responses, not a general conversational model.
+Existing cloud Reply/Canvas/Create features remain in the separate dashboard.
+
+Live microphone, speaker echo, accent/noise and all-day use are release checks;
+the synthetic diagnostic is not evidence that those checks passed. See
+[phase evidence](https://github.com/harisawan27/rumi/blob/master/docs/rumi-voice-first-companion.md).
 
 ## Build from source
 
@@ -56,6 +85,9 @@ is unnecessary for local commands. To run from source after a frontend build:
 ```powershell
 desktop/.venv/Scripts/python desktop/main.py
 ```
+
+Optional installed-engine diagnostic (temporary generated WAVs, no microphone or
+speaker playback): `desktop/.venv/Scripts/python desktop/check_speech.py`.
 
 Local receipts are stored at `%LOCALAPPDATA%/Rumi/desktop/native-receipts.sqlite3`.
 They contain request fingerprints and coarse outcomes, not file contents. Preserve

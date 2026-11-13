@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import NativeDesktop from '../src/components/desktop/NativeDesktop';
+import { textPages } from '../src/services/nativeDesktop';
 const active = { active: true, workspace: 'C:\\RumiTest', session_id: 'native-session', seconds_remaining: 900 };
 const inactive = { active: false };
 let api;
@@ -106,4 +107,104 @@ test('a mismatched receipt fails closed and keyboard Stop remains available', as
   expect(screen.queryByText('wrong private data')).not.toBeInTheDocument();
   fireEvent.keyDown(window, { key: '>', code: 'Period', ctrlKey: true, shiftKey: true });
   expect(screen.getByText(/Local permission cleared/)).toBeInTheDocument();
+});
+
+async function voiceConnect() {
+  jest.useFakeTimers();
+  api.voice_start = jest.fn(async () => ({ active: true, voice_id: 3 }));
+  api.voice_stop = jest.fn(async () => ({ active: false }));
+  api.voice_poll = jest.fn(async () => ({ active: true, voice_id: 3, events: [] }));
+  api.voice_speak = jest.fn(async () => ({ accepted: true }));
+  api.command.mockImplementation(async request => ({ request_id: request.request_id, state: 'succeeded', operation: 'create_text' }));
+  await connect();
+  expect(api.voice_start).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Enable local voice' }));
+  await act(async () => {});
+}
+async function hear(text, id = 1) {
+  api.voice_poll.mockResolvedValueOnce({ active: true, voice_id: 3, events: [{ id, kind: 'transcript', text }] });
+  await act(async () => jest.advanceTimersByTime(250));
+}
+
+test('voice starts explicitly and duplicate transcripts execute once without cloud requests', async () => {
+  await voiceConnect();
+  await hear('Open Notepad');
+  await hear('Open Notepad');
+  expect(api.command).toHaveBeenCalledTimes(1);
+  expect(api.command).toHaveBeenCalledWith(expect.objectContaining({ text: 'Open Notepad', session_id: active.session_id }));
+  expect(api.voice_speak).toHaveBeenCalledWith(expect.objectContaining({ voice_id: 3, session_id: active.session_id }));
+  expect(global.fetch).not.toHaveBeenCalled();
+});
+
+test('spoken creation needs confirmation and preserves exact recognized words', async () => {
+  await voiceConnect();
+  const request = 'Create test.txt with content: My exact words.';
+  await hear(request);
+  expect(api.command).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('Local result')).toHaveTextContent(request);
+  await hear('Open Notepad', 2);
+  expect(api.command).not.toHaveBeenCalled();
+  await hear('confirm', 3);
+  expect(api.command).toHaveBeenCalledTimes(1);
+  expect(api.command).toHaveBeenCalledWith(expect.objectContaining({ text: request }));
+});
+
+test('expired voice confirmation never writes a file', async () => {
+  await voiceConnect();
+  await hear('Create test.txt with content: hello');
+  await act(async () => jest.advanceTimersByTime(30001));
+  await hear('confirm', 2);
+  expect(api.command).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'Confirm creation' })).not.toBeInTheDocument();
+});
+
+test('Stop suppresses a delayed voice start and never restores listening', async () => {
+  let resolve;
+  api.voice_start = jest.fn(() => new Promise(r => { resolve = r; }));
+  await connect();
+  fireEvent.click(screen.getByRole('button', { name: 'Enable local voice' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Stop & disconnect' }));
+  await act(async () => resolve({ active: true, voice_id: 9 }));
+  expect(screen.queryByRole('button', { name: 'Pause microphone' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Enable local voice' })).toBeDisabled();
+});
+
+test('late voice poll after Stop cannot execute or expose a transcript', async () => {
+  await voiceConnect();
+  let resolve;
+  api.voice_poll.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+  await act(async () => jest.advanceTimersByTime(250));
+  fireEvent.click(screen.getByRole('button', { name: 'Stop & disconnect' }));
+  await act(async () => resolve({ active: true, voice_id: 3, events: [{ id: 1, kind: 'transcript', text: 'Open Notepad' }] }));
+  expect(api.command).not.toHaveBeenCalled();
+  expect(api.voice_speak).not.toHaveBeenCalled();
+});
+
+test('unavailable microphone leaves typing usable', async () => {
+  api.voice_start = jest.fn(async () => { throw new Error('no device'); });
+  await connect();
+  fireEvent.click(screen.getByRole('button', { name: 'Enable local voice' }));
+  await screen.findByText(/Local voice is unavailable/);
+  fireEvent.click(screen.getByRole('button', { name: 'Type a command' }));
+  expect(screen.getByLabelText('Local command')).toBeEnabled();
+});
+
+test('result pagination retains all text including whitespace and wide characters', () => {
+  const original = ('Long line\twith words 中文 👋\n\n' + 'x'.repeat(83)).repeat(30);
+  const pages = textPages(original, 20, 3);
+  expect(pages.length).toBeGreaterThan(1);
+  expect(pages.join('')).toBe(original);
+  expect(textPages('')).toEqual(['']);
+});
+
+test('voice can turn result pages without executing another local action', async () => {
+  await voiceConnect();
+  api.command.mockImplementation(async request => ({ request_id: request.request_id, state: 'succeeded', operation: 'read_text', result: { text: 'a'.repeat(700) + 'last page' } }));
+  await hear('Read that file');
+  const first = screen.getByLabelText('Local result').textContent;
+  await hear('next page', 2);
+  await hear('next page', 3);
+  expect(screen.getByLabelText('Local result').textContent).not.toBe(first);
+  expect(screen.getByLabelText('Local result')).toHaveTextContent('last page');
+  expect(api.command).toHaveBeenCalledTimes(1);
 });

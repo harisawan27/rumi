@@ -158,7 +158,7 @@ class NativeTests(unittest.TestCase):
         window = Mock()
         expose_bridge(window, bridge)
         exports = window.expose.call_args.args
-        self.assertEqual({f.__name__ for f in exports}, {"status", "choose_workspace", "command", "stop"})
+        self.assertEqual({f.__name__ for f in exports}, {"status", "choose_workspace", "command", "stop", "voice_start", "voice_stop", "voice_poll", "voice_speak"})
         self.assertTrue(all(not hasattr(f, "__self__") for f in exports))
 
 
