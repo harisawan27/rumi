@@ -194,3 +194,13 @@ testing as pending. This review does not promote those columns to passed. It als
 does not add Morph templates, arbitrary React, Android, a generic shell agent or
 remote unattended computer control. The immediate next implementation is Day 1's
 paired executor and one verified voice-to-file/app workflow.
+
+### Implementation update — 2026-11-13
+
+The paired executor and deterministic command adapter are implemented; physical
+cloud voice acceptance remains pending while the API is unavailable. The next
+[native Windows foundation](rumi-native-desktop-foundation.md) reuses that executor
+for an offline, typed-command app with explicit Windows-session folder consent.
+Its acceptance report distinguishes automated checks from physical observations.
+Browser research, broader app control, offline voice and the measured eight-hour
+run remain required before the full release described above.

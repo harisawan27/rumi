@@ -83,5 +83,9 @@ navigation scroll reset, and disabled animation with reduced motion enabled.
 The backend was unchanged in this increment. Its earlier test results are documented
 in the executor/command acceptance reports and were not relabelled as a new run.
 
-This phase does not complete physical voice acceptance, Windows control, local authorization,
+The following [native Windows increment](rumi-native-desktop-foundation.md) connects
+this visual direction to real local commands in a separate `/desktop-local/` route.
+It does not change this preview's simulation contract.
+
+This preview phase does not complete physical voice acceptance, Windows control, local authorization,
 installer/update signing or the all-day resource measurement gates.

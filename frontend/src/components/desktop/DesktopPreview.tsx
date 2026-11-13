@@ -5,7 +5,7 @@ import { previewReducer, previewTask, WELCOME_SAMPLE, type PreviewTask } from "@
 import s from "./desktop.module.css";
 
 type IconName = "home" | "activity" | "routines" | "settings" | "arrow" | "close" | "check" | "folder" | "globe" | "spark" | "mic" | "stop" | "expand" | "sun" | "move";
-function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
+export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, React.ReactNode> = {
     home: <><path d="m3 10 9-7 9 7v10H3z" /><path d="M9 20v-7h6v7" /></>,
     activity: <><path d="M3 12h4l3-8 4 16 3-8h4" /></>,
@@ -24,7 +24,7 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 
-function Presence({ active = false, small = false }: { active?: boolean; small?: boolean }) {
+export function Presence({ active = false, small = false }: { active?: boolean; small?: boolean }) {
   const id = useId().replace(/:/g, "");
   return <div className={`${s.presence} ${small ? s.smallPresence : ""} ${active ? s.activePresence : ""}`} aria-hidden="true">
     <svg viewBox="0 0 240 240"><defs><linearGradient id={id} x1="0" y1="0" x2="1" y2="1"><stop stopColor="#d7f6e9" /><stop offset=".45" stopColor="#70c3b4" /><stop offset="1" stopColor="#263f3b" /></linearGradient></defs>
