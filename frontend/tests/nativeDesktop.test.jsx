@@ -14,9 +14,9 @@ afterEach(() => { delete window.pywebview; jest.useRealTimers(); });
 async function connect() {
   render(<NativeDesktop />);
   await act(async () => {});
+  api.status.mockResolvedValue(active);
   fireEvent.click(screen.getByRole('button', { name: 'Choose folder & enable' }));
   await screen.findByText('Connected to your folder');
-  api.status.mockResolvedValue(active);
 }
 
 test('ordinary browser cannot issue local commands or grant itself a folder', async () => {
@@ -207,4 +207,43 @@ test('voice can turn result pages without executing another local action', async
   expect(screen.getByLabelText('Local result').textContent).not.toBe(first);
   expect(screen.getByLabelText('Local result')).toHaveTextContent('last page');
   expect(api.command).toHaveBeenCalledTimes(1);
+});
+
+test('character follows actual work, verified success, listening and native speech', async () => {
+  await voiceConnect();
+  expect(screen.getByRole('img', { name: 'Rumi companion: listening' })).toBeInTheDocument();
+  let resolve;
+  api.command.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+  await hear('Read that file');
+  expect(screen.getByRole('img', { name: 'Rumi companion: reading' })).toBeInTheDocument();
+  const request = api.command.mock.calls[0][0];
+  await act(async () => resolve({ request_id: request.request_id, state: 'succeeded', operation: 'read_text', result: { text: 'hello' } }));
+  expect(screen.getByRole('img', { name: 'Rumi companion: success' })).toBeInTheDocument();
+  api.voice_poll.mockResolvedValueOnce({ active: true, voice_id: 3, speaking: true });
+  await act(async () => jest.advanceTimersByTime(250));
+  expect(screen.getByRole('img', { name: 'Rumi companion: speaking' })).toBeInTheDocument();
+  await act(async () => jest.advanceTimersByTime(250));
+  await act(async () => jest.advanceTimersByTime(2700));
+  expect(screen.getByRole('img', { name: 'Rumi companion: listening' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop & disconnect' }));
+  expect(screen.getByRole('img', { name: 'Rumi companion: stopped' })).toBeInTheDocument();
+});
+
+test('launch dispatch gets acknowledgement, never a verified-success celebration', async () => {
+  await connect();
+  api.command.mockImplementation(async request => ({ request_id: request.request_id, state: 'dispatched', operation: 'open_app' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open Notepad', exact: true }));
+  await screen.findByRole('img', { name: 'Rumi companion: acknowledging' });
+  expect(screen.queryByRole('img', { name: 'Rumi companion: success' })).not.toBeInTheDocument();
+});
+
+test('expression preview waits for microphone pause and Stop cancels a late opening', async () => {
+  await voiceConnect();
+  let resolve;
+  api.voice_stop.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+  fireEvent.click(screen.getByRole('button', { name: 'Meet Rumi', exact: true }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Stop & disconnect' }));
+  await act(async () => resolve({ active: false }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });

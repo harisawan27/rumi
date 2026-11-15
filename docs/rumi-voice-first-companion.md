@@ -108,3 +108,39 @@ that this phase's new live voice behavior has passed.
 
 Implementation references: Microsoft [GrammarBuilder](https://learn.microsoft.com/en-us/dotnet/api/system.speech.recognition.grammarbuilder?view=netframework-4.8.1)
 and [asynchronous recognition](https://learn.microsoft.com/en-us/dotnet/api/system.speech.recognition.speechrecognitionengine.recognizeasync?view=netframework-4.8.1).
+
+## Living character follow-up
+
+Built after `8a8610db87ef8f88a0872b73d65307a323b7a389`. No speech engine,
+authorization or executor changes. The character now has 17 explicit expressions:
+idle, greeting, waking, listening, speaking, thinking, reading, writing, searching,
+launching, confirming, success, acknowledging, confused, error, stopped and sleeping.
+Eyes, eyebrows, mouth, head, torso, hands and local-action props are independently
+animated. Listening light follows the reported microphone level. Native playback
+controls speaking; its mouth animation is stylized rather than phoneme synchronized.
+
+Visual intent is decorative and never authorizes execution. Stop and uncertain
+outcomes override old speech/celebration. Verified receipts trigger a short success
+reaction; launch dispatch gets acknowledgement, not verified-success celebration.
+The UI never delays a fast operation just to make an animation play. Queued spoken
+replies alone cannot start a speaking expression. Repeated real outcomes can replay
+their gesture. Idle sleep yields immediately to active states.
+
+`Meet Rumi` previews the same component without commands or microphone capture.
+Opening it pauses local voice, contains keyboard focus and keeps Stop available.
+Background character motion pauses during the preview. Hidden documents pause
+animation. Animation uses CSS with no continuous JavaScript frame loop; pointer
+gaze schedules at most one pending animation frame. There are no new dependencies,
+model calls, downloaded assets or animation timers per SVG part. This design is
+bounded, but it is not an eight-hour performance benchmark.
+
+The default follows the system motion preference. Explicit full animation and
+reduced motion are available for this session. During browser verification the
+system preference was reduced; full mode was verified to activate the actual
+mouth/head/hand animations, with the obscured character paused.
+
+All 102 frontend tests passed, including action and speech transitions, idle
+wake-up, preview keyboard navigation, and cancellation of a pending preview on
+Stop. The production build and standalone TypeScript check passed. The expression
+viewer also fit a 700 × 520 viewport with Stop visible. Live microphone and speaker
+acceptance remains deferred at the user's request.

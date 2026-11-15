@@ -2,6 +2,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "./DesktopPreview";
 import RumiCompanion from "./RumiCompanion";
+import RumiExpressions from "./RumiExpressions";
+import { actionExpression, companionMood, type CompanionMood } from "@/services/companion";
 import { localReply, receiptText, textPages, type LocalGrant, type LocalVoiceState, type NativeDesktopApi, type VoiceEvent } from "@/services/nativeDesktop";
 import s from "./native.module.css";
 
@@ -21,11 +23,17 @@ export default function NativeDesktop() {
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState("companion");
   const [typing, setTyping] = useState(false);
-  const [reduced, setReduced] = useState(false);
+  const [motion, setMotion] = useState<"system" | "full" | "reduced">("system");
+  const reduced = motion === "reduced";
   const [spoken, setSpoken] = useState(true);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [page, setPage] = useState(0);
   const [dimensions, setDimensions] = useState({ columns: 42, rows: 7 });
+  const [action, setAction] = useState<CompanionMood>("thinking");
+  const [cue, setCue] = useState<{ mood: CompanionMood; id: number } | null>(null);
+  const [expressions, setExpressions] = useState(false);
+  const expressionsOpen = useRef(false); expressionsOpen.current = expressions;
+  const cueId = useRef(0);
   const api = useRef<NativeDesktopApi | null>(null);
   const epoch = useRef(0), voiceEpoch = useRef(0), lastEvent = useRef(0);
   const pending = useRef(false), choosing = useRef(false), hadGrant = useRef(false);
@@ -34,11 +42,19 @@ export default function NativeDesktop() {
   live.current = { grant, voice, spoken, draft };
   const onVoice = useRef<(event: VoiceEvent) => void>(() => {});
 
+  function react(mood: CompanionMood) { setCue({ mood, id: ++cueId.current }); }
+  useEffect(() => {
+    if (!cue || voice.speaking) return;
+    const timer = setTimeout(() => setCue(null), 2600);
+    return () => clearTimeout(timer);
+  }, [cue, voice.speaking]);
+
   function clear() {
     epoch.current++; voiceEpoch.current++;
     pending.current = hadGrant.current = false;
     live.current = { ...live.current, grant: disconnected, voice: quiet, draft: null };
     setGrant(disconnected); setVoice(quiet); setVoiceBusy(false); setDraft(null);
+    setCue(null); setAction("thinking");
     setResult(""); setText(""); setHeard(""); setBusy(false); setPage(0); setView("companion");
   }
   function stop() {
@@ -46,11 +62,17 @@ export default function NativeDesktop() {
     const generation = epoch.current;
     void api.current?.stop().catch(() => { if (generation === epoch.current) setState("stop-unconfirmed"); });
   }
-  function pauseVoice() {
+  async function pauseVoice() {
     const generation = ++voiceEpoch.current;
     live.current.voice = quiet; live.current.draft = null;
     setVoice(quiet); setVoiceBusy(false); setDraft(null); setHeard("");
-    void api.current?.voice_stop?.().catch(() => { if (generation === voiceEpoch.current) setVoice({ active: false, message: "Microphone stop was not confirmed. Close Rumi to end capture." }); });
+    try {
+      await api.current?.voice_stop?.();
+      return generation === voiceEpoch.current;
+    } catch {
+      if (generation === voiceEpoch.current) setVoice({ active: false, message: "Microphone stop was not confirmed. Close Rumi to end capture." });
+      return false;
+    }
   }
   function announce(words: string) {
     const current = live.current;
@@ -77,6 +99,7 @@ export default function NativeDesktop() {
     }
     function ready() { if (gone) return; api.current = window.pywebview?.api || null; setAvailable(!!api.current); void check(); }
     function key(e: KeyboardEvent) {
+      if (expressionsOpen.current && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); return; }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setTyping(true); requestAnimationFrame(() => input.current?.focus({ preventScroll: true })); }
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.code === "Period" || e.key === ">")) { e.preventDefault(); stop(); }
       if (e.key === "Escape") { stop(); }
@@ -135,6 +158,7 @@ export default function NativeDesktop() {
       if (generation !== epoch.current) return;
       hadGrant.current = next.active; live.current.grant = next;
       setGrant(next); setState(next.active ? "ready" : "not-enabled");
+      if (next.active) react("greeting");
       if (next.message) showResult(next.message, "not-enabled");
     } catch { if (generation === epoch.current) setState("disconnected"); }
     finally { choosing.current = false; if (generation === epoch.current) setBusy(false); }
@@ -148,6 +172,8 @@ export default function NativeDesktop() {
       const next = await api.current.voice_start();
       if (generation !== voiceEpoch.current) return;
       lastEvent.current = 0; live.current.voice = next; setVoice(next);
+      setCue(null);
+      if (!next.active) react("confused");
       for (const event of next.active ? next.events || [] : []) { lastEvent.current = event.id; onVoice.current(event); }
     } catch { if (generation === voiceEpoch.current) setVoice({ active: false, message: "Local voice is unavailable. You can still type a command." }); }
     finally { if (generation === voiceEpoch.current) setVoiceBusy(false); }
@@ -158,7 +184,7 @@ export default function NativeDesktop() {
     const current = live.current.grant;
     if (!api.current || !current.active || !current.session_id || pending.current || choosing.current || !value.trim()) return;
     const reply = localReply(value);
-    if (reply) { showResult(reply, "reply"); announce(reply); return; }
+    if (reply) { react("greeting"); showResult(reply, "reply"); announce(reply); return; }
     if (fromVoice && !confirmed && /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:create|make|save|write)\b/i.test(value)) {
       const next = { text: value, until: Date.now() + 30000 };
       live.current.draft = next; setDraft(next); setResult(""); setPage(0); setView("workspace"); setState("confirming");
@@ -166,6 +192,7 @@ export default function NativeDesktop() {
       return;
     }
     live.current.draft = null; setDraft(null);
+    setCue(null); setAction(actionExpression(value));
     const generation = epoch.current, requestId = crypto.randomUUID();
     pending.current = true; setBusy(true); setState("working"); setResult(""); setText(""); setView("workspace"); setPage(0);
     const timer = setTimeout(() => {
@@ -180,14 +207,15 @@ export default function NativeDesktop() {
         clear(); setState(receipt.state); void api.current.stop().catch(() => {}); return;
       }
       const content = receiptText(receipt) || "This file is empty.";
+      react(receipt.state === "succeeded" ? "success" : receipt.state === "dispatched" ? "acknowledging" : receipt.state === "clarification" ? "confused" : "error");
       showResult(content, receipt.state);
       announce(receipt.operation === "read_text" ? `Here's your note. ${content.slice(0, 600)}${content.length > 600 ? " The rest is in your workspace." : ""}` : content.slice(0, 700));
     } catch { if (generation === epoch.current) { clear(); setState("uncertain"); void api.current?.stop().catch(() => {}); } }
     finally { clearTimeout(timer); if (generation === epoch.current) { pending.current = false; setBusy(false); } }
   }
   onVoice.current = event => {
-    if (event.kind === "interrupted") { setHeard("I'm listening. Give me a moment, then speak."); return; }
-    if (event.kind === "unclear") { setHeard(event.text); return; }
+    if (event.kind === "interrupted") { setCue(null); setHeard("I'm listening. Give me a moment, then speak."); return; }
+    if (event.kind === "unclear") { react("confused"); setHeard(event.text); return; }
     setHeard(event.text);
     if (pending.current) { setHeard("I'm finishing the current action. Please ask again when it's done."); return; }
     const navigation = event.text.trim().replace(/[.!?]+$/, "").toLowerCase();
@@ -219,17 +247,18 @@ export default function NativeDesktop() {
     blocked: "The action was blocked. Re-enable local permission and check the folder before retrying.",
     dispatched: "Launch requested", succeeded: "Verified local result", failed: "Let's try another way.", clarification: "A little more detail.", confirming: "Your words. Your say.", reply: "One thing at a time. Together.",
   };
-  const mood = voice.speaking ? "speaking" : busy ? "working" : draft ? "curious" : voice.active ? "listening" : state === "succeeded" ? "pleased" : "resting";
+  const mood = companionMood({ state, busy, action, voiceBusy, speaking: !!voice.speaking, listening: voice.active, draft: !!draft, cue: cue?.mood, typing: typing && !!text });
   const pages = textPages(draft?.text || result || "Your next result will appear here. Ask Rumi to list your files, read a note or open an app.", dimensions.columns, dimensions.rows);
   const currentPage = Math.min(page, pages.length - 1);
   const workspace = view === "workspace";
-  return <div className={s.shell} data-reduced={reduced} data-view={view}>
+  return <div className={s.shell} data-reduced={reduced} data-full-motion={motion === "full"} data-view={view}>
     <div className={s.stars} aria-hidden="true"/><div className={s.horizon} aria-hidden="true"/>
     <header className={s.header}>
       <div className={s.brand}><span className={s.mark}>r.</span><span>rumi<small>YOUR PERSONAL ORBIT</small></span></div>
       <div className={s.connection}><i className={available ? s.online : s.offline}/><span>{available ? "On your device" : "Preview · native app required"}</span><b> / </b><span>Cloud AI off</span></div>
       <div className={s.headerActions}>
-        <button className={s.iconButton} aria-label="Reduce motion" aria-pressed={reduced} onClick={() => setReduced(v => !v)} title="Reduce motion"><Icon name="activity"/></button>
+        <button className={s.iconButton} aria-label="Meet Rumi" title="Meet Rumi · pauses microphone" disabled={busy} onClick={() => { void pauseVoice().then(paused => { if (paused) setExpressions(true); }); }}><Icon name="spark"/></button>
+        <button className={s.iconButton} aria-label={`Character motion: ${motion}`} onClick={() => setMotion(value => value === "system" ? "full" : value === "full" ? "reduced" : "system")} title={`Character motion: ${motion}. Click for ${motion === "system" ? "full animation" : motion === "full" ? "less motion" : "system preference"}.`}><Icon name="activity"/></button>
         <button className={s.iconButton} aria-label="Spoken replies" aria-pressed={spoken} onClick={() => { setSpoken(v => !v); if (voice.speaking) pauseVoice(); }} title="Spoken replies"><Icon name="mic"/></button>
         <button className={s.stopButton} onClick={stop} disabled={!available}><Icon name="stop" size={15}/>Stop & disconnect</button>
       </div>
@@ -243,7 +272,7 @@ export default function NativeDesktop() {
         <div className={s.sceneTop}><span className={s.eyebrow}>A SPACE FOR YOU & ME</span><span className={s.sceneMode}>{mood}</span></div>
         <div className={s.characterStage}>
           <div className={s.coordinate} aria-hidden="true">R / 01<br/>PERSONAL COMPANION</div>
-          <RumiCompanion mood={mood} level={voice.level}/>
+          <RumiCompanion mood={mood} level={voice.level} reduced={reduced} fullMotion={motion === "full"} paused={expressions} reaction={cue?.id}/>
           <div className={s.orbitNote}><i/><span>{voice.active ? voice.speaking ? "Speaking locally" : "Listening locally" : "Here when you need me"}</span></div>
         </div>
         <div className={s.greeting}><p className={s.eyebrow}>{voice.active ? "SAY MY NAME. I'M LISTENING." : "HELLO, HUMAN."}</p><h1>{workspace ? "Right here with you." : "Let's make space\nfor possibility."}</h1><p>{grant.active ? "Talk to me. Watch things happen." : "Choose a folder. Bring me into your day."}</p></div>
@@ -267,5 +296,6 @@ export default function NativeDesktop() {
       <form className={`${s.command} ${typing ? s.commandOpen : ""}`} aria-label="Typed command" onSubmit={e => { e.preventDefault(); void submit(text); }}><input ref={input} aria-label="Local command" value={text} onChange={e => setText(e.target.value)} maxLength={18000} disabled={!grant.active} tabIndex={typing ? 0 : -1} placeholder="Type a request. Same Rumi, same local actions."/><button disabled={!grant.active || busy || !text.trim()} aria-label="Run local command" tabIndex={typing ? 0 : -1}><Icon name="arrow"/></button></form>
     </section>
     <footer className={s.footer}><span><i/>VOICE FIRST. ALWAYS YOURS.</span><span>ESC / CTRL SHIFT . TO STOP <b>·</b> CTRL K TO TYPE</span><span>Notepad · Explorer · Text files</span></footer>
+    {expressions && <RumiExpressions reduced={reduced} fullMotion={motion === "full"} onClose={() => setExpressions(false)} onStop={stop}/>}
   </div>;
 }

@@ -63,6 +63,16 @@ Ctrl+K. Reduce motion is supported, including the Windows accessibility preferen
 Local greetings/help are predefined responses, not a general conversational model.
 Existing cloud Reply/Canvas/Create features remain in the separate dashboard.
 
+Click **Meet Rumi** (the sparkle in the header) to explore 17 character expressions.
+This pauses voice and runs no computer commands. The activity icon cycles character
+motion through **system**, **full**, and **reduced**. Choose full animation explicitly
+if your Windows/browser setting reduces motion. The choice applies to this app
+session. Idle Rumi blinks, breathes and follows the pointer gently; after 45 quiet
+seconds it rests. Its small sparkle button says hello without enabling a microphone.
+Real actions trigger reading, writing, file scanning and app-opening gestures;
+success, clarification, errors and Stop have their own expressions. Speaking motion
+follows native playback state; mouth shapes are stylized, not phoneme lip-sync.
+
 Live microphone, speaker echo, accent/noise and all-day use are release checks;
 the synthetic diagnostic is not evidence that those checks passed. See
 [phase evidence](https://github.com/harisawan27/rumi/blob/master/docs/rumi-voice-first-companion.md).

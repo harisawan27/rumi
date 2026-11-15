@@ -1,0 +1,72 @@
+.companion{--face:#a9fff0;position:relative;aspect-ratio:1;max-height:100%;height:100%;max-width:440px;min-height:0;flex-shrink:1;color:var(--face)}
+.robot{position:relative;width:100%;height:100%;overflow:visible;z-index:2}
+.aura{position:absolute;inset:17% 12%;border-radius:50%;background:radial-gradient(ellipse,#54d3cc24,transparent 67%);opacity:calc(.45 + var(--voice-level,0)*.5);transition:opacity .2s}
+.orbit,.orbitTwo{position:absolute;inset:12%;border-radius:50%;border:1px solid #6bc8d425;transform:rotate(-28deg) scaleY(.42)}
+.orbitTwo{inset:5%;border-style:dashed;border-color:#6bc8d418;transform:rotate(32deg) scaleY(.42)}
+.float{animation:float 7s ease-in-out infinite;transform-origin:210px 250px}.gesture{transform-origin:210px 250px;animation:arrive .45s ease-out both}
+.head{transform-origin:210px 230px;transition:transform .45s cubic-bezier(.2,.8,.2,1);animation:idleLook 19s ease-in-out infinite}
+.torso{transform-origin:210px 270px;animation:breathe 5.7s ease-in-out infinite}
+.gaze{transform:translate(var(--look-x,0px),var(--look-y,0px));transition:transform .18s ease-out}.blink{transform-origin:210px 180px;animation:blink 14.3s infinite}
+.eyes{transform-origin:210px 180px;transition:transform .3s}.leftEye{transform-origin:170px 180px}.rightEye{transform-origin:249px 180px}
+.brows{opacity:0;transition:opacity .35s}.cheeks{opacity:.5}.smile{opacity:1}.talkingMouth{opacity:0;transform-origin:210px 205px}
+.leftHand{transform-origin:143px 253px;transition:transform .4s;animation:leftFidget 17s ease-in-out infinite}.rightHand{transform-origin:277px 253px;transition:transform .4s;animation:rightFidget 21s ease-in-out infinite}
+.core{transform-origin:210px 273px;animation:core 5.7s ease-in-out infinite}.antenna{transition:fill .3s,opacity .3s}.shadow{transform-origin:210px 354px;opacity:.14;animation:shadow 7s ease-in-out infinite}
+.book,.pencil,.search,.window,.thoughts,.question,.sparkles,.sleepMarks,.listeningWaves{opacity:0;pointer-events:none;transition:opacity .25s;transform-origin:210px 260px}
+.hello{position:absolute;bottom:8%;right:15%;z-index:3;display:grid;place-items:center;width:28px;height:28px;background:#0b2735aa;border:1px solid #81d9cd40;border-radius:50%;color:#a9e5d8;opacity:.55;transition:opacity .2s}
+.hello:hover,.hello:focus-visible{opacity:1;outline:2px solid #a9f3df;outline-offset:3px}
+.companion[data-mood=greeting] .rightHand{animation:wave .65s ease-in-out 3}.companion[data-mood=greeting] .head{animation:nod 1s ease-in-out 2}.companion[data-mood=greeting] .cheeks,.companion[data-mood=success] .cheeks{opacity:1}
+.companion[data-mood=waking] .gesture{animation:stretch 1.6s ease-in-out infinite}.companion[data-mood=waking] .leftHand{animation:none;transform:rotate(75deg)}.companion[data-mood=waking] .rightHand{animation:none;transform:rotate(-75deg)}.companion[data-mood=waking] .eyes{animation:wakeEyes 1.6s ease-in-out infinite}
+.companion[data-mood=listening] .head{animation:attend 4.8s ease-in-out infinite}.companion[data-mood=listening] .eyes{transform:scale(1.1,1.12)}.companion[data-mood=listening] .rightHand{animation:none;transform:translate(3px,-55px) rotate(-35deg)}.companion[data-mood=listening] .leftHand{animation:none;transform:rotate(-12deg)}
+.companion[data-mood=listening] .listeningWaves{opacity:calc(.12 + var(--voice-level,0)*.8);transform:scale(calc(1 + var(--voice-level,0)*.04));transition:opacity .18s,transform .18s}.companion[data-mood=listening] .core{animation:none;transform:scale(calc(.8 + var(--voice-level,0)*.5))}
+.companion[data-mood=speaking] .head{animation:talkHead 3.1s ease-in-out infinite}.companion[data-mood=speaking] .smile{opacity:0}.companion[data-mood=speaking] .talkingMouth{opacity:1;animation:syllables .93s infinite}.companion[data-mood=speaking] .leftHand{animation:explainLeft 2.3s ease-in-out infinite}.companion[data-mood=speaking] .rightHand{animation:explainRight 3.7s ease-in-out infinite}
+.companion[data-mood=thinking] .head{animation:ponder 4s ease-in-out infinite}.companion[data-mood=thinking] .rightHand{animation:none;transform:translate(-28px,-31px) rotate(-28deg)}.companion[data-mood=thinking] .gaze{transform:translate(4px,-3px)}.companion[data-mood=thinking] .thoughts{opacity:.8}.companion[data-mood=thinking] .thoughts circle{animation:thought 1.8s ease-in-out infinite}.thoughts circle:nth-child(2){animation-delay:.3s}.thoughts circle:nth-child(3){animation-delay:.6s}
+.companion[data-mood=reading] .book{opacity:1;animation:book 5s ease-in-out infinite}.companion[data-mood=reading] .head{animation:none;transform:translateY(5px) rotate(3deg)}.companion[data-mood=reading] .gaze{animation:readLines 3.4s ease-in-out infinite}.companion[data-mood=reading] .leftHand{animation:none;transform:translate(23px,20px) rotate(20deg)}.companion[data-mood=reading] .rightHand{animation:none;transform:translate(-23px,20px) rotate(-20deg)}
+.companion[data-mood=writing] .pencil{opacity:1;animation:write .8s ease-in-out infinite}.companion[data-mood=writing] .book{opacity:1}.companion[data-mood=writing] .rightHand{animation:writeHand .8s ease-in-out infinite}.companion[data-mood=writing] .leftHand{animation:none;transform:translate(23px,20px) rotate(20deg)}.companion[data-mood=writing] .head{animation:none;transform:translateY(5px) rotate(-6deg)}.companion[data-mood=writing] .gaze{transform:translate(2px,5px)}.companion[data-mood=writing] .ink{stroke-dasharray:32;animation:ink 2.4s linear infinite}
+.companion[data-mood=searching] .search{opacity:1}.companion[data-mood=searching] .head{animation:scan 3.6s ease-in-out infinite}.companion[data-mood=searching] .lens{animation:lens 3.6s ease-in-out infinite}.companion[data-mood=searching] .leftHand{animation:none;transform:rotate(28deg)}.companion[data-mood=searching] .rightHand{animation:none;transform:rotate(-28deg)}
+.companion[data-mood=launching] .window{opacity:1;animation:window 1.8s ease-in-out infinite}.companion[data-mood=launching] .head{animation:none;transform:rotate(7deg)}.companion[data-mood=launching] .gaze{transform:translate(6px,0)}.companion[data-mood=launching] .rightHand{animation:reach 1.8s ease-in-out infinite}.companion[data-mood=launching] .launchArrow{animation:arrow 1.8s ease-in-out infinite}
+.companion[data-mood=confirming] .head,.companion[data-mood=confused] .head{animation:question 4s ease-in-out infinite}.companion[data-mood=confirming] .brows,.companion[data-mood=confused] .brows{opacity:.85}.companion[data-mood=confirming] .leftHand,.companion[data-mood=confused] .leftHand{animation:none;transform:translate(-2px,-12px) rotate(45deg)}.companion[data-mood=confirming] .rightHand,.companion[data-mood=confused] .rightHand{animation:none;transform:translate(2px,-12px) rotate(-45deg)}.companion[data-mood=confirming] .rightEye,.companion[data-mood=confused] .rightEye{transform:scaleY(.75)}.companion[data-mood=confirming] .question,.companion[data-mood=confused] .question{opacity:.8;animation:questionMark 4s ease-in-out infinite}
+.companion[data-mood=success] .gesture{animation:celebrate 1.3s ease-in-out 2}.companion[data-mood=success] .head{animation:nod 1s ease-in-out 2}.companion[data-mood=success] .leftHand{animation:none;transform:rotate(70deg)}.companion[data-mood=success] .rightHand{animation:wave .65s ease-in-out 3}.companion[data-mood=success] .sparkles{opacity:.8;animation:sparkle 1.2s ease-out 2}
+.companion[data-mood=acknowledging] .head{animation:nod .8s ease-in-out 2}.companion[data-mood=acknowledging] .rightHand{animation:none;transform:rotate(-40deg)}
+.companion[data-mood=error]{--face:#f5c79b}.companion[data-mood=error] .head{animation:concern 1.5s ease-in-out 1;transform:rotate(-6deg)}.companion[data-mood=error] .brows{opacity:.65}.companion[data-mood=error] .antenna{fill:#efbb87}.companion[data-mood=error] .leftHand,.companion[data-mood=error] .rightHand{animation:none;transform:translateY(9px)}
+.companion[data-mood=stopped] .head{animation:none;transform:translateY(6px)}.companion[data-mood=stopped] .leftHand,.companion[data-mood=stopped] .rightHand{animation:none;transform:translateY(9px)}.companion[data-mood=stopped] .antenna,.companion[data-mood=stopped] .core{opacity:.35}.companion[data-mood=stopped] .float{animation-duration:11s}
+.companion[data-mood=sleeping] .head{animation:sleepHead 8s ease-in-out infinite}.companion[data-mood=sleeping] .sleepMarks{opacity:.5;animation:sleepMarks 4s ease-in-out infinite}.companion[data-mood=sleeping] .antenna{opacity:.3}.companion[data-mood=sleeping] .float{animation-duration:10s}.companion[data-mood=sleeping] .blink,.companion[data-mood=sleeping] .leftHand,.companion[data-mood=sleeping] .rightHand{animation:none}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes arrive{from{opacity:.85}to{opacity:1}}
+@keyframes idleLook{0%,20%,52%,100%{transform:rotate(0)}29%,36%{transform:rotate(-5deg)}65%,72%{transform:rotate(4deg)}85%{transform:translateY(2px)}}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025,1.035)}}
+@keyframes blink{0%,17%,19%,57%,59%,61%,63%,89%,91%,100%{transform:scaleY(1)}18%,58%,62%,90%{transform:scaleY(.08)}}
+@keyframes leftFidget{0%,62%,80%,100%{transform:rotate(0)}68%,74%{transform:rotate(12deg)}}
+@keyframes rightFidget{0%,20%,40%,100%{transform:rotate(0)}26%,34%{transform:rotate(-12deg)}}
+@keyframes core{0%,100%{opacity:.6;transform:scale(.9)}50%{opacity:1;transform:scale(1.1)}}
+@keyframes shadow{0%,100%{transform:scaleX(1);opacity:.14}50%{transform:scaleX(.85);opacity:.08}}
+@keyframes wave{0%,100%{transform:translateY(-20px) rotate(-65deg)}50%{transform:translateY(-20px) rotate(-110deg)}}
+@keyframes nod{0%,100%{transform:translateY(0) rotate(0)}45%{transform:translateY(7px) rotate(3deg)}}
+@keyframes stretch{0%,100%{transform:scale(1)}50%{transform:translateY(-8px) scale(.98,1.04)}}
+@keyframes wakeEyes{0%,100%{transform:scaleY(.5)}55%{transform:scaleY(1.1)}}
+@keyframes attend{0%,100%{transform:translateY(1px) rotate(-6deg)}50%{transform:translateY(-3px) rotate(-3deg)}}
+@keyframes talkHead{0%,100%{transform:rotate(-3deg)}35%{transform:translateY(3px) rotate(2deg)}70%{transform:rotate(-1deg)}}
+@keyframes syllables{0%,100%{transform:scale(.8,.3)}17%{transform:scale(1,1)}32%{transform:scale(1.25,.45)}48%{transform:scale(.65,1.2)}63%{transform:scale(1.1,.5)}80%{transform:scale(.9,.9)}92%{transform:scale(.8,.15)}}
+@keyframes explainLeft{0%,100%{transform:rotate(12deg)}45%{transform:translate(-3px,-8px) rotate(42deg)}}
+@keyframes explainRight{0%,100%{transform:rotate(-18deg)}60%{transform:translate(4px,-12px) rotate(-48deg)}}
+@keyframes ponder{0%,100%{transform:rotate(6deg)}50%{transform:rotate(10deg) translateY(-2px)}}
+@keyframes thought{0%,100%{opacity:.25}50%{opacity:1}}
+@keyframes book{0%,100%{transform:rotate(-1deg)}50%{transform:rotate(1deg)}}
+@keyframes readLines{0%,45%,100%{transform:translate(-4px,5px)}35%,80%{transform:translate(5px,5px)}}
+@keyframes write{0%,100%{transform:translate(-5px,0)}35%{transform:translate(3px,2px)}70%{transform:translate(-1px,5px)}}
+@keyframes writeHand{0%,100%{transform:translate(-17px,6px) rotate(-32deg)}50%{transform:translate(-10px,11px) rotate(-25deg)}}
+@keyframes ink{from{stroke-dashoffset:32}to{stroke-dashoffset:0}}
+@keyframes scan{0%,100%{transform:rotate(-7deg)}50%{transform:rotate(7deg)}}
+@keyframes lens{0%,100%{transform:translateX(0)}50%{transform:translateX(-50px)}}
+@keyframes window{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes reach{0%,100%{transform:translate(4px,-10px) rotate(-50deg)}50%{transform:translate(12px,-19px) rotate(-72deg)}}
+@keyframes arrow{0%,100%{opacity:.4}50%{opacity:1}}
+@keyframes question{0%,100%{transform:rotate(8deg)}50%{transform:rotate(12deg)}}
+@keyframes questionMark{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes celebrate{0%,100%{transform:translateY(0) rotate(0)}30%{transform:translateY(-16px) rotate(-5deg)}60%{transform:translateY(-7px) rotate(5deg)}}
+@keyframes sparkle{0%{opacity:0;transform:scale(.85)}50%{opacity:1;transform:scale(1.05)}100%{opacity:0;transform:scale(1.1)}}
+@keyframes concern{0%,100%{transform:rotate(-6deg)}30%{transform:rotate(3deg)}60%{transform:rotate(-9deg)}}
+@keyframes sleepHead{0%,100%{transform:translateY(6px) rotate(7deg)}50%{transform:translateY(9px) rotate(10deg)}}
+@keyframes sleepMarks{0%,100%{opacity:.2;transform:translateY(0)}60%{opacity:.6;transform:translateY(-8px)}}
+.companion[data-paused=true] *{animation-play-state:paused!important}
+.companion[data-reduced=true] *{animation:none!important;transition:none!important}.companion[data-reduced=true] .gaze{transform:none!important}
+@media(prefers-reduced-motion:reduce){.companion:not([data-full-motion=true]) *{animation:none!important;transition:none!important}.companion:not([data-full-motion=true]) .gaze{transform:none!important}}
