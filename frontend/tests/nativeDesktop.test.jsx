@@ -247,3 +247,24 @@ test('expression preview waits for microphone pause and Stop cancels a late open
   await act(async () => resolve({ active: false }));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
+
+test('voice can enable and run a Windows plan with separate explicit confirmation', async () => {
+  const operatorGrant = { ...active, windows_control: true };
+  api.enable_windows_control = jest.fn().mockResolvedValue(operatorGrant);
+  await voiceConnect();
+  api.status.mockResolvedValue(operatorGrant);
+  api.command.mockImplementation(async request => ({
+    request_id: request.request_id,
+    operation: 'window_control',
+    state: request.text === 'confirm window plan' ? 'succeeded' : 'plan',
+    message: request.text === 'confirm window plan' ? 'Verified all 2 steps.' : 'Plan for a Windows app. Say Rumi confirm window plan.',
+  }));
+  await hear('enable Windows control');
+  expect(api.enable_windows_control).toHaveBeenCalledTimes(1);
+  await hear('control window press Find then expect Search', 2);
+  expect(api.command).toHaveBeenCalledTimes(1);
+  expect(api.voice_speak).toHaveBeenLastCalledWith(expect.objectContaining({ text: expect.stringContaining('Say Rumi confirm window plan') }));
+  await hear('confirm window plan', 3);
+  expect(api.command).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'confirm window plan' }));
+  expect(screen.getByLabelText('Local result')).toHaveTextContent('Verified all 2 steps.');
+});

@@ -12,6 +12,7 @@ from src.desktop.native_runtime import NativeRuntime
 from src.desktop.native_assets import AssetServer
 from src.desktop.workspace import WorkspaceError
 from voice import LocalVoice
+from windows_operator import WindowsControls
 
 
 class Bridge:
@@ -64,6 +65,27 @@ class Bridge:
         self._check_window()
         return self._runtime.command(request)
 
+    def enable_windows_control(self):
+        self._check_window()
+        if not self._picker.acquire(blocking=False):
+            return self._runtime.status()
+        try:
+            generation = self._runtime.generation
+            if not self._window.create_confirmation_dialog(
+                "Allow Windows voice control?",
+                "Rumi may read named controls and carry out confirmed plans in an app window you put in front. "
+                "It can focus listed windows and use accessibility controls such as buttons and text fields. "
+                "Use this for ordinary app tasks. Keep control of sign-in, payments and destructive actions. "
+                "Permission lasts up to 15 minutes and ends at Stop, detected lock, minimize or exit."
+            ):
+                return self._runtime.status()
+            self._check_window()
+            return self._runtime.enable_operator(generation)
+        except WorkspaceError:
+            return {**self._runtime.status(), "message": "Windows control could not be enabled. Try again when ready."}
+        finally:
+            self._picker.release()
+
     def stop(self):
         self._check_window()
         result = self._runtime.stop()
@@ -100,6 +122,8 @@ def expose_bridge(window, api):
         return api.choose_workspace()
     def command(request):
         return api.command(request)
+    def enable_windows_control():
+        return api.enable_windows_control()
     def stop():
         return api.stop()
     def voice_start():
@@ -110,7 +134,7 @@ def expose_bridge(window, api):
         return api.voice_poll()
     def voice_speak(request):
         return api.voice_speak(request)
-    window.expose(status, choose_workspace, command, stop, voice_start, voice_stop, voice_poll, voice_speak)
+    window.expose(status, choose_workspace, command, enable_windows_control, stop, voice_start, voice_stop, voice_poll, voice_speak)
 
 
 def main():
@@ -122,7 +146,8 @@ def main():
     import webview
     root = Path(sys._MEIPASS) / "ui" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1] / "frontend/out"
     server = AssetServer(root)
-    runtime = NativeRuntime(Path(os.environ["LOCALAPPDATA"]) / "Rumi/desktop/native-receipts.sqlite3")
+    runtime = NativeRuntime(Path(os.environ["LOCALAPPDATA"]) / "Rumi/desktop/native-receipts.sqlite3",
+                            operator_factory=WindowsControls)
     api = Bridge(runtime, server.url)
     server.start()
     shutdown = threading.Event()

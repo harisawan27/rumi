@@ -12,6 +12,7 @@ from pydantic import Field, ValidationError
 from .contracts import RequestIdentity, ActionRequest
 from .commands import parse_command, Clarification
 from .executor import Executor
+from .operator import PlanError, WindowOperator, window_instruction
 from .windows import require_unlocked_desktop, launch_app
 from .workspace import Workspace, WorkspaceError
 
@@ -22,7 +23,7 @@ class NativeCommand(RequestIdentity):
 
 class NativeRuntime:
     def __init__(self, journal, desktop_check=require_unlocked_desktop, launcher=launch_app,
-                 clock=time.monotonic, wall_clock=time.time):
+                 clock=time.monotonic, wall_clock=time.time, operator_factory=None):
         self._journal = Path(journal)
         self._desktop_check, self._launcher = desktop_check, launcher
         self._clock, self._wall_clock = clock, wall_clock
@@ -34,6 +35,9 @@ class NativeRuntime:
         self._expires = 0
         self._last_file = None
         self._generation = 0
+        self._operator_factory = operator_factory
+        self._operator = None
+        self._folder_enabled = False
 
     @property
     def generation(self):
@@ -45,6 +49,8 @@ class NativeRuntime:
         with self._state:
             self._generation += 1
             self._session = self._credential = self._last_file = None
+            self._operator = None
+            self._folder_enabled = False
             self._expires = 0
             if self._executor:
                 self._executor.stop()
@@ -77,9 +83,31 @@ class NativeRuntime:
                 self._journal.parent.mkdir(parents=True, exist_ok=True)
                 self._executor = Executor(workspace, self._journal, self._authorize,
                     clock=self._wall_clock, launcher=self._launcher, desktop_check=self._desktop_check)
+                self._folder_enabled = True
                 self._session, self._credential = secrets.token_hex(16), secrets.token_urlsafe(32)
                 self._expires = self._clock() + 900
                 self._last_file = None
+                self._generation += 1
+                return self.status()
+        finally:
+            self._operation.release()
+
+    def enable_operator(self, expected_generation):
+        if not self._operator_factory or not self._operation.acquire(blocking=False):
+            raise WorkspaceError("windows_control_unavailable")
+        try:
+            adapter = self._operator_factory()
+            with self._state:
+                self._desktop_check()
+                if expected_generation != self._generation:
+                    raise WorkspaceError("authorization_cancelled")
+                if self._credential:
+                    self._authorize(self._credential, self._session)
+                else:
+                    self._session = secrets.token_hex(16)
+                    self._credential = secrets.token_urlsafe(32)
+                    self._expires = self._clock() + 900
+                self._operator = WindowOperator(adapter, self._clock)
                 self._generation += 1
                 return self.status()
         finally:
@@ -93,7 +121,8 @@ class NativeRuntime:
                 except WorkspaceError:
                     pass
             return {"active": bool(self._credential), "session_id": self._session,
-                    "workspace": str(self._executor.workspace.root) if self._credential else None,
+                    "workspace": str(self._executor.workspace.root) if self._folder_enabled else None,
+                    "windows_control": self._operator is not None,
                     "seconds_remaining": max(0, int(self._expires - self._clock())) if self._credential else 0}
 
     def command(self, raw):
@@ -107,14 +136,29 @@ class NativeRuntime:
             with self._state:
                 credential = self._credential
                 self._authorize(credential, request.session_id)
-                executor, last_file = self._executor, self._last_file
+                executor = self._executor if self._folder_enabled else None
+                last_file, operator = self._last_file, self._operator
             if not self._wall_clock() < request.expires_at <= self._wall_clock() + 120:
                 raise WorkspaceError("expired")
+            instruction = window_instruction(request.text)
+            if instruction:
+                return self._window_command(request, instruction, operator, credential)
             try:
                 action = parse_command(request.text, last_file)
             except Clarification as exc:
                 self._authorize(credential, request.session_id)
                 return {"request_id": request.request_id, "state": "clarification", "message": str(exc)}
+            if executor is None:
+                if action.operation == "open_app":
+                    try:
+                        operator.claim(request.request_id)
+                    except PlanError as exc:
+                        return {"request_id": request.request_id, "state": "clarification", "message": str(exc)}
+                    self._launcher(action.app, lambda: self._authorize(credential, request.session_id))
+                    self._authorize(credential, request.session_id)
+                    return {"request_id": request.request_id, "state": "dispatched", "operation": "open_app"}
+                return {"request_id": request.request_id, "state": "clarification",
+                        "message": "Choose a folder to read, list or create its files."}
             result = executor.execute(ActionRequest(**request.model_dump(exclude={"text"}), action=action), credential)
             with self._state:
                 self._authorize(credential, request.session_id)
@@ -129,6 +173,24 @@ class NativeRuntime:
                     "message": "Check the selected folder or app before retrying. Local permission was cleared."}
         finally:
             self._operation.release()
+
+    def _window_command(self, request, instruction, operator, credential):
+        deadline = self._clock() + 14
+
+        def guard():
+            self._authorize(credential, request.session_id)
+            if self._clock() >= deadline or self._wall_clock() >= request.expires_at:
+                raise PlanError("The Windows request ran out of time.")
+
+        if operator is None:
+            state, message = "clarification", "Enable Windows control in Rumi first."
+        else:
+            try:
+                state, message = operator.run(request.request_id, instruction, guard)
+            except PlanError as exc:
+                state, message = "clarification", str(exc)
+            self._authorize(credential, request.session_id)
+        return {"request_id": request.request_id, "operation": "window_control", "state": state, "message": message}
 
     def close(self):
         self.stop()

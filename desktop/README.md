@@ -10,8 +10,9 @@ installer. Do not bypass Windows security warnings to run it.
 
 Extract the complete `RumiDesktop-Windows.zip` folder and open `RumiDesktop.exe`.
 Keep `_internal` beside the executable. Run as a normal Windows user, not admin.
-Choose a disposable local folder for first use, then review the native permission
-dialog. Each grant lasts 15 minutes. Stop, detected screen lock, minimize and exit
+Choose a disposable local folder for file work, or use **Enable Windows control**
+in the header for app control. Review the native permission dialog. Each grant
+lasts up to 15 minutes. Stop, detected screen lock, minimize and exit
 revoke it. A one-second local watcher detects lock/expiry; every action also checks
 the current unlocked desktop. Nothing automatically resumes after revocation.
 
@@ -34,14 +35,12 @@ retains its separate protections. The renderer cannot supply a folder path; sele
 and confirmation happen in native dialogs. Private results are cleared when the app
 observes revocation; the screen-lock watcher and UI status updates are bounded polls.
 
-Chrome/Gmail automation, Windows settings, shutdown, a global
-system-wide Stop shortcut, tray/startup integration, signing and automatic updates
-are not included in this increment. Ctrl+K and Ctrl+Shift+. work while the app is
-focused. The existing `/desktop/` route remains a separately labelled simulation.
+Ctrl+K and Ctrl+Shift+. work while Rumi is focused. The existing `/desktop/` route
+remains a separately labelled simulation.
 
 ## Local voice and companion
 
-After choosing a folder, click **Let's talk** to enable the default microphone.
+After choosing a folder or enabling Windows control, click **Let's talk** to enable the default microphone.
 Begin each request with **Rumi**, for example `Rumi open Notepad` or
 `Rumi list files`. Windows recognizes and speaks locally; Rumi does not save audio,
 send it to a service, or use browser speech recognition. English Windows speech
@@ -76,6 +75,38 @@ follows native playback state; mouth shapes are stylized, not phoneme lip-sync.
 Live microphone, speaker echo, accent/noise and all-day use are release checks;
 the synthetic diagnostic is not evidence that those checks passed. See
 [phase evidence](https://github.com/harisawan27/rumi/blob/master/docs/rumi-voice-first-companion.md).
+
+## Control an app by voice
+
+1. Enable Windows control and turn on the microphone. Keep Rumi open while using
+   the target app. You can also say `Rumi enable Windows control` with the microphone
+   already on and then approve the Windows dialog.
+2. Say `Rumi list windows`, then `Rumi focus window two` using the number Rumi reads
+   out. If Windows refuses the focus request, bring the app to the front yourself.
+3. Say `Rumi inspect window` to hear the names of controls Rumi can use. Say
+   `Rumi read result page`, `Rumi next page` or `Rumi previous page` to review results.
+4. Describe the steps by name. For example, if the app exposes **Show search** and
+   **Search query**, say `Rumi control window click Show search then expect Search query
+   then type hello into Search query`. A click needs an `expect` step that names a
+   control that should appear. You can also `expand`, `select`, `check`, `uncheck`
+   or `set Search query to hello`. `Set` and `type … into` replace the field's value.
+5. Listen to the plan readback and check the target, labels and text. Say
+   `Rumi confirm window plan` within a minute, or say `Rumi cancel window plan`.
+   Rumi checks each step before continuing and reports how many it verified.
+   `Rumi stop` revokes the session. An action already sent to the app can finish.
+
+The operator uses the named controls exposed by Windows UI Automation in the
+selected foreground window. It needs a unique match and a supported control
+pattern. Inaccessible controls, blocked focus changes and separate modal windows
+can require direct interaction. Shell, credential and consequential controls are
+outside this workflow. A plan is confined to one window. Software that uses
+custom-drawn controls may expose little or nothing to the operator.
+
+Run `desktop/.venv/Scripts/python desktop/check_windows_control.py` from the repository
+root to verify a real three-step plan against a disposable WPF window. The check
+uses generated audio and the local speech recognizer for the instructions. It opens
+and closes only its own test window, verifies that a named button reveals a field,
+checks the exact text in that field, and verifies the checkbox changes state.
 
 ## Build from source
 

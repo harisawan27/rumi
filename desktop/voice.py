@@ -44,7 +44,10 @@ class WindowsSpeech:
                 "stop", "listen", "confirm", "cancel", "open Notepad", "open Explorer",
                 "list files", "list my files", "read that file", "hello", "thank you",
                 "what can you do", "help", "are you there", "next page",
-                "previous page", "show workspace", "show companion"])))
+                "previous page", "show workspace", "show companion", "read result page",
+                "list windows", "inspect window", "confirm window plan", "cancel window plan",
+                "enable Windows control", "pause microphone"] + [f"focus window {word}" for word in
+                ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")])))
             self.recognizer.LoadGrammar(Grammar(builder))
             freeform = GrammarBuilder()
             freeform.Culture = recognizers[0].Culture
@@ -131,7 +134,7 @@ class LocalVoice:
 
     def start(self):
         if not self._authorize():
-            return self.stop("Choose a folder before enabling voice.")
+            return self.stop("Choose a folder or enable Windows control before starting voice.")
         with self._lock:
             if self._active or self._starting:
                 return self.poll()

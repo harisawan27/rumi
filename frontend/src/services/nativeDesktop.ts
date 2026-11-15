@@ -1,10 +1,11 @@
-export type LocalGrant = { active: boolean; workspace?: string | null; session_id?: string | null; seconds_remaining?: number; message?: string };
+export type LocalGrant = { active: boolean; workspace?: string | null; windows_control?: boolean; session_id?: string | null; seconds_remaining?: number; message?: string };
 export type LocalReceipt = { request_id?: string; state: string; operation?: string; replayed?: boolean; message?: string; result?: { text?: string; names?: string[]; truncated?: boolean; reason?: string } };
 export type VoiceEvent = { id: number; kind: "transcript" | "unclear" | "interrupted"; text: string };
 export type LocalVoiceState = { active: boolean; voice_id?: number; speaking?: boolean; starting?: boolean; level?: number; language?: string; message?: string; events?: VoiceEvent[] };
 export type NativeDesktopApi = {
   status(): Promise<LocalGrant>;
   choose_workspace(): Promise<LocalGrant>;
+  enable_windows_control?(): Promise<LocalGrant>;
   command(request: { request_id: string; session_id: string; expires_at: number; text: string }): Promise<LocalReceipt>;
   stop(): Promise<LocalGrant>;
   voice_start?(): Promise<LocalVoiceState>;
@@ -15,6 +16,7 @@ export type NativeDesktopApi = {
 declare global { interface Window { pywebview?: { api: NativeDesktopApi } } }
 
 export function receiptText(receipt: LocalReceipt): string {
+  if (receipt.operation === "window_control" && receipt.message) return receipt.message;
   if (receipt.state === "uncertain") return "The action may have completed. Check your folder or app before trying again.";
   if (receipt.state === "blocked") return "This action was blocked. Check local permission and the selected folder before trying again.";
   if (receipt.state === "clarification") return receipt.message || "Please name one supported action.";
@@ -49,7 +51,7 @@ export function localReply(text: string): string | null {
   const plain = text.trim().replace(/^(?:hey\s+)?rumi[,!]?\s+/i, "").replace(/[.!?]+$/, "").toLowerCase();
   if (/^(hi|hello|hey|good morning|good evening)$/.test(plain)) return "I'm here. Let's take one thing at a time. You can ask me to open Notepad, list your files, or read a note.";
   if (/^(thank you|thanks|thanks rumi)$/.test(plain)) return "You're welcome. I'm here when you need me.";
-  if (/^(what can you do|help|help me)$/.test(plain)) return "I can open Notepad or Explorer, list text files, read a note, and create a file with your exact words. Begin voice requests with Rumi. Creative AI is offline for now.";
+  if (/^(what can you do|help|help me)$/.test(plain)) return "I can open Notepad or Explorer and work with text files in your chosen folder. With Windows control enabled, say list windows, focus window two, or inspect window. Say control window followed by steps, such as press Find then expect Find what. I will read the plan back and wait for confirm window plan. Begin each voice request with Rumi.";
   if (/^(how are you|are you there)$/.test(plain)) return "I'm here and ready to help. Everything available in this space runs on your computer.";
   return null;
 }

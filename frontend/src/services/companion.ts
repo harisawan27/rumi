@@ -23,6 +23,8 @@ export const companionExpressions: { mood: CompanionMood; label: string; detail:
 // Visual intent only. Execution always goes through the existing native parser.
 export function actionExpression(text: string): CompanionMood {
   const command = text.trim().replace(/^(?:(?:hey\s+)?rumi[,!]?\s+)?(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?/i, "");
+  if (/^(?:list windows|inspect window)\b/i.test(command)) return "searching";
+  if (/^focus window\b/i.test(command)) return "launching";
   if (/^(create|make|save|write)\b/i.test(command)) return "writing";
   if (/^(open|launch|start)\b/i.test(command)) return "launching";
   if (/^(list|show)(?:\s+me)?\s+(?:(?:the|my)\s+)?(?:text\s+)?files\b/i.test(command)) return "searching";
@@ -37,8 +39,9 @@ export function companionMood(input: { state: string; busy: boolean; action: Com
   if (input.busy) return input.state === "choosing" ? "thinking" : input.action;
   if (input.draft) return "confirming";
   if (input.speaking) return "speaking";
+  if (input.state === "plan") return "confirming";
   if (input.cue) return input.cue;
-  if (input.state === "failed") return "error";
+  if (input.state === "failed" || input.state === "operator_uncertain") return "error";
   if (input.state === "clarification") return "confused";
   if (input.listening) return "listening";
   if (input.typing) return "thinking";
