@@ -1,0 +1,45 @@
+.pet {
+  box-sizing: border-box;
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 83px minmax(0, 1fr);
+  align-items: center;
+  padding: 0 13px 0 2px;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 19% 49%, #21424b 0, #141929 65%);
+  color: #e4f2f4;
+  font-family: var(--font-inter), "Segoe UI", sans-serif;
+  user-select: none;
+}
+
+.drag {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  cursor: grab;
+  touch-action: none;
+}
+
+.drag:active { cursor: grabbing; }
+.drag > div { height: 96px; width: 96px; max-width: none; pointer-events: none; }
+.details { min-width: 0; }
+.message { margin: 0 0 7px; font-size: 11px; font-weight: 550; line-height: 1.35; }
+.pet[data-phase="permission"] .message, .pet[data-phase="attention"] .message { color: #f0c49a; }
+.pet[data-phase="done"] .message { color: #a7efe1; }
+.controls { display: flex; align-items: center; gap: 6px; }
+.controls button {
+  appearance: none;
+  min-height: 23px;
+  padding: 0 7px;
+  border: 1px solid #79bcbb55;
+  border-radius: 8px;
+  background: #22363f;
+  color: #b3f5ea;
+  font: 500 10px/1.15 var(--font-inter), "Segoe UI", sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.controls button:hover { background: #31515b; }
+.controls button:focus-visible { outline: 2px solid #b3f5ea; outline-offset: 1px; }
+.controls .stop { min-width: 23px; padding: 0; color: #eec5bf; background: #2a2532; border-color: #dfafa94d; }

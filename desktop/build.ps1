@@ -12,7 +12,9 @@ if (-not $SkipFrontend) {
 }
 $ui = Join-Path $repo 'frontend\out'
 $icon = Join-Path $repo 'frontend\public\favicon.ico'
-if (-not (Test-Path -LiteralPath (Join-Path $ui 'desktop-local\index.html'))) { throw 'Native UI export missing' }
+foreach ($page in @('desktop-local\index.html', 'desktop-pet\index.html')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $ui $page))) { throw "Native UI export missing: $page" }
+}
 Push-Location $repo
 try {
     & $python -m PyInstaller --noconfirm --windowed --onedir --name RumiDesktop --distpath desktop/dist --workpath desktop/build --specpath desktop/build --paths backend --add-data "$ui;ui" --icon $icon desktop/main.py

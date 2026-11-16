@@ -39,6 +39,25 @@ observes revocation; the screen-lock watcher and UI status updates are bounded p
 Ctrl+K and Ctrl+Shift+. work while Rumi is focused. The existing `/desktop/` route
 remains a separately labelled simulation.
 
+## Desktop pet
+
+When another app is in front, Rumi's character appears beside it. Drag the
+character to move it and use **Open Rumi** to return to the main window. The pet
+saves its position for the next run. **Desktop pet** in Rumi's header toggles it
+for the current run.
+
+The pet shows listening and speaking, active work, requests to review, verified
+completion, and pauses. **Review** brings up Rumi so you can see the full request
+and approve it there. **Stop Rumi** ends the current action grant and microphone
+capture for this run. The pet keeps private draft contents in the main window.
+Switching to another app leaves current permissions in effect. Minimizing and
+locking Windows end action access as usual.
+
+After saving a résumé, say `Rumi, open my resume in Word` or select **Open in
+Word** in the result or pet. The handoff uses the exact file saved in the current
+workspace session and confirms the document's path in the installed desktop
+version of Microsoft Word.
+
 ## Local voice and companion
 
 After choosing a folder or enabling Windows control, click **Let's talk** to enable the default microphone.

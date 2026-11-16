@@ -57,7 +57,8 @@ class WindowsSpeech:
                 "list windows", "inspect window", "confirm window plan", "cancel window plan",
                 "enable Windows control", "pause microphone", "confirm workflow save", "cancel workflow", "choose option one", "choose option two",
                 "choose option three", "choose option four", "make a resume", "confirm resume save", "cancel resume",
-                "use heard request", "polish resume with Gemini", "confirm Gemini draft", "cancel Gemini draft"] + [f"focus window {word}" for word in
+                "use heard request", "polish resume with Gemini", "confirm Gemini draft", "cancel Gemini draft",
+                "open it in Word", "open my resume in Word", "open my last resume in Word", "open my CV in Word"] + [f"focus window {word}" for word in
                 ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")])))
             self.recognizer.LoadGrammar(Grammar(builder))
             for lead, endings in (
@@ -150,9 +151,10 @@ class WindowsSpeech:
 
 class LocalVoice:
     def __init__(self, authorize, emergency_stop, factory=WindowsSpeech, clock=time.monotonic,
-                 background=lambda: False, on_wake=lambda: None):
+                 background=lambda: False, on_wake=lambda: None, on_request=lambda: None):
         self._authorize, self._emergency_stop = authorize, emergency_stop
         self._background, self._on_wake = background, on_wake
+        self._on_request = on_request
         self._factory, self._clock = factory, clock
         self._lock = threading.RLock()
         self._epoch = 0
@@ -323,6 +325,8 @@ class LocalVoice:
                 self._event("unclear", "That was too long for one command. Please use a shorter request.")
                 return
             self._event("transcript" if has_access else "wake_request", command)
+            if not has_access:
+                self._on_request()
 
     def completed(self, token):
         with self._lock:
@@ -363,6 +367,10 @@ class LocalVoice:
             return {"voice_id": self._epoch, "active": self._active, "starting": self._starting, "speaking": self._speaking,
                     "level": self._level, "message": self._message, "language": self._language,
                     "events": [event for when, event in events if now - when < (90 if event["kind"] == "wake_request" else 8)]}
+
+    def activity(self):
+        with self._lock:
+            return {"speaking": self._speaking, "level": self._level if self._active else 0}
 
     def watch(self):
         with self._lock:

@@ -1,8 +1,16 @@
-export type LocalGrant = { active: boolean; workspace?: string | null; windows_control?: boolean; session_id?: string | null; seconds_remaining?: number; message?: string; wake_enabled?: boolean; wake_armed?: boolean; resume_ai?: boolean };
+export type LocalGrant = { active: boolean; workspace?: string | null; windows_control?: boolean; session_id?: string | null; seconds_remaining?: number; message?: string; wake_enabled?: boolean; wake_armed?: boolean; resume_ai?: boolean; pet_enabled?: boolean; recent_resume?: boolean };
 export type WindowsTask = { window: string; goal: string; heading: string; items: string[] };
 export type LocalReceipt = { request_id?: string; state: string; operation?: string; replayed?: boolean; message?: string; result?: { text?: string; name?: string; path?: string; names?: string[]; truncated?: boolean; reason?: string; task?: WindowsTask } };
 export type VoiceEvent = { id: number; kind: "transcript" | "unclear" | "interrupted" | "wake" | "wake_request"; text: string };
 export type LocalVoiceState = { active: boolean; voice_id?: number; speaking?: boolean; starting?: boolean; level?: number; language?: string; message?: string; events?: VoiceEvent[] };
+export type PetActivity = {
+  phase: "idle" | "listening" | "speaking" | "working" | "permission" | "done" | "dispatched" | "attention" | "paused";
+  message: string;
+  action: "show" | "word" | "review" | null;
+  version: number;
+  level: number;
+  visible: boolean;
+};
 export type NativeDesktopApi = {
   status(): Promise<LocalGrant>;
   choose_workspace(): Promise<LocalGrant>;
@@ -11,6 +19,11 @@ export type NativeDesktopApi = {
   stop(): Promise<LocalGrant>;
   wake_set?(enabled: boolean): Promise<LocalGrant>;
   suspend_actions?(): Promise<void>;
+  pet_set?(enabled: boolean): Promise<boolean>;
+  pet_attention?(reason: "workspace" | "heard" | "draft" | "clear"): Promise<void>;
+  pet_status?(): Promise<PetActivity | null>;
+  pet_drag?(): Promise<void>;
+  pet_action?(action: "show" | "word" | "stop"): Promise<void>;
   voice_start?(): Promise<LocalVoiceState>;
   voice_stop?(): Promise<LocalVoiceState>;
   voice_poll?(): Promise<LocalVoiceState>;
@@ -19,7 +32,7 @@ export type NativeDesktopApi = {
 declare global { interface Window { pywebview?: { api: NativeDesktopApi } } }
 
 export function receiptText(receipt: LocalReceipt): string {
-  if (["window_control", "note_workflow", "resume_workflow"].includes(receipt.operation || "") && receipt.message) return receipt.message;
+  if (["window_control", "note_workflow", "resume_workflow", "word_open"].includes(receipt.operation || "") && receipt.message) return receipt.message;
   if (receipt.state === "uncertain") return "The action may have completed. Check your folder or app before trying again.";
   if (receipt.state === "blocked") return "This action was blocked. Check local permission and the selected folder before trying again.";
   if (receipt.state === "clarification") return receipt.message || "Please name one supported action.";

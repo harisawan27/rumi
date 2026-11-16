@@ -3,26 +3,34 @@ import ctypes
 import os
 import sys
 import threading
+import time
 from pathlib import Path
+from uuid import uuid4
 
 if not getattr(sys, "frozen", False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from src.desktop.native_runtime import NativeRuntime
+from src.desktop.native_runtime import NativeRuntime, word_instruction
 from src.desktop.native_assets import AssetServer
 from src.desktop.workspace import WorkspaceError
 from src.desktop.windows import require_unlocked_desktop
+from activity import DesktopActivity
+from pet_window import PetWindow
 from voice import LocalVoice
 from gemini_resume import configured_polisher
 from wake_settings import WakeSettings
 from windows_operator import WindowsControls
 from windows_research import search_links
+from windows_word import open_word
 
 
 class Bridge:
     def __init__(self, runtime, url, settings=None, desktop_check=require_unlocked_desktop):
         self._runtime, self._url = runtime, url
         self._window = None
+        self._pet = None
+        self._activity = DesktopActivity()
+        self._grant_was_active = False
         self._picker = threading.Lock()
         self._wake_lock = threading.Lock()
         self._settings = settings or WakeSettings()
@@ -34,7 +42,8 @@ class Bridge:
         self._wake_was_locked = False
         self._startup_cancelled = False
         self._voice = LocalVoice(lambda: not self._minimized and self._runtime.status()["active"],
-                                 self._stop_all, background=self._can_wake, on_wake=self._wake_requested.set)
+                                 self._stop_all, background=self._can_wake, on_wake=self._wake_requested.set,
+                                 on_request=lambda: self._activity.permission("workspace"))
 
     def _unlocked(self):
         try:
@@ -46,26 +55,27 @@ class Bridge:
     def _can_wake(self):
         return self._wake_armed and self._unlocked()
 
-    def _stop_all(self):
+    def _stop_all(self, silent=False):
         with self._wake_lock:
             self._wake_armed = False
             self._wake_requested.clear()
             self._runtime.stop()
         self._voice.stop()
+        if not silent:
+            self._activity.stop("Rumi stopped.")
 
     def _minimize(self):
         self._minimized = True
-        self._runtime.stop()
-        if self._wake_armed:
-            self._voice.discard_events()
-        else:
-            self._voice.stop()
+        self._suspend()
 
     def _restore(self):
         self._minimized = False
 
     def watch(self):
-        self._runtime.status()
+        active = self._runtime.status()["active"]
+        if self._grant_was_active and not active:
+            self._activity.stop()
+        self._grant_was_active = active
         if self._wake_armed and not self._unlocked():
             self._wake_was_locked = True
             self._wake_requested.clear()
@@ -76,7 +86,7 @@ class Bridge:
         self._voice.watch()
         if self._wake_requested.is_set():
             self._wake_requested.clear()
-            if self._minimized and self._can_wake():
+            if self._minimized and self._can_wake() and not (self._pet and self._pet.enabled):
                 try:
                     self._check_window()
                     self._window.restore()
@@ -85,7 +95,13 @@ class Bridge:
 
     def suspend_actions(self):
         self._check_window()
+        self._suspend()
+
+    def _suspend(self):
+        if self._runtime.status()["active"]:
+            self._activity.stop()
         self._runtime.stop()
+        self._grant_was_active = False
         if self._wake_armed:
             self._voice.discard_events()
         else:
@@ -96,6 +112,7 @@ class Bridge:
         if type(enabled) is not bool or self._minimized or not self._picker.acquire(blocking=False):
             return self.status()
         generation = self._runtime.generation
+        review = self._activity.permission("wake") if enabled else None
         try:
             startup = bool(self._settings.command)
             if enabled and not self._window.create_confirmation_dialog(
@@ -122,6 +139,8 @@ class Bridge:
         except OSError:
             return {**self.status(), "message": "Could not update Windows startup. Check whether another Rumi copy is registered."}
         finally:
+            if review is not None:
+                self._activity.dismiss(review)
             self._picker.release()
 
     def start_background(self):
@@ -143,15 +162,18 @@ class Bridge:
         return self._status()
 
     def _status(self):
-        return {**self._runtime.status(), "wake_enabled": self._wake_enabled, "wake_armed": self._wake_armed}
+        return {**self._runtime.status(), "wake_enabled": self._wake_enabled, "wake_armed": self._wake_armed,
+                "pet_enabled": bool(self._pet and self._pet.enabled)}
 
     def choose_workspace(self):
         self._check_window()
         if self._minimized or not self._picker.acquire(blocking=False):
             return {"active": False, "message": "A folder dialog is already open."}
+        review = None
         try:
             import webview
             self.suspend_actions()
+            review = self._activity.permission("workspace")
             generation = self._runtime.generation
             selected = self._window.create_file_dialog(webview.FileDialog.FOLDER, allow_multiple=False)
             if not selected:
@@ -159,7 +181,7 @@ class Bridge:
             root = Path(selected[0]).absolute()
             if not self._window.create_confirmation_dialog("Enable local Rumi actions?",
                     f"Allow this Windows session to list, read and create text files and save a reviewed résumé in:\n{root}\n\n"
-                    "Rumi may also launch Notepad and Explorer. Existing files are never overwritten. "
+                    "Rumi may launch Notepad and Explorer and open the résumé it saved in Word. Existing files are never overwritten. "
                     "Permission lasts 15 minutes and ends on Stop, detected lock, minimize or app exit. "
                     "Local actions work without signing in or using an AI service."):
                 return self._runtime.status()
@@ -169,18 +191,28 @@ class Bridge:
             self._stop_all()
             return {"active": False, "message": "Could not enable this folder. Choose a local folder, then try again."}
         finally:
+            if review is not None:
+                self._activity.dismiss(review)
             self._picker.release()
 
     def command(self, request):
         self._check_window()
         if self._minimized:
             self._runtime.stop()
-        return self._runtime.command(request)
+        text = request.get("text") if isinstance(request, dict) else None
+        token = self._activity.begin(opening_word=word_instruction(text)) if isinstance(text, str) and len(text) <= 18000 else None
+        receipt = {"state": "uncertain"}
+        try:
+            receipt = self._runtime.command(request)
+            return receipt
+        finally:
+            self._activity.finish(token, receipt)
 
     def enable_windows_control(self):
         self._check_window()
         if self._minimized or not self._picker.acquire(blocking=False):
             return self._runtime.status()
+        review = self._activity.permission("windows")
         try:
             generation = self._runtime.generation
             if not self._window.create_confirmation_dialog(
@@ -196,6 +228,8 @@ class Bridge:
         except WorkspaceError:
             return {**self._runtime.status(), "message": "Windows control could not be enabled. Try again when ready."}
         finally:
+            if review is not None:
+                self._activity.dismiss(review)
             self._picker.release()
 
     def stop(self):
@@ -231,6 +265,39 @@ class Bridge:
             return {"accepted": False}
         return self._voice.speak(request["text"], request["voice_id"])
 
+    def pet_set(self, enabled):
+        self._check_window()
+        if self._pet and type(enabled) is bool:
+            self._pet.enabled = enabled
+        return bool(self._pet and self._pet.enabled)
+
+    def pet_attention(self, reason):
+        self._check_window()
+        if isinstance(reason, str) and reason in {"workspace", "heard", "draft"}:
+            self._activity.permission(reason)
+        elif reason == "clear":
+            self._activity.dismiss()
+
+    def pet_status(self):
+        state = self._activity.snapshot(self._voice.activity())
+        if state["action"] == "word" and not self._runtime.status()["recent_resume"]:
+            state["action"] = "show"
+        return {**state, "visible": bool(self._pet and self._pet.visible)}
+
+    def pet_action(self, action):
+        if not self._pet or not self._pet.visible or not self._unlocked():
+            return
+        if action == "show":
+            self._check_window()
+            self._pet.restore_main()
+        elif action == "stop":
+            self.stop()
+        elif action == "word" and self.pet_status()["action"] == "word":
+            session = self._runtime.status()["session_id"]
+            if session:
+                self.command({"request_id": str(uuid4()), "session_id": session, "expires_at": int(time.time()) + 60,
+                              "text": "open my résumé in Word"})
+
 
 def expose_bridge(window, api):
     # Expose closures only. pywebview's generic js_api attribute resolver can
@@ -258,8 +325,30 @@ def expose_bridge(window, api):
         return api.wake_set(enabled)
     def suspend_actions():
         return api.suspend_actions()
+    def pet_set(enabled):
+        return api.pet_set(enabled)
+    def pet_attention(reason):
+        return api.pet_attention(reason)
     window.expose(status, choose_workspace, command, enable_windows_control, stop, voice_start, voice_stop,
-                  voice_poll, voice_speak, wake_set, suspend_actions)
+                  voice_poll, voice_speak, wake_set, suspend_actions, pet_set, pet_attention)
+
+
+def expose_pet(window, url, api):
+    def permitted():
+        return window.get_current_url() == url and api._unlocked()
+
+    def pet_status():
+        return api.pet_status() if permitted() else None
+
+    def pet_drag():
+        if permitted():
+            api._pet.begin_drag()
+
+    def pet_action(action):
+        if permitted() and isinstance(action, str):
+            return api.pet_action(action)
+
+    window.expose(pet_status, pet_drag, pet_action)
 
 
 def main():
@@ -289,8 +378,9 @@ def main():
         return
     root = Path(sys._MEIPASS) / "ui" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1] / "frontend/out"
     server = AssetServer(root)
-    runtime = NativeRuntime(Path(os.environ["LOCALAPPDATA"]) / "Rumi/desktop/native-receipts.sqlite3",
-                            operator_factory=WindowsControls, research=search_links, polish_resume=configured_polisher())
+    data = Path(os.environ["LOCALAPPDATA"]) / "Rumi/desktop"
+    runtime = NativeRuntime(data / "native-receipts.sqlite3", operator_factory=WindowsControls,
+                            research=search_links, polish_resume=configured_polisher(), open_word=open_word)
     api = Bridge(runtime, server.url, settings)
     server.start()
     shutdown = threading.Event()
@@ -299,10 +389,22 @@ def main():
     api._window = window
     api._minimized = background
     expose_bridge(window, api)
-    window.events.before_load += api._stop_all
+    pet = webview.create_window("Rumi Pet", server.pet_url, width=234, height=96, hidden=True,
+                               frameless=True, resizable=False, easy_drag=False, focus=False,
+                               on_top=True, shadow=False, background_color="#141929", min_size=(1, 1))
+    api._pet = PetWindow(window, pet, data / "pet-position.json")
+    expose_pet(pet, server.pet_url, api)
+    main_loaded = threading.Event()
+    window.events.before_load += lambda: api._stop_all(silent=not main_loaded.is_set())
+    window.events.loaded += main_loaded.set
     window.events.minimized += api._minimize
     window.events.restored += api._restore
     window.events.closing += api._stop_all
+    def close_pet():
+        shutdown.set()
+        if pet.events.shown.is_set():
+            pet.destroy()
+    window.events.closed += close_pet
     if api._wake_enabled:
         def start_once():
             window.events.loaded -= start_once
@@ -313,7 +415,16 @@ def main():
         while not shutdown.wait(.25):
             api.watch()
 
+    def watch_pet():
+        delay = .12
+        while not shutdown.wait(delay):
+            try:
+                delay = .018 if api._pet.watch(api._unlocked()) else .12
+            except (AttributeError, OSError):
+                delay = .12
+
     threading.Thread(target=watch_lock, daemon=True).start()
+    threading.Thread(target=watch_pet, daemon=True).start()
     webview.settings["ALLOW_FILE_URLS"] = False
     webview.settings["ALLOW_DOWNLOADS"] = False
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False

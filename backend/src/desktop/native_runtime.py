@@ -4,6 +4,8 @@ Only the native host calls enable after its own folder picker and consent dialog
 The renderer cannot supply a workspace path or acquire the host credential.
 """
 import hmac
+import os
+import re
 import secrets
 import threading
 import time
@@ -16,7 +18,12 @@ from .operator import PlanError, WindowOperator, window_instruction
 from .resume import ResumeWorkflow, resume_instruction
 from .windows import require_unlocked_desktop, launch_app
 from .workflow import Workflow, workflow_instruction
-from .workspace import Workspace, WorkspaceError
+from .workspace import Workspace, WorkspaceError, regular
+
+
+def word_instruction(text):
+    plain = re.sub(r"^(?:hey\s+)?rumi[,.:!]?[ \t]+", "", text.strip(), flags=re.I).rstrip(".!?")
+    return bool(re.fullmatch(r"(?:please )?open (?:it|that document|(?:my |the )?(?:last )?(?:r[eé]sum[eé]|cv)) in (?:microsoft )?word", plain, re.I))
 
 
 class NativeCommand(RequestIdentity):
@@ -25,7 +32,8 @@ class NativeCommand(RequestIdentity):
 
 class NativeRuntime:
     def __init__(self, journal, desktop_check=require_unlocked_desktop, launcher=launch_app,
-                 clock=time.monotonic, wall_clock=time.time, operator_factory=None, research=None, polish_resume=None):
+                 clock=time.monotonic, wall_clock=time.time, operator_factory=None, research=None, polish_resume=None,
+                 open_word=None):
         self._journal = Path(journal)
         self._desktop_check, self._launcher = desktop_check, launcher
         self._clock, self._wall_clock = clock, wall_clock
@@ -44,6 +52,9 @@ class NativeRuntime:
         self._resume = None
         self._research = research
         self._polish_resume = polish_resume
+        self._open_word = open_word
+        self._recent_resume = None
+        self._word_requests = set()
 
     @property
     def generation(self):
@@ -58,6 +69,8 @@ class NativeRuntime:
             self._operator = None
             self._workflow = None
             self._resume = None
+            self._recent_resume = None
+            self._word_requests.clear()
             self._folder_enabled = False
             self._expires = 0
             if self._executor:
@@ -94,6 +107,8 @@ class NativeRuntime:
                 self._folder_enabled = True
                 self._workflow = Workflow(self._clock)
                 self._resume = ResumeWorkflow(self._clock)
+                self._recent_resume = None
+                self._word_requests.clear()
                 self._session, self._credential = secrets.token_hex(16), secrets.token_urlsafe(32)
                 self._expires = self._clock() + 900
                 self._last_file = None
@@ -135,6 +150,7 @@ class NativeRuntime:
                 except WorkspaceError:
                     pass
             return {"active": bool(self._credential), "session_id": self._session, "resume_ai": self._polish_resume is not None,
+                    "recent_resume": bool(self._open_word and self._recent_resume),
                     "workspace": str(self._executor.workspace.root) if self._folder_enabled else None,
                     "windows_control": self._operator is not None,
                     "seconds_remaining": max(0, int(self._expires - self._clock())) if self._credential else 0}
@@ -155,6 +171,8 @@ class NativeRuntime:
                 resume = self._resume
             if not self._wall_clock() < request.expires_at <= self._wall_clock() + 120:
                 raise WorkspaceError("expired")
+            if word_instruction(request.text):
+                return self._word_command(request, credential)
             resume_step = resume_instruction(request.text)
             if resume_step:
                 if workflow:
@@ -224,8 +242,45 @@ class NativeRuntime:
 
         state, message, result = resume.run(request.request_id, instruction, executor.workspace.root,
                                            write, self._polish_resume, guard)
-        guard()
+        with self._state:
+            guard()
+            if state == "succeeded":
+                self._recent_resume = Path(result["path"])
         return {**receipt, "state": state, "message": message, "result": result}
+
+    def _word_command(self, request, credential):
+        receipt = {"request_id": request.request_id, "operation": "word_open"}
+        with self._state:
+            self._authorize(credential, request.session_id)
+            path = self._recent_resume
+            if not path:
+                return {**receipt, "state": "clarification", "message": "Save a résumé in this workspace first."}
+            if not self._open_word:
+                return {**receipt, "state": "clarification", "message": "Word control is unavailable on this PC."}
+            if request.request_id in self._word_requests or len(self._word_requests) >= 128:
+                return {**receipt, "state": "clarification", "message": "This Word request was already handled or the folder session is full."}
+            self._word_requests.add(request.request_id)
+
+        def guard():
+            self._authorize(credential, request.session_id)
+            if self._wall_clock() >= request.expires_at:
+                raise WorkspaceError("expired")
+
+        try:
+            with Workspace(path.parent).pinned():
+                before = regular(path)
+                guard()
+                full_name = self._open_word(path, guard)
+                guard()
+                after = regular(path)
+                if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino) or os.path.normcase(os.path.normpath(full_name)) != os.path.normcase(str(path)):
+                    raise WorkspaceError("word_unverified")
+        except (OSError, WorkspaceError) as exc:
+            guard()
+            if isinstance(exc, WorkspaceError) and exc.code == "word_unavailable":
+                return {**receipt, "state": "clarification", "message": "Microsoft Word is unavailable. The résumé is saved in your workspace."}
+            return {**receipt, "state": "operator_uncertain", "message": "Check Word before retrying. Rumi couldn't verify that the saved résumé opened."}
+        return {**receipt, "state": "succeeded", "message": "Opened your saved résumé in Microsoft Word."}
 
     def _window_command(self, request, instruction, operator, credential):
         deadline = self._clock() + 14

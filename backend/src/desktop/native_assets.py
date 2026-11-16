@@ -12,7 +12,9 @@ class AssetServer:
         self.root = Path(root).resolve()
         if not (self.root / "desktop-local/index.html").is_file():
             raise FileNotFoundError("Build the frontend before starting Rumi Desktop")
-        self.document_path = "/" + secrets.token_urlsafe(32) + "/desktop-local/"
+        prefix = "/" + secrets.token_urlsafe(32)
+        self.document_path = prefix + "/desktop-local/"
+        self.pet_path = prefix + "/desktop-pet/"
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -27,6 +29,8 @@ class AssetServer:
                 path = unquote(url.path)
                 if path == outer.document_path and not url.query:
                     target = outer.root / "desktop-local/index.html"
+                elif path == outer.pet_path and not url.query:
+                    target = outer.root / "desktop-pet/index.html"
                 elif path.startswith("/_next/static/") and "\\" not in path and ".." not in path:
                     target = (outer.root / path.lstrip("/")).resolve()
                     if not target.is_relative_to(outer.root / "_next/static"):
@@ -53,6 +57,7 @@ class AssetServer:
         self.server.daemon_threads = True
         self.host = f"127.0.0.1:{self.server.server_port}"
         self.url = f"http://{self.host}{self.document_path}"
+        self.pet_url = f"http://{self.host}{self.pet_path}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def start(self):

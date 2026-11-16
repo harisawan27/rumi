@@ -16,7 +16,7 @@ from src.desktop.native_runtime import NativeRuntime
 from src.desktop.native_assets import AssetServer
 from src.desktop.resume import WORD
 from src.desktop.workspace import WorkspaceError
-from main import Bridge, expose_bridge
+from main import Bridge, expose_bridge, expose_pet
 
 
 class NativeTests(unittest.TestCase):
@@ -161,8 +161,24 @@ class NativeTests(unittest.TestCase):
         window = Mock()
         expose_bridge(window, bridge)
         exports = window.expose.call_args.args
-        self.assertEqual({f.__name__ for f in exports}, {"status", "choose_workspace", "command", "enable_windows_control", "stop", "voice_start", "voice_stop", "voice_poll", "voice_speak", "wake_set", "suspend_actions"})
+        self.assertEqual({f.__name__ for f in exports}, {"status", "choose_workspace", "command", "enable_windows_control", "stop", "voice_start", "voice_stop", "voice_poll", "voice_speak", "wake_set", "suspend_actions", "pet_set", "pet_attention"})
         self.assertTrue(all(not hasattr(f, "__self__") for f in exports))
+
+    def test_pet_exposes_only_its_own_trusted_controls(self):
+        bridge = Bridge(self.runtime, "main", desktop_check=self.desktop)
+        window = Mock()
+        bridge._pet = Mock(visible=True)
+        expose_pet(window, "pet", bridge)
+        methods = {method.__name__: method for method in window.expose.call_args.args}
+        self.assertEqual(set(methods), {"pet_status", "pet_drag", "pet_action"})
+        window.get_current_url.return_value = "main"
+        self.assertIsNone(methods["pet_status"]())
+        methods["pet_drag"]()
+        bridge._pet.begin_drag.assert_not_called()
+        window.get_current_url.return_value = "pet"
+        self.assertEqual(methods["pet_status"]()["phase"], "idle")
+        methods["pet_drag"]()
+        bridge._pet.begin_drag.assert_called_once()
 
     def test_minimize_preserves_only_opted_in_microphone(self):
         self.enable()
@@ -263,6 +279,23 @@ class NativeTests(unittest.TestCase):
         self.assertFalse((self.root / "Resume").exists())
         self.assertEqual(self.runtime.command(self.request("confirm resume save"))["state"], "succeeded")
 
+    def test_word_handoff_uses_only_verified_recent_resume_and_checks_answer(self):
+        self.runtime._open_word = Mock(side_effect=lambda path, guard: str(path))
+        self.enable()
+        command = "open it in Word"
+        self.assertEqual(self.runtime.command(self.request(command))["state"], "clarification")
+        self.start_resume()
+        self.assertEqual(self.runtime.command(self.request("confirm resume save"))["state"], "succeeded")
+        request = self.request(command)
+        self.assertEqual(self.runtime.command(request)["state"], "succeeded")
+        self.assertEqual(self.runtime._open_word.call_args.args[0], self.root / "Resume/Resume.docx")
+        self.assertEqual(self.runtime.command(request)["state"], "clarification")
+        self.runtime._open_word.return_value = str(self.root / "Other/Resume.docx")
+        self.runtime._open_word.side_effect = None
+        self.assertEqual(self.runtime.command(self.request(command))["state"], "operator_uncertain")
+        self.runtime.stop()
+        self.assertFalse(self.runtime.status()["recent_resume"])
+
 
 class AssetsTests(unittest.TestCase):
     def setUp(self):
@@ -270,6 +303,8 @@ class AssetsTests(unittest.TestCase):
         root = Path(self.temp.name)
         (root / "desktop-local").mkdir()
         (root / "desktop-local/index.html").write_text("<html>local UI</html>")
+        (root / "desktop-pet").mkdir()
+        (root / "desktop-pet/index.html").write_text("<html>pet UI</html>")
         (root / "_next/static").mkdir(parents=True)
         (root / "_next/static/app.js").write_text("/* bundled */")
         (root / "private.txt").write_text("do not serve")
@@ -291,6 +326,8 @@ class AssetsTests(unittest.TestCase):
         status, headers, body = self.get(self.server.document_path)
         self.assertEqual(status, 200)
         self.assertIn(b"local UI", body)
+        self.assertIn(b"pet UI", self.get(self.server.pet_path)[2])
+        self.assertEqual(self.get("/desktop-pet/")[0], 404)
         self.assertIn("connect-src 'none'", headers["Content-Security-Policy"])
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertEqual(self.get("/_next/static/app.js")[0], 200)

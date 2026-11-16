@@ -19,6 +19,7 @@ export default function NativeDesktop() {
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [wake, setWake] = useState({ enabled: false, armed: false });
   const [wakeBusy, setWakeBusy] = useState(false);
+  const [petEnabled, setPetEnabled] = useState(false);
   const [wakeRequest, setWakeRequest] = useState<Draft | null>(null);
   const [text, setText] = useState("");
   const [heard, setHeard] = useState("");
@@ -109,6 +110,7 @@ export default function NativeDesktop() {
         const next = await api.current.status();
         if (gone || generation !== epoch.current) return;
         updateWake(next);
+        setPetEnabled(!!next.pet_enabled);
         if (!next.active && hadGrant.current) { clear(!!next.wake_armed); setState("permission-ended"); }
         else if (next.active && hadGrant.current) { live.current.grant = next; setGrant(next); }
         else if (!next.active) { return; }
@@ -165,6 +167,7 @@ export default function NativeDesktop() {
     if (!wakeRequest) return;
     const expiry = setTimeout(() => {
       setWakeRequest(null);
+      void api.current?.pet_attention?.("clear").catch(() => {});
       setState(value => value === "wake_review" ? "wake_expired" : value);
     }, Math.max(0, wakeRequest.until - Date.now()));
     return () => clearTimeout(expiry);
@@ -172,7 +175,7 @@ export default function NativeDesktop() {
 
   useEffect(() => {
     if (!draft) return;
-    const timer = setTimeout(() => { live.current.draft = null; setDraft(null); setHeard(""); showResult("The confirmation expired. Nothing was created. Please ask again.", "clarification"); }, Math.max(0, draft.until - Date.now()));
+    const timer = setTimeout(() => { live.current.draft = null; setDraft(null); setHeard(""); void api.current?.pet_attention?.("clear").catch(() => {}); showResult("The confirmation expired. Nothing was created. Please ask again.", "clarification"); }, Math.max(0, draft.until - Date.now()));
     return () => clearTimeout(timer);
   }, [draft]);
 
@@ -279,6 +282,7 @@ export default function NativeDesktop() {
     const startsResume = /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:create|make|write|draft)\s+(?:(?:a|my)\s+)?(?:r[eé]sum[eé](?=\s|$)|(?:new\s+)?folder\b.*\band\b.*\br[eé]sum[eé](?=\s|$))/i.test(value.trim().replace(/[.!?]+$/, ""));
     if (fromVoice && !confirmed && !startsResume && /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:create|make|save|write)\b/i.test(value)) {
       const next = { text: value, until: Date.now() + 30000 };
+      void api.current?.pet_attention?.("draft").catch(() => {});
       live.current.draft = next; setDraft(next); setResult(""); setTask(undefined); setWorkflowName(""); setPage(0); setView("workspace"); setState("confirming");
       announce("I've prepared your words. Review the request on screen. Say Rumi confirm to create the file, or Rumi cancel to stop.");
       return;
@@ -302,6 +306,7 @@ export default function NativeDesktop() {
       react(["plan", "workflow_review", "resume_review", "resume_share"].includes(receipt.state) ? "confirming" : receipt.state === "succeeded" ? "success" : receipt.state === "dispatched" || receipt.state === "resume_details" ? "acknowledging" : ["clarification", "task_choice"].includes(receipt.state) ? "confused" : "error");
       const note = receipt.operation === "note_workflow" ? receipt.result : undefined;
       const resume = receipt.operation === "resume_workflow" ? receipt.result : undefined;
+      if (resume && receipt.state === "succeeded") setGrant(value => ({ ...value, recent_resume: true }));
       const resumeText = resume?.path && receipt.state !== "succeeded" ? `${resume.path}\n\n${resume.text || content}` : resume?.text;
       showResult(resumeText || note?.text || content, receipt.state, receipt.result?.task, resume ? "Résumé" : note?.name);
       if (resume) setHeard(content);
@@ -320,6 +325,7 @@ export default function NativeDesktop() {
     if (event.kind === "wake_request") {
       if (/^pause microphone[.!?]?$/i.test(event.text.trim())) { void pauseVoice(); return; }
       const next = { text: event.text, until: Date.now() + 90000 };
+      void api.current?.pet_attention?.(live.current.grant.active ? "heard" : "workspace").catch(() => {});
       setWakeRequest(next); react("acknowledging"); setHeard("I heard your request. Choose a workspace to continue.");
       showResult("", "wake_review"); return;
     }
@@ -376,6 +382,7 @@ export default function NativeDesktop() {
       <div className={s.brand}><span className={s.mark}>r.</span><span>Rumi</span></div>
       <div className={s.connection}><i className={available ? s.online : s.offline}/><span>{available ? "On your device" : "Desktop preview"}</span></div>
       <div className={s.headerActions}>
+        {api.current?.pet_set && <button className={`${s.iconButton} ${s.wakeButton}`} aria-label="Desktop pet" aria-pressed={petEnabled} title="Show Rumi over other apps" onClick={() => void api.current?.pet_set?.(!petEnabled).then(setPetEnabled).catch(() => {})}><Icon name="move" size={15}/><span>Desktop pet</span></button>}
         {api.current?.wake_set && <button className={`${s.iconButton} ${s.wakeButton}`} aria-label="Background wake" aria-pressed={wake.enabled} title="Listen for Hey Rumi while minimized" disabled={!available || busy || wakeBusy} onClick={() => void toggleWake()}><Icon name="mic" size={15}/><span>Background wake</span></button>}
         <button className={`${s.iconButton} ${s.windowsButton}`} aria-label={grant.windows_control ? "Windows control enabled" : "Enable Windows control"} aria-pressed={!!grant.windows_control} title={grant.windows_control ? "Windows control enabled" : "Enable Windows control"} disabled={!available || !api.current?.enable_windows_control || busy} onClick={() => void enableWindowsControl()}><Icon name="expand"/><span>Windows control</span></button>
         <button className={s.iconButton} aria-label="Meet Rumi" title="Meet Rumi · pauses microphone" disabled={busy} onClick={() => { void pauseVoice().then(paused => { if (paused) setExpressions(true); }); }}><Icon name="spark"/></button>
@@ -405,7 +412,10 @@ export default function NativeDesktop() {
         {state === "wake_review" && wakeRequest ? <div className={s.confirmation}>
           <p>{grant.active ? 'Say “Rumi, use heard request” to continue.' : "Choose a workspace to use this request."}</p>
           <button disabled={!grant.active || busy} onClick={useHeardRequest}>Use heard request</button>
-          <button onClick={() => { setWakeRequest(null); setHeard(""); showResult("", "ready"); }}>Discard</button>
+          <button onClick={() => { setWakeRequest(null); setHeard(""); void api.current?.pet_attention?.("clear").catch(() => {}); showResult("", "ready"); }}>Discard</button>
+        </div> : state === "succeeded" && workflowName === "Résumé" && grant.recent_resume ? <div className={s.confirmation}>
+          <p>Say <strong>“Rumi, open it in Word”</strong> to continue there.</p>
+          <button onClick={() => void submit("open it in Word")}>Open in Word</button>
         </div> : state === "resume_review" ? <div className={s.confirmation}>
           <p>Say <strong>“Rumi, confirm resume save”</strong> once you’ve reviewed it.</p>
           <button onClick={() => void submit("confirm resume save")}>Save Word file</button>
@@ -424,7 +434,7 @@ export default function NativeDesktop() {
           <button onClick={() => void submit("confirm workflow save")}>Save note</button>
           <button onClick={() => void submit("cancel workflow")}>Discard note</button>
         </div> :
-        draft ? <div className={s.confirmation}><p>Say <strong>“Rumi confirm”</strong> within 30 seconds. Check the filename and every word first.</p><button onClick={() => { const saved = live.current.draft; if (saved && Date.now() < saved.until) void submit(saved.text, true, true); }}>Confirm creation</button><button onClick={() => { live.current.draft = null; setDraft(null); showResult("Nothing was created.", "clarification"); }}>Discard</button></div> : <div className={s.shortcuts}><button disabled={!grant.active || busy} onClick={() => void submit("Open Notepad")}><Icon name="expand" size={15}/>Open Notepad</button><button disabled={!grant.active || busy} onClick={() => void submit("List files")}><Icon name="folder" size={15}/>List text files</button><button disabled={!grant.active || busy} onClick={() => void submit("Read that file")}><Icon name="activity" size={15}/>Read that file</button></div>}
+        draft ? <div className={s.confirmation}><p>Say <strong>“Rumi confirm”</strong> within 30 seconds. Check the filename and every word first.</p><button onClick={() => { const saved = live.current.draft; if (saved && Date.now() < saved.until) void submit(saved.text, true, true); }}>Confirm creation</button><button onClick={() => { live.current.draft = null; setDraft(null); void api.current?.pet_attention?.("clear").catch(() => {}); showResult("Nothing was created.", "clarification"); }}>Discard</button></div> : <div className={s.shortcuts}><button disabled={!grant.active || busy} onClick={() => void submit("Open Notepad")}><Icon name="expand" size={15}/>Open Notepad</button><button disabled={!grant.active || busy} onClick={() => void submit("List files")}><Icon name="folder" size={15}/>List text files</button><button disabled={!grant.active || busy} onClick={() => void submit("Read that file")}><Icon name="activity" size={15}/>Read that file</button></div>}
         </>}
       </section>}
       {!workspace && <aside className={s.whisper} aria-label="Example requests">
