@@ -23,6 +23,9 @@ class App:
         self.actions = []
         self.failure = None
         self.launches = []
+        self.labels = []
+        self.revealed = False
+        self.found = True
 
     def foreground(self, guard):
         guard()
@@ -36,6 +39,22 @@ class App:
     def describe(self, target, guard):
         self.validate_target(target, guard)
         return ["Find (button)"]
+
+    def controls(self, target, guard):
+        self.validate_target(target, guard)
+        return self.labels
+
+    def reveal_search(self, target, label, guard):
+        self.validate_target(target, guard)
+        self.revealed = True
+        self.labels = [("Search query", "edit")]
+
+    def document(self, target, guard):
+        self.validate_target(target, guard)
+
+    def find_document_text(self, target, value, guard):
+        self.validate_target(target, guard)
+        return self.found
 
     def windows(self, guard):
         guard()
@@ -183,6 +202,38 @@ class OperatorTests(unittest.TestCase):
         with self.assertRaises(WorkspaceError):
             bridge.enable_windows_control()
         self.assertFalse(self.runtime.status()["windows_control"])
+
+    def test_natural_search_discovers_field_after_reveal(self):
+        self.enable()
+        self.app.labels = [("Show search", "button")]
+        plan = self.send("Rumi search for invoice")
+        self.assertEqual(plan["state"], "plan")
+        self.assertEqual(plan["result"]["task"]["window"], "Fixture")
+        self.assertFalse(self.app.revealed)
+        self.assertEqual(self.send("confirm window plan")["state"], "succeeded")
+        self.assertTrue(self.app.revealed)
+        self.assertEqual(self.app.actions, [Step("set", "Search query", "invoice")])
+
+    def test_choose_control_requires_fresh_target_then_separate_confirmation(self):
+        self.enable()
+        self.app.labels = [("Search query", "edit"), ("Find what", "edit")]
+        choice = self.send("search for invoice")
+        self.assertEqual(choice["state"], "task_choice")
+        self.assertEqual(choice["result"]["task"]["items"], ["Search query", "Find what"])
+        self.assertEqual(self.send("choose option two")["state"], "plan")
+        self.assertEqual(self.app.actions, [])
+        self.app.labels = [("Search query", "edit")]
+        self.assertEqual(self.send("confirm window plan")["state"], "clarification")
+        self.assertEqual(self.app.actions, [])
+
+    def test_document_search_reports_negative_without_guessing(self):
+        self.enable()
+        self.app.found = False
+        self.assertEqual(self.send("find invoice in this document")["state"], "plan")
+        result = self.send("confirm window plan")
+        self.assertEqual(result["state"], "succeeded")
+        self.assertIn("No match", result["message"])
+        self.assertEqual(self.app.actions, [])
 
 
 if __name__ == "__main__":

@@ -95,6 +95,18 @@ the synthetic diagnostic is not evidence that those checks passed. See
    Rumi checks each step before continuing and reports how many it verified.
    `Rumi stop` revokes the session. An action already sent to the app can finish.
 
+You can also start with the outcome you want:
+
+- `Rumi find invoice in this document` checks for a match in readable text exposed by the foreground app.
+- `Rumi search for meeting notes` locates a search field or opens a search control, then checks the entered query.
+- `Rumi fill subject with Weekly review` finds the named editable field and checks its value.
+- `Rumi switch to details view` finds a matching view or tab and verifies selection.
+
+The workspace shows your goal, the target window and the proposed steps. If several
+controls match, say `Rumi choose option two` or the number you want. Rumi still waits
+for `Rumi confirm window plan` before making changes. If speech recognition got a word
+wrong, cancel the plan and ask again. The planner runs on your device.
+
 The operator uses the named controls exposed by Windows UI Automation in the
 selected foreground window. It needs a unique match and a supported control
 pattern. Inaccessible controls, blocked focus changes and separate modal windows
@@ -107,6 +119,8 @@ root to verify a real three-step plan against a disposable WPF window. The check
 uses generated audio and the local speech recognizer for the instructions. It opens
 and closes only its own test window, verifies that a named button reveals a field,
 checks the exact text in that field, and verifies the checkbox changes state.
+Use `desktop/.venv/Scripts/python desktop/check_planner.py` to test natural goal
+phrases against two disposable Windows layouts.
 
 ## Build from source
 

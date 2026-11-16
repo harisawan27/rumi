@@ -8,6 +8,7 @@ import re
 import time
 
 from src.desktop.operator import PlanError, Unverified
+from src.desktop.planner import SEARCH_FIELDS
 
 
 BLOCKED_APPS = {
@@ -146,7 +147,7 @@ class WindowsControls:
             time.sleep(0.05)
         self.validate_target(target, guard)
 
-    def _nodes(self, target, guard):
+    def _elements(self, target, guard):
         self.validate_target(target, guard)
         pointer, automation = self._automation()
         walker = automation.TreeWalker.ControlViewWalker
@@ -163,11 +164,7 @@ class WindowsControls:
                 self.validate_target(target, guard)
             info = node.Current
             if info.ProcessId == target.pid and not info.IsOffscreen:
-                label = str(info.Name or "").strip()
-                kind = str(info.ControlType.ProgrammaticName).split(".")[-1].casefold()
-                if (label and len(label) <= 120 and all(ord(char) >= 32 for char in label)
-                        and not info.IsPassword and kind in CONTROL_TYPES and not PROTECTED_CONTROL.search(label)):
-                    yield node, label, kind
+                yield node, info
             child = walker.GetFirstChild(node)
             if child is not None:
                 parents.append(node)
@@ -177,6 +174,48 @@ class WindowsControls:
                 while node is None and parents:
                     node = walker.GetNextSibling(parents.pop())
         self.validate_target(target, guard)
+
+    def _nodes(self, target, guard):
+        for node, info in self._elements(target, guard):
+            if info.IsPassword:
+                continue
+            label = str(info.Name or "").strip()
+            kind = str(info.ControlType.ProgrammaticName).split(".")[-1].casefold()
+            if (label and len(label) <= 120 and all(ord(char) >= 32 for char in label)
+                    and kind in CONTROL_TYPES and not PROTECTED_CONTROL.search(label)):
+                yield node, label, kind
+
+    def controls(self, target, guard):
+        return [(label, kind) for node, label, kind in self._nodes(target, guard) if node.Current.IsEnabled]
+
+    def document(self, target, guard):
+        _, automation = self._automation()
+        documents = []
+        for node, info in self._elements(target, guard):
+            if info.ControlType != automation.ControlType.Document or info.IsPassword:
+                continue
+            supported, pattern = node.TryGetCurrentPattern(automation.TextPattern.Pattern)
+            if supported:
+                documents.append(pattern)
+        if len(documents) != 1:
+            raise PlanError("Open one document whose app exposes readable text, then ask me again.")
+        return documents[0]
+
+    def find_document_text(self, target, words, guard):
+        document = self.document(target, guard)
+        self.validate_target(target, guard)
+        found = document.DocumentRange.FindText(words, False, True)
+        self.validate_target(target, guard)
+        return found is not None
+
+    def reveal_search(self, target, label, guard):
+        from src.desktop.operator import Step
+
+        def search_visible():
+            return any(kind == "edit" and name.casefold() in SEARCH_FIELDS
+                       for name, kind in self.controls(target, guard))
+
+        self.perform(target, Step("press", label, "search field"), guard, expected=search_visible)
 
     def describe(self, target, guard):
         labels = []
@@ -207,7 +246,7 @@ class WindowsControls:
             raise PlanError(f'"{label}" does not support that action in Windows accessibility.')
         return result
 
-    def perform(self, target, step, guard):
+    def perform(self, target, step, guard, expected=None):
         if PROTECTED_CONTROL.search(step.label):
             raise PlanError("This control needs your direct interaction.")
         _, automation = self._automation()
@@ -215,13 +254,12 @@ class WindowsControls:
         info = node.Current
         if not info.IsEnabled or info.IsOffscreen or info.IsPassword:
             raise PlanError(f'"{step.label}" is unavailable.')
-        postcondition = None
         if step.verb == "press":
             pattern = self._pattern(node, automation.InvokePattern.Pattern, step.label)
-            if self._find(target, step.value, guard, optional=True) is not None:
+            postcondition = expected or (lambda: self._find(target, step.value, guard, optional=True) is not None)
+            if postcondition():
                 raise PlanError(f'"{step.value}" is already visible. Choose a control that will appear after the press.')
             apply = pattern.Invoke
-            postcondition = lambda: self._find(target, step.value, guard, optional=True) is not None
         elif step.verb == "set":
             if info.ControlType != automation.ControlType.Edit:
                 raise PlanError("Set works only with an editable text field.")

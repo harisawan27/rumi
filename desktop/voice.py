@@ -46,7 +46,8 @@ class WindowsSpeech:
                 "what can you do", "help", "are you there", "next page",
                 "previous page", "show workspace", "show companion", "read result page",
                 "list windows", "inspect window", "confirm window plan", "cancel window plan",
-                "enable Windows control", "pause microphone"] + [f"focus window {word}" for word in
+                "enable Windows control", "pause microphone", "choose option one", "choose option two",
+                "choose option three", "choose option four"] + [f"focus window {word}" for word in
                 ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")])))
             self.recognizer.LoadGrammar(Grammar(builder))
             freeform = GrammarBuilder()

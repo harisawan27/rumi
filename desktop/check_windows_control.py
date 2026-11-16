@@ -14,7 +14,7 @@ from check_speech import recognize_samples
 from windows_operator import WindowsControls
 
 
-def fixture(title):
+def fixture(title, variant="standard"):
     import clr
     ctypes.windll.ole32.CoInitializeEx(None, 2)
     root = ctypes.create_unicode_buffer(32768)
@@ -26,28 +26,40 @@ def fixture(title):
     from System import TimeSpan
     from System.Windows import Application, Visibility, Window
     from System.Windows.Automation import AutomationProperties
-    from System.Windows.Controls import Button, CheckBox, StackPanel, TextBox
+    from System.Windows.Controls import Button, CheckBox, RichTextBox, StackPanel, TabControl, TabItem, TextBox
+    from System.Windows.Documents import Paragraph, Run
     from System.Windows.Threading import DispatcherTimer
 
     window = Window()
     window.Title = title
-    window.Width, window.Height = 380, 200
+    window.Width, window.Height = 440, 370
     window.ShowInTaskbar = False
     panel = StackPanel()
     window.Content = panel
     field = TextBox()
     field.Visibility = Visibility.Collapsed
-    AutomationProperties.SetName(field, "Search query")
+    AutomationProperties.SetName(field, "Find what" if variant == "alternate" else "Search query")
     button = Button()
-    button.Content = "Show search"
+    button.Content = "Find" if variant == "alternate" else "Show search"
     button.Click += lambda *_: setattr(field, "Visibility", Visibility.Visible)
     checkbox = CheckBox()
     checkbox.Content = "Match case"
     panel.Children.Add(button)
     panel.Children.Add(field)
     panel.Children.Add(checkbox)
+    if variant != "standard":
+        editor = RichTextBox()
+        editor.Height = 88
+        editor.Document.Blocks.Add(Paragraph(Run("Hello. The invoice is ready for review.")))
+        panel.Children.Add(editor)
+        tabs = TabControl()
+        for name in ("Summary", "Details"):
+            tab = TabItem()
+            tab.Header = name
+            tabs.Items.Add(tab)
+        panel.Children.Add(tabs)
     timer = DispatcherTimer()
-    timer.Interval = TimeSpan.FromSeconds(25)
+    timer.Interval = TimeSpan.FromSeconds(45)
     timer.Tick += lambda *_: window.Close()
     timer.Start()
     Application().Run(window)

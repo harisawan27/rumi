@@ -190,7 +190,10 @@ class NativeRuntime:
             except PlanError as exc:
                 state, message = "clarification", str(exc)
             self._authorize(credential, request.session_id)
-        return {"request_id": request.request_id, "operation": "window_control", "state": state, "message": message}
+        receipt = {"request_id": request.request_id, "operation": "window_control", "state": state, "message": message}
+        if operator and operator.task_sheet:
+            receipt["result"] = {"task": operator.task_sheet}
+        return receipt
 
     def close(self):
         self.stop()

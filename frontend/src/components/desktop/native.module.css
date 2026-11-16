@@ -8,3 +8,58 @@
 @media(max-width:850px){.shell{grid-template-rows:62px minmax(0,1fr) auto 28px}.header{padding:0 18px;gap:10px}.brand{font-size:20px}.brand small{font-size:6px}.connection{display:none}.headerActions{gap:6px}.stopButton{font-size:9px!important;padding:8px}.stage{padding:14px 18px 0 72px;gap:12px}.rail{left:7px;gap:22px}.whisper{width:140px;right:3%;padding-left:12px;top:19%}.whisper>p{font-size:10px}.shell[data-view=companion] .scene{margin-right:130px}.sceneTop{padding:0 4px}.eyebrow{font-size:7px;letter-spacing:1.4px}.sceneMode{font-size:7px}.greeting h1{font-size:30px}.greeting>p:last-child{font-size:10px}.permission{flex-wrap:wrap;gap:8px;padding:10px}.permission button{margin-left:auto}.workspace{width:62%;padding:12px;gap:12px}.workspaceHeading h2{font-size:15px}.resultFrame{padding:11px}.textSurface{font-size:12px;line-height:21px}.shell[data-view=workspace] .sceneTop{display:none}.shell[data-view=workspace] .greeting h1{font-size:20px}.shell[data-view=workspace] .greeting>p:last-child{display:none}.shell[data-view=workspace] .permission>svg{display:none}.shell[data-view=workspace] .permission>div{flex-basis:100%}.shell[data-view=workspace] .permission strong{font-size:9px}.shell[data-view=workspace] .permission button{font-size:8px;padding:5px}.shortcuts button{font-size:8px;padding:6px}.conversation{padding:12px 24px}.talkButton{width:72%;min-width:0;padding:11px 14px}.talkButton>span:not(.signal){font-size:13px}.talkButton small{font-size:7px}.dock{gap:15px}.footer{padding:0 18px;font-size:6px;letter-spacing:.5px}.footer>span:last-child{display:none}}
 @media(max-height:700px){.shell{grid-template-rows:58px minmax(0,1fr) auto 28px}.stage{padding-top:12px}.greeting{margin-top:-8px;margin-bottom:10px}.greeting h1{font-size:29px;margin:5px 0}.greeting>.eyebrow{display:none}.sceneTop{font-size:7px}.conversation{padding-top:10px;padding-bottom:10px}.liveLine{margin-bottom:8px;font-size:10px}.talkButton{padding:10px 16px}.workspace{padding:15px;gap:10px}.workspaceHeading h2{font-size:16px;margin-top:5px}.grantTime{font-size:7px}.permission{padding:8px 10px}.whisper{top:20%}.whisper>small{margin-top:12px}.homeShortcuts{margin-top:15px}.commandOpen{height:35px;margin-top:8px}}
 @media(max-width:600px){.shell{grid-template-rows:58px minmax(0,1fr) auto 26px}.header{padding:0 14px}.headerActions .iconButton{width:29px;height:29px}.brand small{display:none}.brand{gap:7px}.stopButton{font-size:8px!important;padding:7px}.stage{padding:12px 14px 0 58px}.rail{left:0}.rail button{width:50px}.rail button span{font-size:6px}.whisper{display:none}.shell[data-view=companion] .scene{margin-right:0}.greeting h1{font-size:32px}.characterStage{max-height:360px}.shell[data-view=workspace] .scene{display:none}.workspace{width:100%;border-radius:13px}.sceneTop .eyebrow{font-size:6px}.orbitNote{font-size:7px}.permission{flex-wrap:nowrap}.permission button{font-size:8px;padding:7px}.conversation{padding:10px 14px}.dock{gap:10px}.talkButton{width:auto;flex:1;padding:11px;gap:9px}.talkButton small{font-size:7px;line-height:1.5}.signal{display:none}.localSeal{font-size:6px;letter-spacing:.6px}.localSeal small{font-size:6px}.typeToggle>span{font-size:19px}.typeToggle small{font-size:7px}.footer{font-size:5px;padding:0 14px;letter-spacing:.2px}}
+
+/* The companion is the brightest object. UI chrome uses cool violet and
+   functional mint, with amber reserved for a question that needs a reply. */
+.shell {
+  --ink: #edf3fb;
+  --soft: #b9c2df;
+  --muted: #929fbe;
+  --accent: #9ce5d2;
+  --line: #8993c635;
+  background: radial-gradient(ellipse at 43% 44%, #232943 0%, #191c31 46%, #111326 82%);
+}
+.header { background: #14172a90; }
+.windowsButton { display: flex; width: auto; align-items: center; gap: 7px; padding: 0 10px; }
+.windowsButton span { font-size: 11px; white-space: nowrap; }
+.brand { font-size: 19px; letter-spacing: .02em; }
+.mark { color: #c3b9f5; }
+.stars { opacity: .17; }
+.horizon { opacity: .46; }
+.sceneTop { justify-content: center; }
+.sceneMode { color: var(--soft); text-transform: none; letter-spacing: .025em; font-size: 11px; }
+.sceneMode::before { width: 5px; height: 5px; border-radius: 50%; }
+.greeting h1 {
+  font-family: var(--font-cormorant), Georgia, serif;
+  font-size: clamp(36px, 5.1vw, 76px);
+  font-weight: 500;
+  line-height: .96;
+  letter-spacing: -.03em;
+  color: var(--ink);
+}
+.shell[data-view=workspace] .greeting h1 { font-size: clamp(25px, 3vw, 42px); }
+.greeting > p:last-child, .permission strong { color: var(--soft); font-size: 12px; }
+.permission { background: #1d2239; border-color: var(--line); }
+.permission button { background: #29354b; color: var(--ink); border-color: #a0afc859; }
+.workspace { border-radius: 12px; background: #171a2e; box-shadow: none; }
+.workspaceHeading { align-items: center; }
+.workspaceHeading h2 { margin: 0; color: var(--ink); }
+.resultFrame { background: #101325; }
+.whisper > p { color: var(--soft); font-size: 12px; }
+.whisper > strong { color: var(--ink); font-size: 12px; font-weight: 500; }
+.talkButton {
+  background: #26374b;
+  border-color: #9ce5d270;
+  color: var(--ink);
+  box-shadow: none;
+}
+.talkButton[aria-pressed=true] { background: #2d4c53; }
+.talkButton small { color: #bdd3de; font-size: 10px; }
+.liveLine, .footer { color: var(--soft); }
+.footer { justify-content: flex-end; letter-spacing: normal; font-size: 9px; }
+@media (max-width: 850px) {
+  .windowsButton { display: grid; width: 34px; padding: 0; }
+  .windowsButton span { display: none; }
+  .greeting h1 { font-size: clamp(30px, 6vw, 50px); }
+  .talkButton small { font-size: 8px; }
+}

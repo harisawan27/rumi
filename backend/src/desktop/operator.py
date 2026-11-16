@@ -2,6 +2,7 @@
 import json
 import re
 from dataclasses import dataclass
+from .planner import Task, goal_text, matching_controls, natural_task
 
 COMMANDS = ("list windows", "inspect window", "confirm window plan", "cancel window plan", "control window", "focus window")
 HELP = ('Say "list windows", "focus window 2", or "inspect window". '
@@ -24,13 +25,20 @@ class Step:
     value: str | None = None
 
 
+@dataclass(frozen=True)
+class PlannedTask:
+    task: Task
+    verb: str
+    label: str = ""
+
+
 def window_instruction(text):
     text = re.sub(r"^(?:hey\s+)?rumi[,.:!]?\s+", "", text.strip(), flags=re.I)
-    if text.casefold().startswith("control window "):
+    if text.casefold().startswith("control window ") or natural_task(text):
         return text
     plain = text.rstrip(".!?").strip()
     lowered = plain.casefold()
-    if lowered in COMMANDS or lowered.startswith("focus window "):
+    if lowered in COMMANDS or lowered.startswith(("focus window ", "choose option ")):
         return plain
     return None
 
@@ -87,6 +95,8 @@ class WindowOperator:
         self.adapter = adapter
         self.clock = clock
         self.pending = None
+        self.choice = None
+        self.task_sheet = None
         self.windows = ()
         self.windows_until = 0
         self.seen = set()
@@ -100,6 +110,7 @@ class WindowOperator:
 
     def run(self, request_id, instruction, guard):
         guard()
+        self.task_sheet = None
         self.claim(request_id)
         command = instruction.casefold()
         if command == "confirm window plan":
@@ -107,10 +118,13 @@ class WindowOperator:
             if not plan or self.clock() >= plan[0]:
                 return "clarification", "There is no current Windows plan. Prepare it again."
             _, target, steps = plan
+            if isinstance(steps, PlannedTask):
+                return self.execute_task(target, steps, guard)
             return self.execute(target, steps, guard)
 
         # A new operator command replaces any previous unconfirmed plan.
         self.pending = None
+        choice, self.choice = self.choice, None
         if command == "cancel window plan":
             return "succeeded", "Windows plan cancelled."
         if command == "list windows":
@@ -129,6 +143,21 @@ class WindowOperator:
             self.adapter.focus(target, guard)
             return "succeeded", f"Focused {target.title}."
         target = self.adapter.foreground(guard)
+        if command.startswith("choose option "):
+            number = command.removeprefix("choose option ")
+            number = {"one": "1", "two": "2", "three": "3", "four": "4"}.get(number, number)
+            if not choice or self.clock() >= choice[0] or not re.fullmatch("[1-4]", number):
+                raise PlanError("Ask for the task again to get a fresh list of choices.")
+            _, chosen_window, task, offered_verb, offered = choice
+            self.adapter.validate_target(chosen_window, guard)
+            verb, current = matching_controls(task, self.adapter.controls(chosen_window, guard))
+            index = int(number) - 1
+            if verb != offered_verb or index >= len(offered) or current.count(offered[index]) != 1:
+                raise PlanError("That control is no longer unambiguous. Ask for the task again.")
+            return self.stage_task(chosen_window, PlannedTask(task, verb, offered[index]), guard)
+        task = natural_task(instruction)
+        if task:
+            return self.prepare_task(target, task, guard)
         if command == "inspect window":
             controls = self.adapter.describe(target, guard)
             return "succeeded", f"{target.title}\n" + ("\n".join(controls) if controls else "No named controls were found.")
@@ -146,6 +175,70 @@ class WindowOperator:
             raise PlanError("Use a shorter plan so Rumi can read it back before you confirm.")
         self.pending = self.clock() + 60, target, steps
         return "plan", preview
+
+    def prepare_task(self, target, task, guard):
+        if not task.value or len(task.value) > 180 or len(task.name) > 120 or any(ord(char) < 32 for char in task.value + task.name):
+            raise PlanError("Use a short, single-line request.")
+        if task.kind == "find":
+            self.adapter.document(target, guard)
+            return self.stage_task(target, PlannedTask(task, "find"), guard)
+        verb, labels = matching_controls(task, self.adapter.controls(target, guard))
+        if not labels:
+            raise PlanError("I couldn't find a matching control. Open the relevant pane or say inspect window.")
+        if len(labels) == 1:
+            return self.stage_task(target, PlannedTask(task, verb, labels[0]), guard)
+        if len(labels) > 4 or len({label.casefold() for label in labels}) != len(labels):
+            raise PlanError("Several controls match. Open a smaller pane or name the field you want.")
+        self.choice = self.clock() + 60, target, task, verb, labels
+        self.task_sheet = self.sheet(target, task, "Which control should I use?", labels)
+        options = "\n".join(f"{i}. {label}" for i, label in enumerate(labels, 1))
+        return "task_choice", f"Which control should I use?\n{options}\nSay Rumi choose option, followed by its number."
+
+    def stage_task(self, target, plan, guard):
+        self.adapter.validate_target(target, guard)
+        task, verb, label = plan.task, plan.verb, plan.label
+        details = {
+            "find": ["Read the document's exposed text and check for a match."],
+            "select": [f'Select “{label}” and check that it is selected.'],
+            "set": [f'Enter “{task.value}” in “{label}” and read the field back.'],
+            "reveal": [f'Open “{label}”.', f'Find the newly visible search field and enter “{task.value}”.'],
+        }[verb]
+        self.pending = self.clock() + 60, target, plan
+        self.task_sheet = self.sheet(target, task, "Ready for your approval", details)
+        preview = "\n".join(details)
+        return "plan", f"In {target.title[:80]}. {preview}\nSay Rumi confirm window plan or Rumi cancel window plan."
+
+    @staticmethod
+    def sheet(target, task, heading, items):
+        return {"window": target.title[:120], "goal": goal_text(task), "heading": heading, "items": items}
+
+    def execute_task(self, target, plan, guard):
+        task, verb, label = plan.task, plan.verb, plan.label
+        try:
+            self.adapter.validate_target(target, guard)
+            if verb == "find":
+                found = self.adapter.find_document_text(target, task.value, guard)
+                result = f'Found “{task.value}” in the document.' if found else f'No match for “{task.value}” in the text this document exposes.'
+            else:
+                current_verb, labels = matching_controls(task, self.adapter.controls(target, guard))
+                if verb != current_verb or labels.count(label) != 1:
+                    raise PlanError("The planned control changed. Ask me to make a new plan.")
+                if verb == "reveal":
+                    self.adapter.reveal_search(target, label, guard)
+                    _, fields = matching_controls(task, self.adapter.controls(target, guard))
+                    # Find the new field from the current UI. Never act on an ambiguous guess.
+                    if len(fields) != 1:
+                        raise PlanError("Search opened, but I couldn't identify one search field. Say inspect window.")
+                    label = fields[0]
+                    verb = "set"
+                self.adapter.perform(target, Step(verb, label, task.value if verb == "set" else None), guard)
+                result = f'Checked that “{label}” contains “{task.value}”.' if verb == "set" else f'Checked that “{label}” is selected.'
+        except Unverified as exc:
+            return "operator_uncertain", f"{exc} Check the window before trying again."
+        except PlanError as exc:
+            return "clarification", str(exc)
+        self.task_sheet = self.sheet(target, task, "Task checked", [result])
+        return "succeeded", result
 
     def execute(self, target, steps, guard):
         verified = 0
