@@ -21,6 +21,7 @@ export default function NativeDesktop() {
   const [heard, setHeard] = useState("");
   const [result, setResult] = useState("");
   const [task, setTask] = useState<WindowsTask>();
+  const [workflowName, setWorkflowName] = useState("");
   const [state, setState] = useState("ready");
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState("companion");
@@ -57,7 +58,7 @@ export default function NativeDesktop() {
     live.current = { ...live.current, grant: disconnected, voice: quiet, draft: null };
     setGrant(disconnected); setVoice(quiet); setVoiceBusy(false); setDraft(null);
     setCue(null); setAction("thinking");
-    setResult(""); setTask(undefined); setText(""); setHeard(""); setBusy(false); setPage(0); setView("companion");
+    setResult(""); setTask(undefined); setWorkflowName(""); setText(""); setHeard(""); setBusy(false); setPage(0); setView("companion");
   }
   function stop() {
     clear(); setState("stopped");
@@ -81,7 +82,7 @@ export default function NativeDesktop() {
     if (!current.spoken || !current.voice.active || current.voice.voice_id === undefined || !current.grant.session_id) return;
     void api.current?.voice_speak?.({ session_id: current.grant.session_id, voice_id: current.voice.voice_id, text: words.slice(0, 780) }).catch(() => {});
   }
-  function showResult(value: string, nextState: string, sheet?: WindowsTask) { setResult(value); setTask(sheet); setState(nextState); setPage(0); setView("workspace"); }
+  function showResult(value: string, nextState: string, sheet?: WindowsTask, name = "") { setResult(value); setTask(sheet); setWorkflowName(name); setState(nextState); setPage(0); setView("workspace"); }
 
   useEffect(() => {
     let gone = false, checking = false;
@@ -213,6 +214,10 @@ export default function NativeDesktop() {
 
   async function submit(value: string, fromVoice = false, confirmed = false) {
     if (/^(?:(?:hey\s+)?rumi[,!]?\s+)?(?:stop|cancel)[.!]?$/i.test(value.trim())) { stop(); return; }
+    if (/^(?:(?:hey\s+)?rumi[,.:!]?\s+)?confirm workflow save[.!?]?$/i.test(value.trim()) && state !== "workflow_review") {
+      setHeard("Ask me to prepare a note before confirming its save.");
+      return;
+    }
     if (/^(?:rumi[,!]?\s+)?enable windows control[.!]?$/i.test(value.trim())) { await enableWindowsControl(); return; }
     const current = live.current.grant;
     if (!api.current || !current.active || !current.session_id || pending.current || choosing.current || !value.trim()) return;
@@ -220,14 +225,14 @@ export default function NativeDesktop() {
     if (reply) { react("greeting"); showResult(reply, "reply"); announce(reply); return; }
     if (fromVoice && !confirmed && /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:create|make|save|write)\b/i.test(value)) {
       const next = { text: value, until: Date.now() + 30000 };
-      live.current.draft = next; setDraft(next); setResult(""); setTask(undefined); setPage(0); setView("workspace"); setState("confirming");
+      live.current.draft = next; setDraft(next); setResult(""); setTask(undefined); setWorkflowName(""); setPage(0); setView("workspace"); setState("confirming");
       announce("I've prepared your words. Review the request on screen. Say Rumi confirm to create the file, or Rumi cancel to stop.");
       return;
     }
     live.current.draft = null; setDraft(null);
     setCue(null); setAction(actionExpression(value));
     const generation = epoch.current, requestId = crypto.randomUUID();
-    pending.current = true; setBusy(true); setState("working"); setResult(""); setTask(undefined); setText(""); setView("workspace"); setPage(0);
+    pending.current = true; setBusy(true); setState("working"); setResult(""); setTask(undefined); setWorkflowName(""); setText(""); setView("workspace"); setPage(0);
     const timer = setTimeout(() => {
       if (generation !== epoch.current) return;
       clear(); setState("uncertain"); void api.current?.stop().catch(() => {});
@@ -240,8 +245,9 @@ export default function NativeDesktop() {
         clear(); setState(receipt.state); void api.current.stop().catch(() => {}); return;
       }
       const content = receiptText(receipt) || "This file is empty.";
-      react(receipt.state === "plan" ? "confirming" : receipt.state === "succeeded" ? "success" : receipt.state === "dispatched" ? "acknowledging" : ["clarification", "task_choice"].includes(receipt.state) ? "confused" : "error");
-      showResult(content, receipt.state, receipt.result?.task);
+      react(["plan", "workflow_review"].includes(receipt.state) ? "confirming" : receipt.state === "succeeded" ? "success" : receipt.state === "dispatched" ? "acknowledging" : ["clarification", "task_choice"].includes(receipt.state) ? "confused" : "error");
+      const note = receipt.operation === "note_workflow" ? receipt.result : undefined;
+      showResult(note?.text || content, receipt.state, receipt.result?.task, note?.name);
       const more = content.length > 700 ? " Say Rumi read result page for more." : "";
       announce(receipt.operation === "read_text" ? `Here's your note. ${content.slice(0, 600)}${content.length > 600 ? " The rest is in your workspace." : ""}` : content.slice(0, 700) + more);
     } catch { if (generation === epoch.current) { clear(); setState("uncertain"); void api.current?.stop().catch(() => {}); } }
@@ -281,6 +287,7 @@ export default function NativeDesktop() {
     "permission-ended": "Local permission ended. Your private results were cleared.", disconnected: "The native connection is unavailable. Close and reopen Rumi.",
     uncertain: "The action may have completed. Check the folder or app before trying again. Local permission was cleared.",
     plan: "Ready for your approval", task_choice: "Choose a control", operator_uncertain: "Check the window before trying again.",
+    workflow_review: "Review the note before saving",
     blocked: "The action was blocked. Re-enable local permission and check the folder before retrying.",
     dispatched: "Launch requested", succeeded: "Verified local result", failed: "Let's try another way.", clarification: "A little more detail.", confirming: "Your words. Your say.", reply: "One thing at a time. Together.",
   };
@@ -316,10 +323,15 @@ export default function NativeDesktop() {
         {grant.active && <span className={s.grantTime}>{Math.ceil((grant.seconds_remaining || 0) / 60)} min remaining · this Windows session</span>}
       </section>
       {workspace && <section className={s.workspace} aria-label="Local workspace">
-        <div className={s.workspaceHeading}><h2>{task?.heading || (draft ? "Review before creating" : messages[state] || "Ready for your next step.")}</h2><button className={s.iconButton} aria-label="Return to companion" onClick={() => setView("companion")}><Icon name="close"/></button></div>
+        <div className={s.workspaceHeading}><h2>{task?.heading || (draft ? "Review before creating" : workflowName && state === "succeeded" ? "Note saved and verified" : messages[state] || "Ready for your next step.")}</h2><button className={s.iconButton} aria-label="Return to companion" onClick={() => setView("companion")}><Icon name="close"/></button></div>
         {task ? <TaskSheet task={task} state={state}/> : <>
-        <div className={s.resultFrame}><div className={s.pageTop}><span>{draft ? "Pending request" : state === "working" ? "Local action in progress" : "Local result"}</span><span>{String(currentPage + 1).padStart(2,"0")} / {String(pages.length).padStart(2,"0")}</span></div><div className={s.textSurface} ref={output}><pre aria-label="Local result">{state === "working" ? "Working on your device…" : pages[currentPage]}</pre></div><div className={s.pagination}><button aria-label="Previous result page" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>← Previous</button><span>No scrolling. One page at a time.</span><button aria-label="Next result page" disabled={currentPage === pages.length - 1} onClick={() => setPage(currentPage + 1)}>Next →</button></div></div>
-        {draft ? <div className={s.confirmation}><p>Say <strong>“Rumi confirm”</strong> within 30 seconds. Check the filename and every word first.</p><button onClick={() => { const saved = live.current.draft; if (saved && Date.now() < saved.until) void submit(saved.text, true, true); }}>Confirm creation</button><button onClick={() => { live.current.draft = null; setDraft(null); showResult("Nothing was created.", "clarification"); }}>Discard</button></div> : <div className={s.shortcuts}><button disabled={!grant.active || busy} onClick={() => void submit("Open Notepad")}><Icon name="expand" size={15}/>Open Notepad</button><button disabled={!grant.active || busy} onClick={() => void submit("List files")}><Icon name="folder" size={15}/>List text files</button><button disabled={!grant.active || busy} onClick={() => void submit("Read that file")}><Icon name="activity" size={15}/>Read that file</button></div>}
+        <div className={s.resultFrame}><div className={s.pageTop}><span>{workflowName || (draft ? "Pending request" : state === "working" ? "Local action in progress" : "Local result")}</span><span>{String(currentPage + 1).padStart(2,"0")} / {String(pages.length).padStart(2,"0")}</span></div><div className={s.textSurface} ref={output}><pre aria-label="Local result">{state === "working" ? "Working on your device…" : pages[currentPage]}</pre></div><div className={s.pagination}><button aria-label="Previous result page" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>← Previous</button><button aria-label="Next result page" disabled={currentPage === pages.length - 1} onClick={() => setPage(currentPage + 1)}>Next →</button></div></div>
+        {state === "workflow_review" ? <div className={s.confirmation}>
+          <p>Say <strong>“Rumi, confirm workflow save”</strong> within one minute.</p>
+          <button onClick={() => void submit("confirm workflow save")}>Save note</button>
+          <button onClick={() => void submit("cancel workflow")}>Discard note</button>
+        </div> :
+        draft ? <div className={s.confirmation}><p>Say <strong>“Rumi confirm”</strong> within 30 seconds. Check the filename and every word first.</p><button onClick={() => { const saved = live.current.draft; if (saved && Date.now() < saved.until) void submit(saved.text, true, true); }}>Confirm creation</button><button onClick={() => { live.current.draft = null; setDraft(null); showResult("Nothing was created.", "clarification"); }}>Discard</button></div> : <div className={s.shortcuts}><button disabled={!grant.active || busy} onClick={() => void submit("Open Notepad")}><Icon name="expand" size={15}/>Open Notepad</button><button disabled={!grant.active || busy} onClick={() => void submit("List files")}><Icon name="folder" size={15}/>List text files</button><button disabled={!grant.active || busy} onClick={() => void submit("Read that file")}><Icon name="activity" size={15}/>Read that file</button></div>}
         </>}
       </section>}
       {!workspace && <aside className={s.whisper} aria-label="Example requests">

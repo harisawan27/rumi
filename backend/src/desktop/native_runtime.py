@@ -14,6 +14,7 @@ from .commands import parse_command, Clarification
 from .executor import Executor
 from .operator import PlanError, WindowOperator, window_instruction
 from .windows import require_unlocked_desktop, launch_app
+from .workflow import Workflow, workflow_instruction
 from .workspace import Workspace, WorkspaceError
 
 
@@ -23,7 +24,7 @@ class NativeCommand(RequestIdentity):
 
 class NativeRuntime:
     def __init__(self, journal, desktop_check=require_unlocked_desktop, launcher=launch_app,
-                 clock=time.monotonic, wall_clock=time.time, operator_factory=None):
+                 clock=time.monotonic, wall_clock=time.time, operator_factory=None, research=None):
         self._journal = Path(journal)
         self._desktop_check, self._launcher = desktop_check, launcher
         self._clock, self._wall_clock = clock, wall_clock
@@ -38,6 +39,8 @@ class NativeRuntime:
         self._operator_factory = operator_factory
         self._operator = None
         self._folder_enabled = False
+        self._workflow = None
+        self._research = research
 
     @property
     def generation(self):
@@ -50,6 +53,7 @@ class NativeRuntime:
             self._generation += 1
             self._session = self._credential = self._last_file = None
             self._operator = None
+            self._workflow = None
             self._folder_enabled = False
             self._expires = 0
             if self._executor:
@@ -84,6 +88,7 @@ class NativeRuntime:
                 self._executor = Executor(workspace, self._journal, self._authorize,
                     clock=self._wall_clock, launcher=self._launcher, desktop_check=self._desktop_check)
                 self._folder_enabled = True
+                self._workflow = Workflow(self._clock)
                 self._session, self._credential = secrets.token_hex(16), secrets.token_urlsafe(32)
                 self._expires = self._clock() + 900
                 self._last_file = None
@@ -103,6 +108,8 @@ class NativeRuntime:
                     raise WorkspaceError("authorization_cancelled")
                 if self._credential:
                     self._authorize(self._credential, self._session)
+                    if self._workflow:
+                        self._workflow.cancel()
                 else:
                     self._session = secrets.token_hex(16)
                     self._credential = secrets.token_urlsafe(32)
@@ -137,9 +144,19 @@ class NativeRuntime:
                 credential = self._credential
                 self._authorize(credential, request.session_id)
                 executor = self._executor if self._folder_enabled else None
-                last_file, operator = self._last_file, self._operator
+                last_file, operator, workflow = self._last_file, self._operator, self._workflow
             if not self._wall_clock() < request.expires_at <= self._wall_clock() + 120:
                 raise WorkspaceError("expired")
+            try:
+                compound = workflow_instruction(request.text)
+            except PlanError as exc:
+                if workflow:
+                    workflow.cancel()
+                return {"request_id": request.request_id, "state": "clarification", "message": str(exc)}
+            if compound:
+                return self._workflow_command(request, compound, workflow, operator, executor, credential)
+            if workflow:
+                workflow.cancel()
             instruction = window_instruction(request.text)
             if instruction:
                 return self._window_command(request, instruction, operator, credential)
@@ -194,6 +211,42 @@ class NativeRuntime:
         if operator and operator.task_sheet:
             receipt["result"] = {"task": operator.task_sheet}
         return receipt
+
+    def _workflow_command(self, request, instruction, workflow, operator, executor, credential):
+        receipt = {"request_id": request.request_id, "operation": "note_workflow"}
+        if not workflow or not executor:
+            return {**receipt, "state": "clarification", "message": "Choose a folder before starting a note workflow."}
+        if operator:
+            operator.pending = operator.choice = None
+        deadline = self._clock() + 12
+
+        def guard():
+            self._authorize(credential, request.session_id)
+            if self._clock() >= deadline or self._wall_clock() >= request.expires_at:
+                raise PlanError("This workflow ran out of time. Ask again.")
+
+        def document(query, check):
+            if not operator:
+                raise PlanError("Enable Windows control, then bring the document to the front.")
+            target = operator.adapter.foreground(check)
+            found = operator.adapter.find_document_text(target, query, check)
+            return target.title[:120], found
+
+        def write(action):
+            guard()
+            response = executor.execute(ActionRequest(**request.model_dump(exclude={"text"}), action=action), credential)
+            with self._state:
+                self._authorize(credential, request.session_id)
+                if response["state"] == "succeeded" and not response.get("replayed"):
+                    self._last_file = action.name
+            return response
+
+        try:
+            state, message, result = workflow.run(request.request_id, instruction, document, self._research, write, guard)
+        except PlanError as exc:
+            state, message, result = "clarification", str(exc), {}
+        self._authorize(credential, request.session_id)
+        return {**receipt, "state": state, "message": message, "result": result}
 
     def close(self):
         self.stop()

@@ -268,3 +268,27 @@ test('voice can enable and run a Windows plan with separate explicit confirmatio
   expect(api.command).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'confirm window plan' }));
   expect(screen.getByLabelText('Local result')).toHaveTextContent('Verified all 2 steps.');
 });
+
+test('compound voice request previews the exact note and uses a separate save confirmation', async () => {
+  await voiceConnect();
+  const message = 'Found the term. Say Rumi, confirm workflow save.';
+  const text = 'Document search\nFound invoice in the document.\n';
+  const command = 'find invoice in this document and save what you found as a note';
+  api.command.mockImplementation(async request => ({
+    request_id: request.request_id,
+    operation: 'note_workflow',
+    state: request.text === 'confirm workflow save' ? 'succeeded' : 'workflow_review',
+    message: request.text === 'confirm workflow save' ? 'Saved and verified document-search.txt.' : message,
+    result: { text, name: 'document-search.txt' },
+  }));
+  await hear('confirm workflow save');
+  expect(api.command).not.toHaveBeenCalled();
+  await hear(command, 2);
+  expect(screen.getByRole('heading', { name: 'Review the note before saving' })).toBeInTheDocument();
+  expect(screen.getByLabelText('Local result')).toHaveTextContent('Found invoice in the document.');
+  expect(api.command).toHaveBeenCalledTimes(1);
+  expect(api.voice_speak).toHaveBeenLastCalledWith(expect.objectContaining({ text: message }));
+  await hear('confirm workflow save', 3);
+  expect(api.command).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'confirm workflow save' }));
+  expect(screen.getByRole('heading', { name: 'Note saved and verified' })).toBeInTheDocument();
+});

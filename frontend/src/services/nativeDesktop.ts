@@ -1,6 +1,6 @@
 export type LocalGrant = { active: boolean; workspace?: string | null; windows_control?: boolean; session_id?: string | null; seconds_remaining?: number; message?: string };
 export type WindowsTask = { window: string; goal: string; heading: string; items: string[] };
-export type LocalReceipt = { request_id?: string; state: string; operation?: string; replayed?: boolean; message?: string; result?: { text?: string; names?: string[]; truncated?: boolean; reason?: string; task?: WindowsTask } };
+export type LocalReceipt = { request_id?: string; state: string; operation?: string; replayed?: boolean; message?: string; result?: { text?: string; name?: string; names?: string[]; truncated?: boolean; reason?: string; task?: WindowsTask } };
 export type VoiceEvent = { id: number; kind: "transcript" | "unclear" | "interrupted"; text: string };
 export type LocalVoiceState = { active: boolean; voice_id?: number; speaking?: boolean; starting?: boolean; level?: number; language?: string; message?: string; events?: VoiceEvent[] };
 export type NativeDesktopApi = {
@@ -17,7 +17,7 @@ export type NativeDesktopApi = {
 declare global { interface Window { pywebview?: { api: NativeDesktopApi } } }
 
 export function receiptText(receipt: LocalReceipt): string {
-  if (receipt.operation === "window_control" && receipt.message) return receipt.message;
+  if ((receipt.operation === "window_control" || receipt.operation === "note_workflow") && receipt.message) return receipt.message;
   if (receipt.state === "uncertain") return "The action may have completed. Check your folder or app before trying again.";
   if (receipt.state === "blocked") return "This action was blocked. Check local permission and the selected folder before trying again.";
   if (receipt.state === "clarification") return receipt.message || "Please name one supported action.";

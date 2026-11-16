@@ -39,7 +39,7 @@ export function companionMood(input: { state: string; busy: boolean; action: Com
   if (input.busy) return input.state === "choosing" ? "thinking" : input.action;
   if (input.draft) return "confirming";
   if (input.speaking) return "speaking";
-  if (input.state === "plan") return "confirming";
+  if (input.state === "plan" || input.state === "workflow_review") return "confirming";
   if (input.cue) return input.cue;
   if (input.state === "failed" || input.state === "operator_uncertain") return "error";
   if (input.state === "clarification") return "confused";

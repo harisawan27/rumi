@@ -122,6 +122,31 @@ checks the exact text in that field, and verifies the checkbox changes state.
 Use `desktop/.venv/Scripts/python desktop/check_planner.py` to test natural goal
 phrases against two disposable Windows layouts.
 
+## Save the result of a task as a note
+
+Choose the destination folder first. Enable Windows control as well for a document
+search, then keep the document in front. Turn on voice and try either request:
+
+- `Rumi find invoice in this document and save what you found as a note`
+- `Rumi search for Windows accessibility shortcuts and save the first three links`
+
+Rumi displays the exact draft. Say `Rumi confirm workflow save` within a minute,
+or say `Rumi cancel workflow` to discard it. You can also use **Save note** and
+**Discard note** in the workspace. Rumi reads the new file back before reporting
+success. Add an explicit name, such as `as invoice-check.txt`, to choose a different
+filename. Existing files stay untouched. The default names are
+`document-search.txt` and `research-links.txt`.
+
+Document search runs locally and records the match result and source window name.
+Web research sends your stated query to DuckDuckGo and saves up to three distinct
+HTTPS results in the returned order. Rumi shows which links it found and does not
+open those links. If the provider returns no usable results, Rumi prepares no note.
+
+`desktop/.venv/Scripts/python desktop/check_planner.py --note-workflow` verifies the
+document-to-note path using generated speech and a disposable window and folder.
+Use `--web-workflow` instead to run a live public search and verify the saved draft
+in a disposable folder.
+
 ## Build from source
 
 Use Python 3.11 on Windows and the existing frontend Node environment:

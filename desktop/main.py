@@ -13,6 +13,7 @@ from src.desktop.native_assets import AssetServer
 from src.desktop.workspace import WorkspaceError
 from voice import LocalVoice
 from windows_operator import WindowsControls
+from windows_research import search_links
 
 
 class Bridge:
@@ -147,7 +148,7 @@ def main():
     root = Path(sys._MEIPASS) / "ui" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1] / "frontend/out"
     server = AssetServer(root)
     runtime = NativeRuntime(Path(os.environ["LOCALAPPDATA"]) / "Rumi/desktop/native-receipts.sqlite3",
-                            operator_factory=WindowsControls)
+                            operator_factory=WindowsControls, research=search_links)
     api = Bridge(runtime, server.url)
     server.start()
     shutdown = threading.Event()

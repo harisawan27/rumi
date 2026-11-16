@@ -46,10 +46,21 @@ class WindowsSpeech:
                 "what can you do", "help", "are you there", "next page",
                 "previous page", "show workspace", "show companion", "read result page",
                 "list windows", "inspect window", "confirm window plan", "cancel window plan",
-                "enable Windows control", "pause microphone", "choose option one", "choose option two",
+                "enable Windows control", "pause microphone", "confirm workflow save", "cancel workflow", "choose option one", "choose option two",
                 "choose option three", "choose option four"] + [f"focus window {word}" for word in
                 ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")])))
             self.recognizer.LoadGrammar(Grammar(builder))
+            for lead, endings in (
+                ("find", ["in this document and save it as a note", "in this document and save what you found as a note"]),
+                ("search for", ["and save the first three links"]),
+            ):
+                workflow = GrammarBuilder()
+                workflow.Culture = recognizers[0].Culture
+                workflow.Append(Choices(Array[String](["Rumi", "Hey Rumi"])))
+                workflow.Append(lead)
+                workflow.AppendDictation()
+                workflow.Append(Choices(Array[String](endings)))
+                self.recognizer.LoadGrammar(Grammar(workflow))
             freeform = GrammarBuilder()
             freeform.Culture = recognizers[0].Culture
             freeform.Append(Choices(Array[String](["Rumi", "Hey Rumi"])))
