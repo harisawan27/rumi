@@ -8,11 +8,16 @@ import re
 import threading
 import time
 from pathlib import Path
+from string import ascii_uppercase
 
 
 def addressed(text):
     match = re.match(r"^(?:hey\s+)?(?:rumi|roomie|roomy)[,.:!]?\s+(.+)$", text.strip(), re.I)
     return match[1].strip() if match else None
+
+
+def wake_word(text):
+    return bool(re.match(r"^hey\s+(?:rumi|roomie|roomy)(?:[,.!:?]|\s|$)", text.strip(), re.I))
 
 
 class WindowsSpeech:
@@ -37,6 +42,10 @@ class WindowsSpeech:
         self._mode = RecognizeMode.Multiple
         try:
             self.recognizer.LoadGrammar(DictationGrammar())
+            wake = GrammarBuilder()
+            wake.Culture = recognizers[0].Culture
+            wake.Append("Hey Rumi")
+            self.recognizer.LoadGrammar(Grammar(wake))
             builder = GrammarBuilder()
             builder.Culture = recognizers[0].Culture
             builder.Append(Choices(Array[String](["Rumi", "Hey Rumi"])))
@@ -47,7 +56,8 @@ class WindowsSpeech:
                 "previous page", "show workspace", "show companion", "read result page",
                 "list windows", "inspect window", "confirm window plan", "cancel window plan",
                 "enable Windows control", "pause microphone", "confirm workflow save", "cancel workflow", "choose option one", "choose option two",
-                "choose option three", "choose option four"] + [f"focus window {word}" for word in
+                "choose option three", "choose option four", "make a resume", "confirm resume save", "cancel resume",
+                "use heard request", "polish resume with Gemini", "confirm Gemini draft", "cancel Gemini draft"] + [f"focus window {word}" for word in
                 ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")])))
             self.recognizer.LoadGrammar(Grammar(builder))
             for lead, endings in (
@@ -61,6 +71,20 @@ class WindowsSpeech:
                 workflow.AppendDictation()
                 workflow.Append(Choices(Array[String](endings)))
                 self.recognizer.LoadGrammar(Grammar(workflow))
+            resume = GrammarBuilder()
+            resume.Culture = recognizers[0].Culture
+            resume.Append(Choices(Array[String](["Rumi", "Hey Rumi"])))
+            resume.Append(Choices(Array[String](["make new folder in", "make a new folder in"])))
+            resume.Append(Choices(Array[String](list(ascii_uppercase))))
+            resume.Append("drive and make a resume for me in it")
+            self.recognizer.LoadGrammar(Grammar(resume))
+            for lead in ("resume name", "resume details", "resume folder named"):
+                field = GrammarBuilder()
+                field.Culture = recognizers[0].Culture
+                field.Append(Choices(Array[String](["Rumi", "Hey Rumi"])))
+                field.Append(lead)
+                field.AppendDictation()
+                self.recognizer.LoadGrammar(Grammar(field))
             freeform = GrammarBuilder()
             freeform.Culture = recognizers[0].Culture
             freeform.Append(Choices(Array[String](["Rumi", "Hey Rumi"])))
@@ -80,6 +104,9 @@ class WindowsSpeech:
         except Exception:
             self.close()
             raise
+
+    def on_hypothesis(self, callback):
+        self.recognizer.SpeechHypothesized += lambda sender, event: callback(str(event.Result.Text), float(event.Result.Confidence))
 
     def start(self):
         with self._lifecycle:
@@ -122,8 +149,10 @@ class WindowsSpeech:
 
 
 class LocalVoice:
-    def __init__(self, authorize, emergency_stop, factory=WindowsSpeech, clock=time.monotonic):
+    def __init__(self, authorize, emergency_stop, factory=WindowsSpeech, clock=time.monotonic,
+                 background=lambda: False, on_wake=lambda: None):
         self._authorize, self._emergency_stop = authorize, emergency_stop
+        self._background, self._on_wake = background, on_wake
         self._factory, self._clock = factory, clock
         self._lock = threading.RLock()
         self._epoch = 0
@@ -136,16 +165,34 @@ class LocalVoice:
         self._language = ""
         self._last_heard = self._cooldown = 0
         self._blocked_utterance = False
+        self._hinted = False
+
+    def _can_listen(self):
+        return self._background() or self._authorize()
+
+    def discard_events(self):
+        with self._lock:
+            self._events.clear()
+            self._blocked_utterance = True
+            if self._speaking and self._engine:
+                try:
+                    self._engine.quiet()
+                except Exception:
+                    self.stop("Microphone paused. Enable it when you are ready.")
+                self._speaking = False
+                self._cooldown = self._clock() + 1.0
 
     def _event(self, kind, text=""):
         if len(self._events) >= 8:
-            self.stop("Voice paused because the interface fell behind. Enable it again.")
-            return
+            if not self._background():
+                self.stop("Voice paused because the interface fell behind. Enable it again.")
+                return
+            self._events.pop(0)
         self._sequence += 1
-        self._events.append({"id": self._sequence, "kind": kind, "text": text})
+        self._events.append((self._clock(), {"id": self._sequence, "kind": kind, "text": text}))
 
     def start(self):
-        if not self._authorize():
+        if not self._can_listen():
             return self.stop("Choose a folder or enable Windows control before starting voice.")
         with self._lock:
             if self._active or self._starting:
@@ -163,8 +210,10 @@ class LocalVoice:
                 lambda level: self.level(token, level),
                 lambda: self.completed(token),
                 lambda: self.failed(token))
+            if isinstance(engine, WindowsSpeech):
+                engine.on_hypothesis(lambda text, confidence: self.hypothesis(token, text, confidence))
             with self._lock:
-                if token != self._epoch or not self._authorize():
+                if token != self._epoch or not self._can_listen():
                     engine.close()
                     return self.poll()
                 self._engine = engine
@@ -176,7 +225,7 @@ class LocalVoice:
                 self._message = 'Listening locally. Begin with “Rumi”.'
             engine.start()
             with self._lock:
-                if token == self._epoch and self._authorize():
+                if token == self._epoch and self._can_listen():
                     self._active = True
                     self._starting = False
                 elif token == self._epoch:
@@ -214,7 +263,17 @@ class LocalVoice:
     def detected(self, token):
         with self._lock:
             if self._active and token == self._epoch:
+                self._hinted = False
                 self._blocked_utterance = self._speaking or self._clock() < self._cooldown
+
+    def hypothesis(self, token, text, confidence):
+        with self._lock:
+            if (self._active and token == self._epoch and confidence >= .85 and wake_word(text)
+                    and not (self._hinted or self._speaking or self._blocked_utterance)
+                    and self._clock() >= self._cooldown and self._can_listen()):
+                self._hinted = True
+                self._on_wake()
+                self._event("wake")
 
     def level(self, token, level):
         with self._lock:
@@ -225,13 +284,15 @@ class LocalVoice:
         with self._lock:
             if not self._active or token != self._epoch:
                 return
-            if not self._authorize():
+            if not self._can_listen():
                 self.stop("Local permission ended. Microphone off.")
                 return
             command = addressed(text)
-            if not command:
-                return  # An open microphone is not authority to act on background speech.
-            plain = command.rstrip(".!?").strip().lower()
+            wake = wake_word(text)
+            has_access = self._authorize()
+            if not has_access and not wake:
+                return
+            plain = (command or "").rstrip(".!?").strip().lower()
             if confidence >= .55 and plain == "stop":
                 self.stop()
                 self._emergency_stop()
@@ -244,14 +305,24 @@ class LocalVoice:
                 return
             if self._speaking or self._blocked_utterance or self._clock() < self._cooldown:
                 return
+            if not command and not wake:
+                return
             self._last_heard = self._clock()
             if confidence < .72:
-                self._event("unclear", "I wasn't sure what you said. Please try again.")
+                if has_access:
+                    self._event("unclear", "I wasn't sure what you said. Please try again.")
                 return
+            if wake:
+                if not self._hinted:
+                    self._on_wake()
+                if not command:
+                    if not self._hinted:
+                        self._event("wake")
+                    return
             if len(command) > 18000:
                 self._event("unclear", "That was too long for one command. Please use a shorter request.")
                 return
-            self._event("transcript", command)
+            self._event("transcript" if has_access else "wake_request", command)
 
     def completed(self, token):
         with self._lock:
@@ -283,15 +354,17 @@ class LocalVoice:
     def poll(self):
         with self._lock:
             if self._active:
-                if not self._authorize():
+                if not self._can_listen():
                     self.stop("Local permission ended. Microphone off.")
-                elif self._clock() - self._last_heard >= 120:
+                elif not self._background() and self._clock() - self._last_heard >= 120:
                     self.stop("Voice paused after two quiet minutes. Enable it when you are ready.")
             events, self._events = self._events, []
+            now = self._clock()
             return {"voice_id": self._epoch, "active": self._active, "starting": self._starting, "speaking": self._speaking,
-                    "level": self._level, "message": self._message, "language": self._language, "events": events}
+                    "level": self._level, "message": self._message, "language": self._language,
+                    "events": [event for when, event in events if now - when < (90 if event["kind"] == "wake_request" else 8)]}
 
     def watch(self):
         with self._lock:
-            if self._active and (not self._authorize() or self._clock() - self._last_heard >= 120):
+            if self._active and (not self._can_listen() or (not self._background() and self._clock() - self._last_heard >= 120)):
                 self.stop("Voice paused. Enable it when you are ready.")

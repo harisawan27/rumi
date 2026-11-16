@@ -3,7 +3,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from voice import WindowsSpeech, addressed
+from voice import WindowsSpeech, addressed, wake_word
 
 
 def recognize_samples(phrases):
@@ -29,9 +29,13 @@ def recognize_samples(phrases):
 
 def main():
     report = recognize_samples(("Rumi stop", "Rumi open Notepad", "Rumi list files", "Rumi list windows",
-                                "Rumi inspect window", "Rumi confirm window plan", "Rumi cancel window plan"))
+                                "Rumi inspect window", "Rumi confirm window plan", "Rumi cancel window plan",
+                                "Hey Rumi", "Hey Rumi make new folder in F drive and make a resume for me in it",
+                                "Hey Rumi make a new folder in F drive and make a resume for me in it",
+                                "Rumi confirm resume save"))
     print(json.dumps(report, indent=2))
-    if not all(row["recognized"].lower() == row["phrase"].lower() and addressed(row["recognized"]) and row["confidence"] >= .72
+    if not all(row["recognized"].lower().replace("f. drive", "f drive") == row["phrase"].lower()
+               and (addressed(row["recognized"]) or wake_word(row["recognized"])) and row["confidence"] >= .72
                for row in report["results"]):
         raise SystemExit("Synthetic recognition did not meet the command threshold. This is not a live microphone test.")
 

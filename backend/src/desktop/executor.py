@@ -4,7 +4,8 @@ import json
 import sqlite3
 import threading
 import time
-from .contracts import ActionRequest
+from .contracts import ActionRequest, ResumeSaveRequest
+from .resume import render_docx
 from .workspace import WorkspaceError
 from .windows import launch_app
 
@@ -46,7 +47,7 @@ class Executor:
         return hashlib.sha256((scope + "\n" + request.model_dump_json()).encode()).hexdigest()
 
     def execute(self, raw, credential):
-        request = ActionRequest.model_validate(raw)
+        request = raw if isinstance(raw, ResumeSaveRequest) else ActionRequest.model_validate(raw)
         fingerprint = self.fingerprint(request)
         if not self.lock.acquire(blocking=False):
             raise WorkspaceError("busy")
@@ -72,10 +73,13 @@ class Executor:
             self.db.execute("INSERT INTO receipts VALUES (?,?,?,?)", (request.request_id, fingerprint, "running", "{}"))
             self.db.commit()
             state, result, public = "failed", {}, {}
+            action = request.action
+            write_or_launch = action.operation in ("create_text", "create_resume", "open_app")
             try:
-                action = request.action
                 if action.operation == "create_text":
                     result = self.workspace.create_text(action.name, action.text, check)
+                elif action.operation == "create_resume":
+                    result = self.workspace.create_resume(action, render_docx(action.text), check)
                 elif action.operation == "read_text":
                     public = self.workspace.read_text(action.name, check)
                 elif action.operation == "open_app":
@@ -88,11 +92,11 @@ class Executor:
             except (WorkspaceError, OSError) as exc:
                 result = {"reason": exc.code if isinstance(exc, WorkspaceError) else "filesystem_unavailable"}
                 # A create may have committed before failure. Never call it cancelled/not written.
-                if request.action.operation in ("create_text", "open_app"):
+                if write_or_launch:
                     state = "uncertain"
             except Exception:
                 result = {"reason": "authorization_or_execution_failed"}
-                state = "uncertain" if request.action.operation in ("create_text", "open_app") else "failed"
+                state = "uncertain" if write_or_launch else "failed"
             self.db.execute("UPDATE receipts SET state=?, result=? WHERE id=?", (state, json.dumps(result), request.request_id))
             self.db.commit()
             check()  # Suppress delivery on authorization loss; receipt remains honest.

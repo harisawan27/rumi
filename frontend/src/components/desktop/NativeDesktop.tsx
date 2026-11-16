@@ -17,6 +17,9 @@ export default function NativeDesktop() {
   const [grant, setGrant] = useState<LocalGrant>(disconnected);
   const [voice, setVoice] = useState<LocalVoiceState>(quiet);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [wake, setWake] = useState({ enabled: false, armed: false });
+  const [wakeBusy, setWakeBusy] = useState(false);
+  const [wakeRequest, setWakeRequest] = useState<Draft | null>(null);
   const [text, setText] = useState("");
   const [heard, setHeard] = useState("");
   const [result, setResult] = useState("");
@@ -52,25 +55,37 @@ export default function NativeDesktop() {
     return () => clearTimeout(timer);
   }, [cue, voice.speaking]);
 
-  function clear() {
-    epoch.current++; voiceEpoch.current++;
+  function updateWake(next: LocalGrant) {
+    const enabled = !!next.wake_enabled, armed = !!next.wake_armed;
+    setWake(current => current.enabled === enabled && current.armed === armed ? current : { enabled, armed });
+  }
+  function clear(keepVoice = false, keepWakeRequest = false) {
+    epoch.current++;
     pending.current = hadGrant.current = false;
-    live.current = { ...live.current, grant: disconnected, voice: quiet, draft: null };
-    setGrant(disconnected); setVoice(quiet); setVoiceBusy(false); setDraft(null);
+    live.current = { ...live.current, grant: disconnected, draft: null };
+    if (!keepVoice) {
+      voiceEpoch.current++;
+      live.current.voice = quiet;
+      setVoice(quiet); setVoiceBusy(false);
+    }
+    if (!keepWakeRequest) setWakeRequest(null);
+    setGrant(disconnected); setDraft(null);
     setCue(null); setAction("thinking");
     setResult(""); setTask(undefined); setWorkflowName(""); setText(""); setHeard(""); setBusy(false); setPage(0); setView("companion");
   }
   function stop() {
     clear(); setState("stopped");
+    setWake(current => current.armed ? { ...current, armed: false } : current);
     const generation = epoch.current;
     void api.current?.stop().catch(() => { if (generation === epoch.current) setState("stop-unconfirmed"); });
   }
   async function pauseVoice() {
     const generation = ++voiceEpoch.current;
     live.current.voice = quiet; live.current.draft = null;
-    setVoice(quiet); setVoiceBusy(false); setDraft(null); setHeard("");
+    setVoice(quiet); setVoiceBusy(false); setDraft(null); setHeard(""); setWakeRequest(null);
     try {
       await api.current?.voice_stop?.();
+      if (generation === voiceEpoch.current) setWake(prev => ({ ...prev, armed: false }));
       return generation === voiceEpoch.current;
     } catch {
       if (generation === voiceEpoch.current) setVoice({ active: false, message: "Microphone stop was not confirmed. Close Rumi to end capture." });
@@ -93,8 +108,10 @@ export default function NativeDesktop() {
       try {
         const next = await api.current.status();
         if (gone || generation !== epoch.current) return;
-        if (!next.active) { const ended = hadGrant.current; clear(); if (ended) setState("permission-ended"); }
-        else if (hadGrant.current) { setGrant(next); }
+        updateWake(next);
+        if (!next.active && hadGrant.current) { clear(!!next.wake_armed); setState("permission-ended"); }
+        else if (next.active && hadGrant.current) { live.current.grant = next; setGrant(next); }
+        else if (!next.active) { return; }
         else { void api.current.stop().catch(() => {}); }
       } catch {
         if (!gone && generation === epoch.current) { clear(); setState("disconnected"); void api.current?.stop().catch(() => {}); }
@@ -107,7 +124,15 @@ export default function NativeDesktop() {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.code === "Period" || e.key === ">")) { e.preventDefault(); stop(); }
       if (e.key === "Escape") { stop(); }
     }
-    function hide() { if (document.hidden) stop(); }
+    function hide() {
+      if (!document.hidden || !api.current) return;
+      const suspend = api.current.suspend_actions;
+      if (!suspend) { stop(); return; }
+      const revoke = hadGrant.current || choosing.current;
+      clear(true);
+      setState("ready");
+      if (revoke) void suspend().catch(() => stop());
+    }
     ready();
     window.addEventListener("pywebviewready", ready); window.addEventListener("keydown", key); document.addEventListener("visibilitychange", hide);
     const timer = setInterval(check, 2000);
@@ -115,25 +140,35 @@ export default function NativeDesktop() {
   }, []);
 
   useEffect(() => {
-    if (!voice.active || !api.current?.voice_poll) return;
+    if ((!voice.active && !wake.armed) || !api.current?.voice_poll) return;
     let gone = false, checking = false;
     const generation = voiceEpoch.current;
     const timer = setInterval(async () => {
-      if (checking || gone) return;
+      if (checking || gone || document.hidden) return;
       checking = true;
       try {
         const next = await api.current!.voice_poll!();
         if (gone || generation !== voiceEpoch.current) return;
+        const wasActive = live.current.voice.active;
         live.current.voice = next; setVoice(next);
-        if (!next.active) { setDraft(null); live.current.draft = null; setHeard(""); }
+        if (!next.active && wasActive) { setDraft(null); live.current.draft = null; setHeard(""); setWakeRequest(null); }
         for (const event of next.active ? next.events || [] : []) {
           if (event.id > lastEvent.current) { lastEvent.current = event.id; onVoice.current(event); }
         }
       } catch { if (!gone && generation === voiceEpoch.current) pauseVoice(); }
       finally { checking = false; }
-    }, 250);
+    }, voice.active ? 250 : 700);
     return () => { gone = true; clearInterval(timer); };
-  }, [voice.active]);
+  }, [voice.active, wake.armed]);
+
+  useEffect(() => {
+    if (!wakeRequest) return;
+    const expiry = setTimeout(() => {
+      setWakeRequest(null);
+      setState(value => value === "wake_review" ? "wake_expired" : value);
+    }, Math.max(0, wakeRequest.until - Date.now()));
+    return () => clearTimeout(expiry);
+  }, [wakeRequest]);
 
   useEffect(() => {
     if (!draft) return;
@@ -157,7 +192,7 @@ export default function NativeDesktop() {
 
   async function choose() {
     if (!api.current || choosing.current || pending.current) return;
-    clear(); choosing.current = true; setBusy(true); setState("choosing");
+    clear(wake.armed, true); choosing.current = true; setBusy(true); setState("choosing");
     const generation = epoch.current;
     try {
       const next = await api.current.choose_workspace();
@@ -166,11 +201,12 @@ export default function NativeDesktop() {
       setGrant(next); setState(next.active ? "ready" : "not-enabled");
       if (next.active) react("greeting");
       if (next.message) showResult(next.message, "not-enabled");
+      else if (wakeRequest && wakeRequest.until > Date.now()) showResult("", "wake_review");
     } catch { if (generation === epoch.current) setState("disconnected"); }
     finally { choosing.current = false; if (generation === epoch.current) setBusy(false); }
   }
   async function enableVoice() {
-    if (!api.current?.voice_start || !live.current.grant.active || voiceBusy) return;
+    if (!api.current?.voice_start || (!live.current.grant.active && !wake.enabled) || voiceBusy) return;
     if (live.current.voice.active) { pauseVoice(); return; }
     const generation = ++voiceEpoch.current;
     setVoiceBusy(true);
@@ -183,6 +219,21 @@ export default function NativeDesktop() {
       for (const event of next.active ? next.events || [] : []) { lastEvent.current = event.id; onVoice.current(event); }
     } catch { if (generation === voiceEpoch.current) setVoice({ active: false, message: "Local voice is unavailable. You can still type a command." }); }
     finally { if (generation === voiceEpoch.current) setVoiceBusy(false); }
+  }
+
+  async function toggleWake() {
+    if (!api.current?.wake_set || wakeBusy || choosing.current || pending.current) return;
+    const generation = epoch.current;
+    setWakeBusy(true);
+    try {
+      const next = await api.current.wake_set(!wake.enabled);
+      if (generation !== epoch.current) return;
+      updateWake(next);
+      setHeard(next.message || (next.wake_enabled ? 'Background wake is enabled. Say “Hey Rumi”.' : "Background wake is off."));
+      if (!next.wake_enabled) setWakeRequest(null);
+    } catch {
+      if (generation === epoch.current) setHeard("Could not change background wake.");
+    } finally { setWakeBusy(false); }
   }
 
   async function enableWindowsControl() {
@@ -201,6 +252,7 @@ export default function NativeDesktop() {
       hadGrant.current = next.active;
       live.current.grant = next;
       setGrant(next); setState("ready");
+      if (next.active && wakeRequest && wakeRequest.until > Date.now()) showResult("", "wake_review");
       const message = next.message || (next.windows_control ? 'Windows control is ready. Turn on voice, then say “Rumi list windows”.' : 'Windows control remains off.');
       setHeard(message);
       if (live.current.voice.active) announce(next.windows_control ? "Windows control is ready. Say Rumi list windows." : message);
@@ -221,9 +273,11 @@ export default function NativeDesktop() {
     if (/^(?:rumi[,!]?\s+)?enable windows control[.!]?$/i.test(value.trim())) { await enableWindowsControl(); return; }
     const current = live.current.grant;
     if (!api.current || !current.active || !current.session_id || pending.current || choosing.current || !value.trim()) return;
+    setWakeRequest(null);
     const reply = localReply(value);
     if (reply) { react("greeting"); showResult(reply, "reply"); announce(reply); return; }
-    if (fromVoice && !confirmed && /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:create|make|save|write)\b/i.test(value)) {
+    const startsResume = /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:create|make|write|draft)\s+(?:(?:a|my)\s+)?(?:r[eé]sum[eé](?=\s|$)|(?:new\s+)?folder\b.*\band\b.*\br[eé]sum[eé](?=\s|$))/i.test(value.trim().replace(/[.!?]+$/, ""));
+    if (fromVoice && !confirmed && !startsResume && /^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:create|make|save|write)\b/i.test(value)) {
       const next = { text: value, until: Date.now() + 30000 };
       live.current.draft = next; setDraft(next); setResult(""); setTask(undefined); setWorkflowName(""); setPage(0); setView("workspace"); setState("confirming");
       announce("I've prepared your words. Review the request on screen. Say Rumi confirm to create the file, or Rumi cancel to stop.");
@@ -245,20 +299,36 @@ export default function NativeDesktop() {
         clear(); setState(receipt.state); void api.current.stop().catch(() => {}); return;
       }
       const content = receiptText(receipt) || "This file is empty.";
-      react(["plan", "workflow_review"].includes(receipt.state) ? "confirming" : receipt.state === "succeeded" ? "success" : receipt.state === "dispatched" ? "acknowledging" : ["clarification", "task_choice"].includes(receipt.state) ? "confused" : "error");
+      react(["plan", "workflow_review", "resume_review", "resume_share"].includes(receipt.state) ? "confirming" : receipt.state === "succeeded" ? "success" : receipt.state === "dispatched" || receipt.state === "resume_details" ? "acknowledging" : ["clarification", "task_choice"].includes(receipt.state) ? "confused" : "error");
       const note = receipt.operation === "note_workflow" ? receipt.result : undefined;
-      showResult(note?.text || content, receipt.state, receipt.result?.task, note?.name);
+      const resume = receipt.operation === "resume_workflow" ? receipt.result : undefined;
+      const resumeText = resume?.path && receipt.state !== "succeeded" ? `${resume.path}\n\n${resume.text || content}` : resume?.text;
+      showResult(resumeText || note?.text || content, receipt.state, receipt.result?.task, resume ? "Résumé" : note?.name);
+      if (resume) setHeard(content);
       const more = content.length > 700 ? " Say Rumi read result page for more." : "";
       announce(receipt.operation === "read_text" ? `Here's your note. ${content.slice(0, 600)}${content.length > 600 ? " The rest is in your workspace." : ""}` : content.slice(0, 700) + more);
     } catch { if (generation === epoch.current) { clear(); setState("uncertain"); void api.current?.stop().catch(() => {}); } }
     finally { clearTimeout(timer); if (generation === epoch.current) { pending.current = false; setBusy(false); } }
   }
+
+  function useHeardRequest() {
+    if (wakeRequest && Date.now() < wakeRequest.until && live.current.grant.active) void submit(wakeRequest.text, true);
+  }
+
   onVoice.current = event => {
+    if (event.kind === "wake") { react("acknowledging"); setHeard("I hear you."); return; }
+    if (event.kind === "wake_request") {
+      if (/^pause microphone[.!?]?$/i.test(event.text.trim())) { void pauseVoice(); return; }
+      const next = { text: event.text, until: Date.now() + 90000 };
+      setWakeRequest(next); react("acknowledging"); setHeard("I heard your request. Choose a workspace to continue.");
+      showResult("", "wake_review"); return;
+    }
     if (event.kind === "interrupted") { setCue(null); setHeard("I'm listening. Give me a moment, then speak."); return; }
     if (event.kind === "unclear") { react("confused"); setHeard(event.text); return; }
     setHeard(event.text);
     if (pending.current) { setHeard("I'm finishing the current action. Please ask again when it's done."); return; }
     const navigation = event.text.trim().replace(/[.!?]+$/, "").toLowerCase();
+    if (navigation === "use heard request") { useHeardRequest(); return; }
     if (navigation === "pause microphone") { void pauseVoice(); return; }
     if (navigation === "read result page") { announce(task ? result : `Page ${currentPage + 1} of ${pages.length}. ${pages[currentPage]}`); return; }
     if (navigation === "next page" || navigation === "previous page") {
@@ -288,11 +358,16 @@ export default function NativeDesktop() {
     uncertain: "The action may have completed. Check the folder or app before trying again. Local permission was cleared.",
     plan: "Ready for your approval", task_choice: "Choose a control", operator_uncertain: "Check the window before trying again.",
     workflow_review: "Review the note before saving",
+    resume_details: "Add your résumé details",
+    resume_review: "Review your résumé before saving",
+    resume_share: "Review the text to send to Gemini",
+    wake_review: "I heard your request",
+    wake_expired: "Say Hey Rumi to ask again.",
     blocked: "The action was blocked. Re-enable local permission and check the folder before retrying.",
     dispatched: "Launch requested", succeeded: "Verified local result", failed: "Let's try another way.", clarification: "A little more detail.", confirming: "Your words. Your say.", reply: "One thing at a time. Together.",
   };
   const mood = companionMood({ state, busy, action, voiceBusy, speaking: !!voice.speaking, listening: voice.active, draft: !!draft, cue: cue?.mood, typing: typing && !!text });
-  const pages = textPages(draft?.text || result || "Your next result will appear here. Ask Rumi to list your files, read a note or open an app.", dimensions.columns, dimensions.rows);
+  const pages = textPages((state === "wake_review" ? wakeRequest?.text : undefined) || draft?.text || result || "Your next result will appear here. Ask Rumi to list your files, read a note or open an app.", dimensions.columns, dimensions.rows);
   const currentPage = Math.min(page, pages.length - 1);
   const workspace = view === "workspace";
   return <div className={s.shell} data-reduced={reduced} data-full-motion={motion === "full"} data-view={view}>
@@ -301,6 +376,7 @@ export default function NativeDesktop() {
       <div className={s.brand}><span className={s.mark}>r.</span><span>Rumi</span></div>
       <div className={s.connection}><i className={available ? s.online : s.offline}/><span>{available ? "On your device" : "Desktop preview"}</span></div>
       <div className={s.headerActions}>
+        {api.current?.wake_set && <button className={`${s.iconButton} ${s.wakeButton}`} aria-label="Background wake" aria-pressed={wake.enabled} title="Listen for Hey Rumi while minimized" disabled={!available || busy || wakeBusy} onClick={() => void toggleWake()}><Icon name="mic" size={15}/><span>Background wake</span></button>}
         <button className={`${s.iconButton} ${s.windowsButton}`} aria-label={grant.windows_control ? "Windows control enabled" : "Enable Windows control"} aria-pressed={!!grant.windows_control} title={grant.windows_control ? "Windows control enabled" : "Enable Windows control"} disabled={!available || !api.current?.enable_windows_control || busy} onClick={() => void enableWindowsControl()}><Icon name="expand"/><span>Windows control</span></button>
         <button className={s.iconButton} aria-label="Meet Rumi" title="Meet Rumi · pauses microphone" disabled={busy} onClick={() => { void pauseVoice().then(paused => { if (paused) setExpressions(true); }); }}><Icon name="spark"/></button>
         <button className={s.iconButton} aria-label={`Character motion: ${motion}`} onClick={() => setMotion(value => value === "system" ? "full" : value === "full" ? "reduced" : "system")} title={`Character motion: ${motion}. Click for ${motion === "system" ? "full animation" : motion === "full" ? "less motion" : "system preference"}.`}><Icon name="activity"/></button>
@@ -314,19 +390,36 @@ export default function NativeDesktop() {
         <button aria-label="Workspace" aria-pressed={workspace} onClick={() => setView("workspace")}><Icon name="expand"/><span>Workspace</span>{!!result && <i/>}</button>
       </nav>
       <section className={s.scene} aria-label="Rumi companion space">
-        <div className={s.sceneTop}><span className={s.sceneMode}>{voice.speaking ? "Speaking" : busy ? "Working" : voice.active ? "Listening" : "Microphone off"}</span></div>
+        <div className={s.sceneTop}><span className={s.sceneMode}>{voice.speaking ? "Speaking" : busy ? "Working" : voice.active ? wake.armed ? "Ready for Hey Rumi" : "Listening" : "Microphone off"}</span></div>
         <div className={s.characterStage}>
           <RumiCompanion mood={mood} level={voice.level} reduced={reduced} fullMotion={motion === "full"} paused={expressions} reaction={cue?.id}/>
         </div>
-        <div className={s.greeting}><h1>{workspace ? "Your workspace" : "What shall we do?"}</h1><p>{voice.active ? "Start with my name, then tell me what you need." : "Enable Windows control or choose a folder to begin."}</p></div>
+        <div className={s.greeting}><h1>{workspace ? "Your workspace" : "What shall we do?"}</h1><p>{voice.active ? wake.armed ? 'Say “Hey Rumi” followed by your request.' : "Start with my name, then tell me what you need." : "Enable Windows control or choose a folder to begin."}</p></div>
         <div className={s.permission} aria-label="Local permission"><Icon name="folder" size={17}/><div><strong>{grant.workspace ? "Connected to your folder" : grant.windows_control ? "Windows control enabled" : "A workspace you choose"}</strong><span title={grant.workspace || ""}>{grant.workspace || (grant.windows_control ? 'Say “Rumi list windows”' : "Local files. Your permission.")}</span></div><button disabled={!available || busy} onClick={choose}>{grant.workspace ? "Change folder" : "Choose folder & enable"}</button></div>
         {grant.active && <span className={s.grantTime}>{Math.ceil((grant.seconds_remaining || 0) / 60)} min remaining · this Windows session</span>}
       </section>
       {workspace && <section className={s.workspace} aria-label="Local workspace">
-        <div className={s.workspaceHeading}><h2>{task?.heading || (draft ? "Review before creating" : workflowName && state === "succeeded" ? "Note saved and verified" : messages[state] || "Ready for your next step.")}</h2><button className={s.iconButton} aria-label="Return to companion" onClick={() => setView("companion")}><Icon name="close"/></button></div>
+        <div className={s.workspaceHeading}><h2>{task?.heading || (draft ? "Review before creating" : workflowName && state === "succeeded" ? (workflowName === "Résumé" ? "Résumé saved and verified" : "Note saved and verified") : messages[state] || "Ready for your next step.")}</h2><button className={s.iconButton} aria-label="Return to companion" onClick={() => setView("companion")}><Icon name="close"/></button></div>
         {task ? <TaskSheet task={task} state={state}/> : <>
         <div className={s.resultFrame}><div className={s.pageTop}><span>{workflowName || (draft ? "Pending request" : state === "working" ? "Local action in progress" : "Local result")}</span><span>{String(currentPage + 1).padStart(2,"0")} / {String(pages.length).padStart(2,"0")}</span></div><div className={s.textSurface} ref={output}><pre aria-label="Local result">{state === "working" ? "Working on your device…" : pages[currentPage]}</pre></div><div className={s.pagination}><button aria-label="Previous result page" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>← Previous</button><button aria-label="Next result page" disabled={currentPage === pages.length - 1} onClick={() => setPage(currentPage + 1)}>Next →</button></div></div>
-        {state === "workflow_review" ? <div className={s.confirmation}>
+        {state === "wake_review" && wakeRequest ? <div className={s.confirmation}>
+          <p>{grant.active ? 'Say “Rumi, use heard request” to continue.' : "Choose a workspace to use this request."}</p>
+          <button disabled={!grant.active || busy} onClick={useHeardRequest}>Use heard request</button>
+          <button onClick={() => { setWakeRequest(null); setHeard(""); showResult("", "ready"); }}>Discard</button>
+        </div> : state === "resume_review" ? <div className={s.confirmation}>
+          <p>Say <strong>“Rumi, confirm resume save”</strong> once you’ve reviewed it.</p>
+          <button onClick={() => void submit("confirm resume save")}>Save Word file</button>
+          {grant.resume_ai && <button onClick={() => void submit("polish resume with Gemini")}>Polish with Gemini</button>}
+          <button onClick={() => void submit("cancel resume")}>Discard résumé</button>
+        </div> : state === "resume_share" ? <div className={s.confirmation}>
+          <p>Say <strong>“Rumi, confirm Gemini draft”</strong> to send the text shown here.</p>
+          <button onClick={() => void submit("confirm Gemini draft")}>Send text to Gemini</button>
+          <button onClick={() => void submit("cancel Gemini draft")}>Return to local draft</button>
+        </div> : state === "resume_details" ? <div className={s.confirmation}>
+          <p>Say <strong>“Rumi, resume folder named”</strong> to choose a different folder name.</p>
+          <button onClick={() => { setTyping(true); requestAnimationFrame(() => input.current?.focus({ preventScroll: true })); }}>Type details</button>
+          <button onClick={() => void submit("cancel resume")}>Discard résumé</button>
+        </div> : state === "workflow_review" ? <div className={s.confirmation}>
           <p>Say <strong>“Rumi, confirm workflow save”</strong> within one minute.</p>
           <button onClick={() => void submit("confirm workflow save")}>Save note</button>
           <button onClick={() => void submit("cancel workflow")}>Discard note</button>
@@ -349,7 +442,7 @@ export default function NativeDesktop() {
       <div className={s.liveLine} role="status">{!available ? "Open this workspace in Rumi Desktop." : heard || (state === "ready" ? voice.message || messages.ready : messages[state])}</div>
       <div className={s.dock}>
         <button className={s.typeToggle} aria-label="Type a command" aria-pressed={typing} onClick={() => { setTyping(v => !v); requestAnimationFrame(() => input.current?.focus({ preventScroll: true })); }}><span>⌨</span><small>Type</small></button>
-        <button className={s.talkButton} disabled={!grant.active || !api.current?.voice_start || voiceBusy} onClick={() => void enableVoice()} aria-label={voice.active ? "Pause microphone" : "Enable local voice"} aria-pressed={voice.active}><Icon name={voice.active ? "stop" : "mic"} size={23}/><span>{voiceBusy ? "Waking up…" : voice.active ? "We're listening" : "Let's talk"}<small>{voice.active ? '“Rumi stop” ends access · “Rumi listen” interrupts speech' : "Enable your microphone · audio stays on this PC"}</small></span><span className={s.signal} aria-hidden="true">{[.4,.8,1,.6,.9].map((x,i) => <i key={i} style={{height: `${4 + (voice.active ? (voice.level || 0) * .24 * x : 3*x)}px`}}/>)}</span></button>
+        <button className={s.talkButton} disabled={!(grant.active || wake.enabled) || !api.current?.voice_start || voiceBusy || wakeBusy} onClick={() => void enableVoice()} aria-label={voice.active ? "Pause microphone" : "Enable local voice"} aria-pressed={voice.active}><Icon name={voice.active ? "stop" : "mic"} size={23}/><span>{voiceBusy ? "Waking up…" : voice.active ? "We're listening" : "Let's talk"}<small>{voice.active ? wake.armed ? '“Hey Rumi, stop” ends access and listening' : '“Rumi stop” ends access · “Rumi listen” interrupts speech' : "Enable your microphone · audio stays on this PC"}</small></span><span className={s.signal} aria-hidden="true">{[.4,.8,1,.6,.9].map((x,i) => <i key={i} style={{height: `${4 + (voice.active ? (voice.level || 0) * .24 * x : 3*x)}px`}}/>)}</span></button>
         <span className={s.localSeal}><i/>{voice.active ? "MIC ON" : "MIC OFF"}<small>{voice.language || "LOCAL ONLY"}</small></span>
       </div>
       <form className={`${s.command} ${typing ? s.commandOpen : ""}`} aria-label="Typed command" onSubmit={e => { e.preventDefault(); void submit(text); }}><input ref={input} aria-label="Local command" value={text} onChange={e => setText(e.target.value)} maxLength={18000} disabled={!grant.active} tabIndex={typing ? 0 : -1} placeholder="Type a request. Same Rumi, same local actions."/><button disabled={!grant.active || busy || !text.trim()} aria-label="Run local command" tabIndex={typing ? 0 : -1}><Icon name="arrow"/></button></form>

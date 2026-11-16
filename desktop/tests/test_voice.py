@@ -148,6 +148,28 @@ class VoiceTests(unittest.TestCase):
         self.assertIsNone(addressed("someone said open Notepad"))
         self.assertEqual(addressed("Rumi create a.txt with content: Rumi open Notepad"), "create a.txt with content: Rumi open Notepad")
 
+    def test_background_wake_keeps_tail_without_grant_or_timeout(self):
+        self.allowed = False
+        self.voice._background = lambda: True
+        self.voice._on_wake = Mock()
+        token = self.start()
+        self.now[0] += 900
+        self.voice.watch()
+        self.hear("Rumi make a resume")
+        self.hear("somebody said Hey Rumi")
+        self.assertEqual(self.voice.poll()["events"], [])
+        self.voice.detected(token)
+        self.voice.hypothesis(token, "Hey Rumi", .9)
+        self.voice.hypothesis(token, "Hey Rumi make", .95)
+        self.voice.recognized(token, "Hey Rumi make new folder in F drive and make a resume for me in it", .9)
+        state = self.voice.poll()
+        self.assertTrue(state["active"])
+        self.assertEqual([event["kind"] for event in state["events"]], ["wake", "wake_request"])
+        self.assertEqual(state["events"][-1]["text"], "make new folder in F drive and make a resume for me in it")
+        self.voice._on_wake.assert_called_once()
+        self.hear("Hey Rumi")
+        self.assertEqual(self.voice.poll()["events"][0]["kind"], "wake")
+
 
 if __name__ == "__main__":
     unittest.main()

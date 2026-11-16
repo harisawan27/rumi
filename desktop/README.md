@@ -13,7 +13,7 @@ Keep `_internal` beside the executable. Run as a normal Windows user, not admin.
 Choose a disposable local folder for file work, or use **Enable Windows control**
 in the header for app control. Review the native permission dialog. Each grant
 lasts up to 15 minutes. Stop, detected screen lock, minimize and exit
-revoke it. A one-second local watcher detects lock/expiry; every action also checks
+revoke it. A local watcher detects lock and expiry. Every action also checks
 the current unlocked desktop. Nothing automatically resumes after revocation.
 
 Try:
@@ -24,9 +24,10 @@ Try:
 - `Read first-note.txt` / `Read that file`
 - `Stop`
 
-Only `.txt`, `.md`, `.csv` and `.json` files in that folder are supported. No
-overwrites, recursive access, arbitrary shell commands or app executables are
-accepted. App launch reports dispatch, not verified window focus. Inspect a file
+General file commands support `.txt`, `.md`, `.csv` and `.json` in that folder.
+The résumé workflow creates a Word file in one new subfolder. File creation uses
+exclusive writes, and app launch uses the system Notepad or Explorer executable.
+Inspect a file
 or app before retrying any uncertain action. Closing the app ends local access.
 
 This mode trusts the current unlocked Windows session plus explicit native consent.
@@ -50,10 +51,44 @@ Spoken file creation shows the recognized request for review. Say `Rumi confirm`
 within 30 seconds or click **Confirm creation**. Check spelling and content;
 dictation can be wrong. `Rumi cancel` or `Rumi stop` disconnects local access.
 `Rumi listen` interrupts a spoken reply; wait a moment before your next request.
-Other actions are ignored during playback and its short echo guard. Voice pauses
-after two quiet minutes; it never automatically re-arms. This is explicit local
-listening, not a background system-wide wake word. Do not rely on speech alone for
-Stop: the button, Escape and Ctrl+Shift+. also work while Rumi is focused.
+Other actions are ignored during playback and its short echo guard. Foreground
+voice pauses after two quiet minutes. The Stop button, Escape and Ctrl+Shift+.
+also work while Rumi is focused.
+
+### Background wake
+
+Enable **Background wake** in the header and accept the Windows prompt. Rumi keeps
+local speech recognition running while minimized and the Windows session is
+unlocked. In the portable build, the same setting launches Rumi minimized when
+you sign in. Keep that copy in the same location, and turn the setting off before
+moving or replacing it with a copy at a different path.
+
+Say **Hey Rumi** followed by the request in the same breath. Rumi can restore the
+window and show the words it heard. When file and app access has ended, approve a
+workspace or enable Windows control and select **Use heard request** within 90
+seconds. **Stop & disconnect** and **Pause microphone** end capture for this run.
+Turn **Background wake** off to remove sign-in startup. Detected screen lock
+pauses capture. With background wake armed, unlocking restarts listening without
+renewing file or app permissions.
+
+### Draft and save a résumé
+
+1. Choose a workspace folder on `F:` and say `Hey Rumi, make a new folder in F
+   drive and make a resume for me in it`. For any chosen drive, `Rumi, make a
+   resume` uses your current workspace.
+2. Give your name with `Rumi, resume name Jane Doe` and your experience,
+   education and skills with `Rumi, resume details …`. Say `Rumi, resume folder
+   named Job applications` to choose a folder name. The default is `Resume`.
+3. Check the exact path and draft. Say `Rumi, confirm resume save` or select
+   **Save Word file**. Rumi creates the new subfolder, writes `Resume.docx`, and
+   checks the bytes before reporting success. An existing folder is left intact.
+
+Local drafting uses the supplied facts. To enable optional Gemini polishing,
+start the desktop app with `RUMI_GEMINI_RESUME_ENABLED=1`, set
+`RUMI_GEMINI_RESUME_MODEL` to a supported Gemini model ID, and supply
+`GEMINI_API_KEY` to the app process. **Polish with Gemini** shows the text to share.
+**Send text to Gemini** sends that draft to Google. Review the rewrite and approve
+the Word save separately.
 
 The animated companion reflects listening, speaking, working and review states.
 Workspace results use pages instead of scrolling; say `Rumi next page` or

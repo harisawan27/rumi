@@ -4,14 +4,17 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 from uuid import uuid4
+from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.desktop.native_runtime import NativeRuntime
 from src.desktop.native_assets import AssetServer
+from src.desktop.resume import WORD
 from src.desktop.workspace import WorkspaceError
 from main import Bridge, expose_bridge
 
@@ -158,8 +161,107 @@ class NativeTests(unittest.TestCase):
         window = Mock()
         expose_bridge(window, bridge)
         exports = window.expose.call_args.args
-        self.assertEqual({f.__name__ for f in exports}, {"status", "choose_workspace", "command", "enable_windows_control", "stop", "voice_start", "voice_stop", "voice_poll", "voice_speak"})
+        self.assertEqual({f.__name__ for f in exports}, {"status", "choose_workspace", "command", "enable_windows_control", "stop", "voice_start", "voice_stop", "voice_poll", "voice_speak", "wake_set", "suspend_actions"})
         self.assertTrue(all(not hasattr(f, "__self__") for f in exports))
+
+    def test_minimize_preserves_only_opted_in_microphone(self):
+        self.enable()
+        settings = Mock(command='"RumiDesktop.exe" --background-wake')
+        settings.enabled.return_value = False
+        bridge = Bridge(self.runtime, "local", settings, self.desktop)
+        bridge._window = Mock()
+        bridge._window.get_current_url.return_value = "local"
+        engine = Mock(language="en-US")
+        callbacks = []
+        def factory(*handlers):
+            callbacks.extend(handlers)
+            return engine
+        bridge._voice._factory = factory
+        bridge._window.create_confirmation_dialog.return_value = False
+        self.assertFalse(bridge.wake_set(True)["wake_armed"])
+        settings.set.assert_not_called()
+        engine.start.assert_not_called()
+        bridge._window.create_confirmation_dialog.return_value = True
+        self.assertTrue(bridge.wake_set(True)["wake_armed"])
+        settings.set.assert_called_once_with(True)
+        bridge._minimize()
+        self.assertTrue(bridge.voice_poll()["active"])
+        self.assertFalse(bridge.status()["active"])
+        callbacks[0]()
+        callbacks[1]("Hey Rumi open Notepad", .99)
+        bridge.watch()
+        bridge._window.restore.assert_called_once()
+        self.assertEqual(bridge.voice_poll()["events"][0]["kind"], "wake_request")
+        self.launch.assert_not_called()
+        self.desktop.side_effect = WorkspaceError("desktop_locked")
+        bridge.watch()
+        self.assertFalse(bridge.voice_poll()["active"])
+        self.desktop.side_effect = None
+        bridge.watch()
+        self.assertTrue(bridge.voice_poll()["active"])
+        bridge.stop()
+        self.assertFalse(bridge.voice_poll()["active"])
+        self.assertFalse(bridge.status()["wake_armed"])
+        bridge.start_background()
+        self.assertFalse(bridge.voice_poll()["active"])
+
+    def start_resume(self):
+        drive = self.root.drive.rstrip(":")
+        command = f"Hey Rumi make new folder in {drive} drive and make a resume for me in it" if drive else "make a resume"
+        self.assertEqual(self.runtime.command(self.request(command))["state"], "resume_details")
+        self.runtime.command(self.request("resume name Jane & Jordan"))
+        return self.runtime.command(self.request("resume details Built local Windows tools.\nEducation: BS Computer Science"))
+
+    def test_resume_requires_facts_review_and_consent_then_verifies_word_file(self):
+        self.enable()
+        self.assertEqual(self.runtime.command(self.request("confirm resume save"))["state"], "clarification")
+        preview = self.start_resume()
+        path = self.root / "Resume/Resume.docx"
+        self.assertEqual(preview["state"], "resume_review")
+        self.assertEqual(preview["result"]["path"], str(path))
+        self.assertFalse(path.parent.exists())
+        request = self.request("confirm resume save")
+        receipt = self.runtime.command(request)
+        self.assertEqual(receipt["state"], "succeeded", receipt)
+        self.assertEqual(receipt["result"]["path"], str(path))
+        with zipfile.ZipFile(path) as document:
+            self.assertIsNone(document.testzip())
+            node = ET.fromstring(document.read("word/document.xml"))
+        actual = "\n".join("".join(n.text or "" for n in row.iter(f"{{{WORD}}}t")) for row in node.iter(f"{{{WORD}}}p"))
+        self.assertEqual(actual, preview["result"]["text"])
+        self.assertEqual(self.runtime.command(request)["state"], "clarification")
+        self.start_resume()
+        self.assertEqual(self.runtime.command(self.request("confirm resume save"))["state"], "clarification")
+        row = self.runtime._executor.db.execute("SELECT result FROM receipts WHERE id=?", (request["request_id"],)).fetchone()
+        self.assertNotIn("Jane", row[0])
+
+    def test_resume_checks_drive_folder_and_expiry(self):
+        self.enable()
+        other = "Z" if self.root.drive != "Z:" else "Q"
+        result = self.runtime.command(self.request(f"make new folder in {other} drive and make a resume for me in it"))
+        self.assertEqual(result["state"], "clarification")
+        self.start_resume()
+        for name in ("../outside", "CON", "C:\\other"):
+            result = self.runtime.command(self.request(f"resume folder named {name}"))
+            self.assertEqual(result["result"]["path"], str(self.root / "Resume/Resume.docx"))
+        self.clock[0] += 181
+        self.assertEqual(self.runtime.command(self.request("confirm resume save"))["state"], "clarification")
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_gemini_requires_separate_share_confirmation_and_save_confirmation(self):
+        self.runtime._polish_resume = Mock(return_value="Jane & Jordan\n\nBuilt Windows tools.")
+        self.enable()
+        self.start_resume()
+        self.runtime.command(self.request("confirm Gemini draft"))
+        self.runtime._polish_resume.assert_not_called()
+        share = self.runtime.command(self.request("polish resume with Gemini"))
+        self.assertEqual(share["state"], "resume_share")
+        self.runtime._polish_resume.assert_not_called()
+        polished = self.runtime.command(self.request("confirm Gemini draft"))
+        self.assertEqual(self.runtime._polish_resume.call_args.args[0], share["result"]["text"])
+        self.assertEqual(polished["state"], "resume_review")
+        self.assertFalse((self.root / "Resume").exists())
+        self.assertEqual(self.runtime.command(self.request("confirm resume save"))["state"], "succeeded")
 
 
 class AssetsTests(unittest.TestCase):

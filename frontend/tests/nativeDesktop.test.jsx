@@ -292,3 +292,44 @@ test('compound voice request previews the exact note and uses a separate save co
   expect(api.command).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'confirm workflow save' }));
   expect(screen.getByRole('heading', { name: 'Note saved and verified' })).toBeInTheDocument();
 });
+
+test('background wake holds a full résumé request until the user grants access and uses it', async () => {
+  jest.useFakeTimers();
+  const wake = { wake_enabled: true, wake_armed: true };
+  const path = 'F:\\Workspace\\Resume\\Resume.docx';
+  const command = 'make a new folder in F drive and make a resume for me in it';
+  api.status.mockResolvedValue({ ...inactive, ...wake });
+  api.wake_set = jest.fn();
+  api.suspend_actions = jest.fn();
+  api.voice_poll = jest.fn(async () => ({ active: true, voice_id: 3, events: [] }));
+  api.voice_poll.mockResolvedValueOnce({ active: true, voice_id: 3, events: [{ id: 1, kind: 'wake_request', text: command }] });
+  api.choose_workspace.mockResolvedValue({ ...active, ...wake, workspace: 'F:\\Workspace' });
+  api.command.mockImplementation(async request => ({
+    request_id: request.request_id,
+    operation: 'resume_workflow',
+    state: request.text === command ? 'resume_details' : request.text === 'confirm resume save' ? 'succeeded' : 'resume_review',
+    message: request.text === command ? 'Say resume name followed by your name.' : 'Review your résumé.',
+    result: { path, ...(request.text === 'resume details Built Windows applications' ? { text: 'Jane Doe\nBuilt Windows applications' } : {}) },
+  }));
+  render(<NativeDesktop />);
+  await act(async () => {});
+  await act(async () => jest.advanceTimersByTime(700));
+  expect(screen.getByRole('heading', { name: 'I heard your request' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Use heard request' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose folder & enable' }));
+  await act(async () => {});
+  expect(api.command).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Use heard request' }));
+  await act(async () => {});
+  expect(api.command).toHaveBeenLastCalledWith(expect.objectContaining({ text: command }));
+  expect(screen.getByRole('heading', { name: 'Add your résumé details' })).toBeInTheDocument();
+  expect(screen.getByLabelText('Local result')).toHaveTextContent(path);
+  await hear('resume details Built Windows applications', 2);
+  expect(screen.getByRole('heading', { name: 'Review your résumé before saving' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Polish with Gemini' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Save Word file' }));
+  await act(async () => {});
+  expect(api.command).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'confirm resume save' }));
+  expect(screen.getByRole('heading', { name: 'Résumé saved and verified' })).toBeInTheDocument();
+  expect(global.fetch).not.toHaveBeenCalled();
+});

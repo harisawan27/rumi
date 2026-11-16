@@ -63,6 +63,31 @@ class ActionRequest(RequestIdentity):
     action: Action
 
 
+class ResumeSave(Closed):
+    operation: Literal["create_resume"] = "create_resume"
+    folder: str = Field(min_length=1, max_length=64)
+    text: str = Field(min_length=1, max_length=7000)
+
+    @field_validator("folder")
+    @classmethod
+    def safe_folder(cls, value):
+        if (not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9 _-]*[A-Za-z0-9_-])?", value)
+                or re.match(r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?: |$)", value, re.I)):
+            raise ValueError("Use one plain folder name")
+        return value
+
+    @field_validator("text")
+    @classmethod
+    def document_text(cls, value):
+        if any(char not in "\n\t" and not char.isprintable() for char in value):
+            raise ValueError("Use printable résumé text")
+        return value
+
+
+class ResumeSaveRequest(RequestIdentity):
+    action: ResumeSave
+
+
 class CommandRequest(RequestIdentity):
     text: str = Field(min_length=1, max_length=18000)
     last_file: str | None = None

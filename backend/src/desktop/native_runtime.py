@@ -9,10 +9,11 @@ import threading
 import time
 from pathlib import Path
 from pydantic import Field, ValidationError
-from .contracts import RequestIdentity, ActionRequest
+from .contracts import RequestIdentity, ActionRequest, ResumeSaveRequest
 from .commands import parse_command, Clarification
 from .executor import Executor
 from .operator import PlanError, WindowOperator, window_instruction
+from .resume import ResumeWorkflow, resume_instruction
 from .windows import require_unlocked_desktop, launch_app
 from .workflow import Workflow, workflow_instruction
 from .workspace import Workspace, WorkspaceError
@@ -24,7 +25,7 @@ class NativeCommand(RequestIdentity):
 
 class NativeRuntime:
     def __init__(self, journal, desktop_check=require_unlocked_desktop, launcher=launch_app,
-                 clock=time.monotonic, wall_clock=time.time, operator_factory=None, research=None):
+                 clock=time.monotonic, wall_clock=time.time, operator_factory=None, research=None, polish_resume=None):
         self._journal = Path(journal)
         self._desktop_check, self._launcher = desktop_check, launcher
         self._clock, self._wall_clock = clock, wall_clock
@@ -40,7 +41,9 @@ class NativeRuntime:
         self._operator = None
         self._folder_enabled = False
         self._workflow = None
+        self._resume = None
         self._research = research
+        self._polish_resume = polish_resume
 
     @property
     def generation(self):
@@ -54,6 +57,7 @@ class NativeRuntime:
             self._session = self._credential = self._last_file = None
             self._operator = None
             self._workflow = None
+            self._resume = None
             self._folder_enabled = False
             self._expires = 0
             if self._executor:
@@ -89,6 +93,7 @@ class NativeRuntime:
                     clock=self._wall_clock, launcher=self._launcher, desktop_check=self._desktop_check)
                 self._folder_enabled = True
                 self._workflow = Workflow(self._clock)
+                self._resume = ResumeWorkflow(self._clock)
                 self._session, self._credential = secrets.token_hex(16), secrets.token_urlsafe(32)
                 self._expires = self._clock() + 900
                 self._last_file = None
@@ -110,6 +115,8 @@ class NativeRuntime:
                     self._authorize(self._credential, self._session)
                     if self._workflow:
                         self._workflow.cancel()
+                    if self._resume:
+                        self._resume.cancel()
                 else:
                     self._session = secrets.token_hex(16)
                     self._credential = secrets.token_urlsafe(32)
@@ -127,7 +134,7 @@ class NativeRuntime:
                     self._authorize(self._credential, self._session)
                 except WorkspaceError:
                     pass
-            return {"active": bool(self._credential), "session_id": self._session,
+            return {"active": bool(self._credential), "session_id": self._session, "resume_ai": self._polish_resume is not None,
                     "workspace": str(self._executor.workspace.root) if self._folder_enabled else None,
                     "windows_control": self._operator is not None,
                     "seconds_remaining": max(0, int(self._expires - self._clock())) if self._credential else 0}
@@ -145,8 +152,18 @@ class NativeRuntime:
                 self._authorize(credential, request.session_id)
                 executor = self._executor if self._folder_enabled else None
                 last_file, operator, workflow = self._last_file, self._operator, self._workflow
+                resume = self._resume
             if not self._wall_clock() < request.expires_at <= self._wall_clock() + 120:
                 raise WorkspaceError("expired")
+            resume_step = resume_instruction(request.text)
+            if resume_step:
+                if workflow:
+                    workflow.cancel()
+                if operator:
+                    operator.pending = operator.choice = None
+                return self._resume_command(request, resume_step, resume, executor, credential)
+            if resume:
+                resume.cancel()
             try:
                 compound = workflow_instruction(request.text)
             except PlanError as exc:
@@ -190,6 +207,25 @@ class NativeRuntime:
                     "message": "Check the selected folder or app before retrying. Local permission was cleared."}
         finally:
             self._operation.release()
+
+    def _resume_command(self, request, instruction, resume, executor, credential):
+        receipt = {"request_id": request.request_id, "operation": "resume_workflow"}
+        if not resume or not executor:
+            return {**receipt, "state": "clarification", "message": "Choose a workspace folder before starting your résumé."}
+
+        def guard():
+            self._authorize(credential, request.session_id)
+            if self._wall_clock() >= request.expires_at:
+                raise WorkspaceError("expired")
+
+        def write(action):
+            guard()
+            return executor.execute(ResumeSaveRequest(**request.model_dump(exclude={"text"}), action=action), credential)
+
+        state, message, result = resume.run(request.request_id, instruction, executor.workspace.root,
+                                           write, self._polish_resume, guard)
+        guard()
+        return {**receipt, "state": state, "message": message, "result": result}
 
     def _window_command(self, request, instruction, operator, credential):
         deadline = self._clock() + 14

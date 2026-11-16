@@ -110,23 +110,34 @@ class Workspace:
 
     def create_text(self, name, text, check):
         raw = text.encode("utf-8")
+        with self.pinned():
+            return self._create_verified(self.path(name), raw, check)
+
+    def create_resume(self, action, raw, check):
+        child = self.root / action.folder
+        with self.pinned():
+            check()
+            child.mkdir()
+            with Workspace(child).pinned():
+                try:
+                    return self._create_verified(child / "Resume.docx", raw, check)
+                except FileExistsError as exc:
+                    raise WorkspaceError("resume_folder_changed") from exc
+
+    @staticmethod
+    def _create_verified(path, raw, check):
         if len(raw) > MAX_BYTES:
             raise WorkspaceError("file_too_large")
-        with self.pinned():
-            path = self.path(name)
-            check()
-            # Atomic no-overwrite creation. A crash can leave a partial file;
-            # the journal marks that request uncertain and never retries it.
-            with path.open("x+b") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-                # Verify the bounded contents and identity of the file we created,
-                # without reopening a path that another process could replace.
-                stream.seek(0)
-                if stream.read(MAX_BYTES + 1) != raw:
-                    raise WorkspaceError("verification_failed")
-                created, current = os.fstat(stream.fileno()), regular(path)
-                if (created.st_ino, created.st_dev) != (current.st_ino, current.st_dev):
-                    raise WorkspaceError("file_changed")
-            return {"bytes": len(raw)}
+        check()
+        # Exclusive creation and read-back through the same open handle.
+        with path.open("x+b") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+            stream.seek(0)
+            if stream.read(MAX_BYTES + 1) != raw:
+                raise WorkspaceError("verification_failed")
+            created, current = os.fstat(stream.fileno()), regular(path)
+            if (created.st_ino, created.st_dev) != (current.st_ino, current.st_dev):
+                raise WorkspaceError("file_changed")
+        return {"bytes": len(raw)}

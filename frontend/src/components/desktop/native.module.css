@@ -44,6 +44,15 @@
 .workspace { border-radius: 12px; background: #171a2e; box-shadow: none; }
 .workspaceHeading { align-items: center; }
 .workspaceHeading h2 { margin: 0; color: var(--ink); }
+.wakeButton {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: auto;
+  padding: 0 9px;
+  white-space: nowrap;
+  font-size: 10px;
+}
 .resultFrame { background: #101325; }
 .whisper > p { color: var(--soft); font-size: 12px; }
 .whisper > strong { color: var(--ink); font-size: 12px; font-weight: 500; }
@@ -58,8 +67,8 @@
 .liveLine, .footer { color: var(--soft); }
 .footer { justify-content: flex-end; letter-spacing: normal; font-size: 9px; }
 @media (max-width: 850px) {
-  .windowsButton { display: grid; width: 34px; padding: 0; }
-  .windowsButton span { display: none; }
+  .windowsButton, .wakeButton { display: grid; width: 34px; padding: 0; }
+  .windowsButton span, .wakeButton span { display: none; }
   .greeting h1 { font-size: clamp(30px, 6vw, 50px); }
   .talkButton small { font-size: 8px; }
 }
